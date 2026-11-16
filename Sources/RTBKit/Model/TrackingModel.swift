@@ -34,10 +34,10 @@ public enum AdLifecycleEvent: Sendable, Hashable {
     /// The ad was rendered: billing notice (`burl`) and the display impression trackers (AdCOM, Native).
     /// VAST impressions are NOT part of this event: they fire per pod ad with `.video(.creativeView, adIndex:)`.
     case rendered
+    /// Display / Native viewability (Native eventtrackers 2–4, AdCOM events 2–4).
     case viewable(ViewabilityLevel)
-    /// The ad was not viewable / viewability undetermined (VAST ViewableImpression).
-    case notViewable
-    case viewUndetermined
+    /// VAST `ViewableImpression` outcome for pod ad `adIndex`.
+    case videoViewability(VideoViewability, adIndex: Int)
     /// A VAST player event for the ad at `adIndex` in the resolved pod (0 for single ads). `.creativeView` (first frame of
     /// that ad) also fires the ad's Impression URLs (impressions first) and its `verificationNotExecuted` trackers.
     case video(VASTEvent, adIndex: Int)
@@ -45,13 +45,20 @@ public enum AdLifecycleEvent: Sendable, Hashable {
     case companionView(adIndex: Int, companionIndex: Int)
     /// A VAST companion was clicked (its CompanionClickTracking, then navigation to CompanionClickThrough).
     case companionClick(adIndex: Int, companionIndex: Int)
-    /// A click, on a Native asset (`assetID`) or on the ad/player (`nil`).
+    /// A click on a display / Native ad: on a Native asset (`assetID`) or on the ad (`nil`).
     case click(assetID: Int?)
+    /// A click on VAST pod ad `adIndex` (ClickTracking, then navigation to ClickThrough).
+    case videoClick(adIndex: Int)
     case closed
     /// The bid lost; `reason` is the OpenRTB loss reason code.
     case loss(reason: Int)
     /// A VAST error for the ad at `adIndex` (or the whole chain when `nil`).
     case error(VASTErrorCode, adIndex: Int?)
+}
+
+/// VAST `ViewableImpression` outcomes.
+public enum VideoViewability: String, Sendable, Hashable, Codable {
+    case viewable, notViewable, undetermined
 }
 
 /// One request the simulator wants to make (not yet dispatched).
