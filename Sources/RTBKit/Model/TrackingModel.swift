@@ -31,14 +31,20 @@ public enum ViewabilityLevel: String, Sendable, Hashable, Codable {
 public enum AdLifecycleEvent: Sendable, Hashable {
     /// The auction was won (exchange sends the win notice).
     case won
-    /// The ad was rendered: billing notice and impression trackers.
+    /// The ad was rendered: billing notice (`burl`) and the display impression trackers (AdCOM, Native).
+    /// VAST impressions are NOT part of this event: they fire per pod ad with `.video(.creativeView, adIndex:)`.
     case rendered
     case viewable(ViewabilityLevel)
     /// The ad was not viewable / viewability undetermined (VAST ViewableImpression).
     case notViewable
     case viewUndetermined
-    /// A VAST player event for the ad at `adIndex` in the resolved pod (0 for single ads).
+    /// A VAST player event for the ad at `adIndex` in the resolved pod (0 for single ads). `.creativeView` (first frame of
+    /// that ad) also fires the ad's Impression URLs (impressions first) and its `verificationNotExecuted` trackers.
     case video(VASTEvent, adIndex: Int)
+    /// A VAST companion was shown. `companionIndex` indexes `ads[adIndex].inline.creatives.flatMap(\.companions)`.
+    case companionView(adIndex: Int, companionIndex: Int)
+    /// A VAST companion was clicked (its CompanionClickTracking, then navigation to CompanionClickThrough).
+    case companionClick(adIndex: Int, companionIndex: Int)
     /// A click, on a Native asset (`assetID`) or on the ad/player (`nil`).
     case click(assetID: Int?)
     case closed
