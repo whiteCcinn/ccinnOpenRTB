@@ -22,7 +22,7 @@ Examples of unacceptable behaviour:
 
 Maintainers are responsible for clarifying and enforcing these standards and may remove, edit or reject comments, commits, code, issues and other contributions that do not align with this Code of Conduct.
 
-Instances of abusive, harassing or otherwise unacceptable behaviour may be reported privately to the maintainers through [GitHub private reporting](https://github.com/whiteCcinn/ccinnstarrocks/security/advisories/new) or by contacting the repository owner on GitHub. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing or otherwise unacceptable behaviour may be reported privately to the maintainers through [GitHub private reporting](https://github.com/whiteCcinn/ccinnopenrtb/security/advisories/new) or by contacting the repository owner on GitHub. All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 
