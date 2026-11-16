@@ -112,10 +112,12 @@ public final class NetworkMonitor {
             let stored = append(entry)
             let isTracker = request.category.isTracker
             let limit = isTracker ? Self.maxTrackerBodyBytes : Self.maxContentBytes
+            let token = generation
             let task = Task { [weak self] in
                 guard let self else { return }
                 _ = await self.load(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: !isTracker)
-                self.inFlight[stored.id] = nil
+                // After `clear()` the id may belong to a newer request's task: leave that one alone.
+                if self.generation == token { self.inFlight[stored.id] = nil }
             }
             inFlight[stored.id] = task
             return stored.id

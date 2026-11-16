@@ -140,23 +140,26 @@ public struct WaterfallLayout: Sendable, Hashable {
 
     public static let minimumSpan: TimeInterval = 1
 
-    /// `now` closes the bars of pending entries.
+    /// How far a still-pending request may stretch the axis: a load the renderer never reports must not squash
+    /// every other bar as time passes.
+    public static let maximumOpenDuration: TimeInterval = 60
+
+    /// `now` closes the bars of pending entries (at most `maximumOpenDuration` after they started).
     public static func compute(_ entries: [NetworkEntry], now: Date) -> WaterfallLayout {
         guard let origin = entries.map(\.startedAt).min() else {
             return WaterfallLayout(origin: now, span: minimumSpan, bars: [])
         }
-        var end = origin
-        for entry in entries {
-            let finish = entry.finishedAt ?? (entry.state == .pending ? max(now, entry.startedAt) : entry.startedAt)
-            end = max(end, finish)
+        func finish(_ entry: NetworkEntry) -> Date {
+            if let finishedAt = entry.finishedAt { return max(finishedAt, entry.startedAt) }
+            guard entry.state == .pending else { return entry.startedAt }
+            return min(max(now, entry.startedAt), entry.startedAt.addingTimeInterval(maximumOpenDuration))
         }
+        let end = entries.map(finish).max() ?? origin
         let span = max(minimumSpan, end.timeIntervalSince(origin) * 1.05)
         let bars = entries.map { entry -> Bar in
-            let start = entry.startedAt.timeIntervalSince(origin) / span
-            let open = entry.state == .pending && entry.finishedAt == nil
-            let finish = entry.finishedAt ?? (open ? max(now, entry.startedAt) : entry.startedAt)
-            let length = max(0, finish.timeIntervalSince(entry.startedAt)) / span
-            return Bar(id: entry.id, start: clamp(start), length: min(clamp(length), 1 - clamp(start)), isOpen: open)
+            let start = clamp(entry.startedAt.timeIntervalSince(origin) / span)
+            let length = clamp(finish(entry).timeIntervalSince(entry.startedAt) / span)
+            return Bar(id: entry.id, start: start, length: min(length, 1 - start), isOpen: entry.state == .pending && entry.finishedAt == nil)
         }
         return WaterfallLayout(origin: origin, span: span, bars: bars)
     }

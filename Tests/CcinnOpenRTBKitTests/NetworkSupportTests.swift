@@ -217,6 +217,9 @@ struct NetworkViewModelTests {
         #expect(layout.bars.allSatisfy { $0.start + $0.length <= 1.000_001 })
         #expect(layout.ticks().first == 0)
         #expect(WaterfallLayout.compute([], now: Date()).bars.isEmpty)
+        // A request the renderer never reports does not stretch the axis forever.
+        let stale = WaterfallLayout.compute(entries, now: Date(timeIntervalSince1970: 1_000 + 86_400))
+        #expect(stale.span < WaterfallLayout.maximumOpenDuration * 1.2)
     }
 
     @Test func filtersByCategoryDeliveryAndWords() {
