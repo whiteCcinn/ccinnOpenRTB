@@ -101,6 +101,9 @@ public struct AdCandidate: Sendable, Hashable, Identifiable {
     public var size: AdSize?
     public var format: AdFormat
     public var markup: AdMarkup
+    /// AdCOM `display.curl`: markup by reference. When `markup` is `.none`, the shell fetches markup from
+    /// `markupURL ?? winURL` (a content request for `markupURL`; the win notice obeys the tracking mode).
+    public var markupURL: String?
     /// Win notice template (`nurl` in 2.x, `purl` in 3.0), unexpanded.
     public var winURL: String?
     /// Billing notice template (`burl`), unexpanded.
@@ -119,7 +122,7 @@ public struct AdCandidate: Sendable, Hashable, Identifiable {
     public init(id: String, bidID: String, impID: String? = nil, seat: String? = nil, price: Double, currency: String = "USD",
                 dealID: String? = nil, adID: String? = nil, creativeID: String? = nil, campaignID: String? = nil,
                 advertiserDomains: [String] = [], bundle: String? = nil, size: AdSize? = nil, format: AdFormat, markup: AdMarkup,
-                winURL: String? = nil, billingURL: String? = nil, lossURL: String? = nil, adcomEvents: [AdcomEvent] = [],
+                markupURL: String? = nil, winURL: String? = nil, billingURL: String? = nil, lossURL: String? = nil, adcomEvents: [AdcomEvent] = [],
                 customMacros: [String: String] = [:], expirySeconds: Int? = nil, markupType: Int? = nil, ext: JSONValue? = nil) {
         self.id = id
         self.bidID = bidID
@@ -136,6 +139,7 @@ public struct AdCandidate: Sendable, Hashable, Identifiable {
         self.size = size
         self.format = format
         self.markup = markup
+        self.markupURL = markupURL
         self.winURL = winURL
         self.billingURL = billingURL
         self.lossURL = lossURL
