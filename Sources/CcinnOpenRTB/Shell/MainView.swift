@@ -17,8 +17,10 @@ struct MainView: View {
                 .frame(minWidth: 420, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { MainToolbar(session: session) }
-        .sheet(item: Binding(get: { session.realModeConfirmation }, set: { if $0 == nil { session.cancelRealMode() } })) { confirmation in
-            RealModeSheet(confirmation: confirmation, onConfirm: { session.confirmRealMode(confirmation) }, onCancel: { session.cancelRealMode() })
+        // isPresented, not item: the confirmation's host list completes after the markup is inspected, and an item that
+        // changes would dismiss the sheet (and its dismissal would cancel the request).
+        .sheet(isPresented: Binding(get: { session.realModeConfirmation != nil }, set: { if !$0 { session.cancelRealMode() } })) {
+            RealModeSheetHost(session: session)
         }
         .navigationTitle("CcinnOpenRTB")
         .providesNetworkMonitor(session.monitor)

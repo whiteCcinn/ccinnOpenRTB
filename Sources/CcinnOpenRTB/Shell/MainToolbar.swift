@@ -113,6 +113,17 @@ struct TrackingModeSwitch: View {
     }
 }
 
+/// Shows the session's current confirmation, updating in place while it is presented.
+struct RealModeSheetHost: View {
+    let session: AdSession
+
+    var body: some View {
+        if let confirmation = session.realModeConfirmation {
+            RealModeSheet(confirmation: confirmation, onConfirm: { session.confirmRealMode(confirmation) }, onCancel: { session.cancelRealMode() })
+        }
+    }
+}
+
 /// The confirmation before Real mode: the tracker hosts of the selected bid. Return does not confirm.
 struct RealModeSheet: View {
     let confirmation: RealModeConfirmation
