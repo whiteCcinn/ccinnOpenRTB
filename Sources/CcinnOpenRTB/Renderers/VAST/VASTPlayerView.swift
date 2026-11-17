@@ -35,6 +35,8 @@ struct VASTPlayerView: View {
     let role: VASTPlayerRole
     /// The player's own size when it is part of a layout (Native video); the whole ad area otherwise.
     var playerSize: CGSize?
+    /// Media selection (kit-vast's `VASTMediaSelector`; injectable for the snapshot harness).
+    var chooseMedia: VASTMediaChooser = VASTMediaSelector.choose
 
     @State private var model: VASTPlayerModel?
 
@@ -58,7 +60,8 @@ struct VASTPlayerView: View {
     private func activeModel() -> VASTPlayerModel {
         if let model, !model.isTornDown { return model }
         let configuration = VASTPlayerConfiguration(request: request, role: role, playerSize: playerSize ?? request.adSize)
-        let created = VASTPlayerModel(vast: vast, configuration: configuration, host: host, engine: AVPlaybackEngine())
+        let created = VASTPlayerModel(vast: vast, configuration: configuration, host: host, engine: AVPlaybackEngine(),
+                                      chooseMedia: chooseMedia)
         model = created
         return created
     }

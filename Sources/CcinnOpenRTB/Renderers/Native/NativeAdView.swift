@@ -35,6 +35,8 @@ private struct NativeLayoutView: View {
 
     private var content: NativeAdContent { model.content }
 
+    static let fullscreenChromeInset: CGFloat = 50
+
     var body: some View {
         Group {
             switch model.layout {
@@ -44,7 +46,9 @@ private struct NativeLayoutView: View {
             }
         }
         .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Full screen: centred, and clear of the container's close control (top right), so AdChoices stays reachable.
+        .padding(.top, request.isFullscreen ? Self.fullscreenChromeInset : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: request.isFullscreen ? .center : .top)
         .background(Color(nsColor: .textBackgroundColor))
         .contentShape(Rectangle())
         .onTapGesture { model.click(assetID: nil) }

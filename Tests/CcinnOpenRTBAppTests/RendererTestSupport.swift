@@ -41,7 +41,13 @@ final class RecordingHost: AdRenderingHost {
 
     func navigate(to url: String, trigger: String, source: String) { navigations.append(Navigation(url: url, trigger: trigger)) }
 
+    /// Fetch through the monitor (samples, `data:`) instead of `contents`.
+    var fetchesThroughMonitor = false
+
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
+        if fetchesThroughMonitor {
+            return try await monitor.fetchContent(url, trigger: trigger, source: source, parentID: nil, userAgent: device.userAgent).data
+        }
         guard let data = contents[url] else { throw NotFound() }
         return data
     }
