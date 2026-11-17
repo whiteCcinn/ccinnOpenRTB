@@ -36,7 +36,32 @@ struct RenderRequest: Equatable {
     var generation: Int
 }
 
+/// What the renderer is playing (VAST pod ad `adIndex`, or a Native video asset with `adIndex` 0). Reported about 4 Hz
+/// and on every play / pause / seek / end; the shell's viewability timers run on it.
+struct PlaybackStatus: Equatable, Sendable {
+    var adIndex: Int
+    /// Seconds.
+    var playhead: Double
+    /// Seconds; `nil` until known.
+    var duration: Double?
+    var isPlaying: Bool
+    var isMuted: Bool
+}
+
+/// One line of the renderer console (MRAID bridge, VAST player, Native, HTML).
+struct RendererLogEntry: Equatable, Sendable {
+    enum Level: String, Sendable { case info, warning, error }
+
+    var date: Date
+    /// "MRAID", "VAST", "Native", "HTML".
+    var origin: String
+    var level: Level
+    var message: String
+}
+
 /// Implemented by the shell's session; renderers report everything through it.
+/// Members with default implementations are protocol REQUIREMENTS, so the session's implementations are dynamically
+/// dispatched through `any AdRenderingHost`.
 @MainActor
 protocol AdRenderingHost: AnyObject {
     var monitor: NetworkMonitor { get }
@@ -47,6 +72,23 @@ protocol AdRenderingHost: AnyObject {
     func navigate(to url: String, trigger: String, source: String)
     /// A content fetch through the monitor (images, media, dcourl), recorded as `content`.
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data
+    /// Playback state for viewability (VAST and Native video).
+    func playbackChanged(_ status: PlaybackStatus)
+    /// The renderer console.
+    func rendererLog(_ entry: RendererLogEntry)
+    /// Resolves a VAST tag for a Native video asset. The session overrides this with its monitor-backed fetcher and
+    /// remembers the result, so `.video(e, adIndex:)` from that player maps to it.
+    func resolveVAST(_ source: VASTSource) async -> ResolvedVAST
+}
+
+extension AdRenderingHost {
+    func playbackChanged(_ status: PlaybackStatus) {}
+
+    func rendererLog(_ entry: RendererLogEntry) {}
+
+    func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
+        await VASTResolver(fetcher: MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent)).resolve(source)
+    }
 }
 
 /// The renderer entry point: picks HTML / image / Native / VAST by markup. Owner: app-renderers.
