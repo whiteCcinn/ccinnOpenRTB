@@ -452,4 +452,59 @@ struct VASTResolverTests {
         #expect(result.ads.allSatisfy { $0.inline.playedLinear?.duration == 15 })
         #expect(result.ads.allSatisfy { !$0.impressions.isEmpty && !$0.errors.isEmpty })
     }
+
+    // MARK: Regression: the chain survives resolution
+
+    /// Regression: `finish(await resolveDocument(…))` loaded `self` before the call, so every fetched hop was dropped from
+    /// `chain` and the ads' origins pointed at hops that did not exist. A 3-hop chain (wrapper → wrapper → pod) must keep
+    /// every hop with its URL, document, request and parent, and every ad its full origin.
+    @Test func threeHopChainKeepsEveryHopRequestParentAndOrigin() async throws {
+        let fetcher = FakeVASTFetcher()
+        let root = UUID()
+        let pod = F.document(ads: [F.inlineAd(id: "p2", sequence: 2, name: "p2"), F.inlineAd(id: "p1", sequence: 1, name: "p1")])
+        let middle = F.wrapper(name: "m", adTagURI: F.dataURL(pod), attributes: #"allowMultipleAds="true""#)
+        let outer = F.wrapper(name: "o", adTagURI: F.dataURL(middle), attributes: #"allowMultipleAds="true""#)
+        let result = await resolved(outer, fetcher: fetcher, parentRequestID: root)
+
+        let calls = await fetcher.calls
+        try #require(calls.count == 2)
+        #expect(calls.map(\.url) == [F.dataURL(middle), F.dataURL(pod)])
+        #expect(calls.map(\.parentRequestID) == [root, calls[0].requestID])
+        #expect(result.chain == [
+            VASTHop(url: nil, document: VASTParser.parse(outer).document, requestID: root, parent: nil),
+            VASTHop(url: F.dataURL(middle), document: VASTParser.parse(middle).document, requestID: calls[0].requestID,
+                    parent: VASTAdOrigin(hop: 0, ad: 0)),
+            VASTHop(url: F.dataURL(pod), document: VASTParser.parse(pod).document, requestID: calls[1].requestID,
+                    parent: VASTAdOrigin(hop: 1, ad: 0)),
+        ])
+        #expect(result.failure == nil && result.adFailures.isEmpty)
+        #expect(result.ads.map(\.inline.adTitle) == ["p1", "p2"])
+        #expect(result.ads.map(\.origin) == [
+            [VASTAdOrigin(hop: 0, ad: 0), VASTAdOrigin(hop: 1, ad: 0), VASTAdOrigin(hop: 2, ad: 1)],
+            [VASTAdOrigin(hop: 0, ad: 0), VASTAdOrigin(hop: 1, ad: 0), VASTAdOrigin(hop: 2, ad: 0)],
+        ])
+        // Each impression's parent is the request that delivered its document.
+        for adIndex in 0..<2 {
+            let impressions = VASTTrackingPlan.requests(for: .video(.creativeView, adIndex: adIndex), vast: result, candidate: nil,
+                                                        context: MacroContext(), source: "bid").filter { $0.category == .impression }
+            #expect(impressions.map(\.parentID) == [root, calls[0].requestID, calls[1].requestID])
+        }
+    }
+
+    /// The same regression through a tag URL: the tag fetch is hop 0, linked to the delivering request.
+    @Test func tagURLChainKeepsEveryHop() async throws {
+        let tag = "https://ads.example/tag"
+        let inline = F.inline(name: "end")
+        let fetcher = FakeVASTFetcher([tag: .body(F.wrapper(name: "w", adTagURI: F.dataURL(inline)))])
+        let delivering = UUID()
+        let result = await VASTResolver(fetcher: fetcher).resolve(.url(tag), parentRequestID: delivering)
+        let calls = await fetcher.calls
+        try #require(calls.count == 2)
+        #expect(calls.map(\.parentRequestID) == [delivering, calls[0].requestID])
+        #expect(result.chain.map(\.url) == [tag, F.dataURL(inline)])
+        #expect(result.chain.map(\.requestID) == calls.map(\.requestID))
+        #expect(result.chain.map(\.parent) == [nil, VASTAdOrigin(hop: 0, ad: 0)])
+        #expect(result.chain.map(\.error) == [nil, nil])
+        #expect(result.ads.map(\.origin) == [[VASTAdOrigin(hop: 0, ad: 0), VASTAdOrigin(hop: 1, ad: 0)]])
+    }
 }

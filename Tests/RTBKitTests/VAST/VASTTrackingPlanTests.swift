@@ -372,4 +372,133 @@ struct VASTTrackingPlanTests {
         // The plan never sets `[ERRORCODE]` or `[REASON]` outside errors and verifications.
         #expect(progress.replacedMacros == ["[ADPLAYHEAD]"])
     }
+
+    // MARK: Companion clicks: exactly one navigation per click (decisions "Renderer contract rulings")
+
+    /// One inline ad with a linear creative and the given companions (`c1`, `c2`, …), each with a click-through and a
+    /// click tracker.
+    private static func companionVAST(_ resources: [String]) -> String {
+        let companions = resources.enumerated().map { index, resource in
+            """
+            <Companion id="c\(index + 1)" width="300" height="250">\(resource)
+              <CompanionClickThrough>https://advertiser.example/c\(index + 1)</CompanionClickThrough>
+              <CompanionClickTracking>https://tracker.example/c\(index + 1)/click</CompanionClickTracking>
+            </Companion>
+            """
+        }.joined()
+        return """
+        <VAST version="3.0"><Ad id="c"><InLine><AdSystem>s</AdSystem><AdTitle>companions</AdTitle><Impression>https://tracker.example/i</Impression>
+        <Creatives><Creative><Linear><Duration>00:00:15</Duration>
+        <MediaFiles><MediaFile delivery="progressive" type="video/mp4" width="1280" height="720">https://cdn.example/a.mp4</MediaFile></MediaFiles>
+        </Linear></Creative><Creative><CompanionAds>\(companions)</CompanionAds></Creative></Creatives></InLine></Ad></VAST>
+        """
+    }
+
+    @Test func staticImageCompanionClickFiresTrackingThenNavigates() async throws {
+        let vast = await resolved(Self.companionVAST([
+            #"<StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
+            "<StaticResource>https://cdn.example/banner.JPG?size=300x250</StaticResource>",
+            #"<HTMLResource><![CDATA[<b>x</b>]]></HTMLResource><StaticResource creativeType="image/gif">https://cdn.example/c.gif</StaticResource>"#,
+        ]))
+        for index in 0..<3 {
+            let requests = plan(.companionClick(adIndex: 0, companionIndex: index), vast)
+            #expect(requests.map(\.template) == ["https://tracker.example/c\(index + 1)/click", "https://advertiser.example/c\(index + 1)"])
+            #expect(requests.map(\.category) == [.click, .navigation])
+            #expect(requests.last?.trigger == "VAST companion click-through")
+        }
+        // The sample's static companion behaves the same.
+        let sample = await resolved(VASTSamples.inline30Skippable)
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 0), sample).map(\.category) == [.click, .navigation])
+    }
+
+    @Test func htmlAndIFrameCompanionClicksFireTrackingWithoutNavigation() async throws {
+        let vast = await resolved(Self.companionVAST([
+            "<HTMLResource><![CDATA[<a href=\"https://advertiser.example/own\">Go</a>]]></HTMLResource>",
+            "<IFrameResource>https://cdn.example/companion.html</IFrameResource>",
+        ]))
+        for index in 0..<2 {
+            let requests = plan(.companionClick(adIndex: 0, companionIndex: index), vast)
+            #expect(requests.map(\.template) == ["https://tracker.example/c\(index + 1)/click"])
+            #expect(requests.map(\.category) == [.click])
+        }
+        // The 4.2 sample's HTML companion.
+        let sample = await resolved(VASTSamples.inline42Verification)
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 1), sample).map(\.template) == [
+            "https://tracker.example/vast42/companion/html/click",
+        ])
+    }
+
+    @Test func scriptAndUnrecognisedStaticResourcesDoNotNavigate() async throws {
+        let vast = await resolved(Self.companionVAST([
+            #"<StaticResource creativeType="application/x-javascript">https://cdn.example/companion.js</StaticResource>"#,
+            "<StaticResource>https://cdn.example/companion</StaticResource>",
+        ]))
+        for index in 0..<2 {
+            #expect(plan(.companionClick(adIndex: 0, companionIndex: index), vast).map(\.category) == [.click])
+        }
+    }
+
+    @Test func staticImageURLFollowsTheImageRule() {
+        func companion(_ resources: [VASTCompanion.Resource]) -> VASTCompanion { VASTCompanion(resources: resources) }
+        #expect(companion([.staticResource(url: "https://cdn.example/a.png", creativeType: "image/png")]).staticImageURL == "https://cdn.example/a.png")
+        #expect(companion([.staticResource(url: "https://cdn.example/a", creativeType: " IMAGE/JPEG ")]).staticImageURL == "https://cdn.example/a")
+        #expect(companion([.staticResource(url: "https://cdn.example/a.webp#x", creativeType: nil)]).staticImageURL == "https://cdn.example/a.webp#x")
+        #expect(companion([.html("<b/>"), .iframe(url: "https://cdn.example/f"),
+                           .staticResource(url: "https://cdn.example/b.gif", creativeType: "image/gif")]).staticImageURL == "https://cdn.example/b.gif")
+        #expect(companion([.staticResource(url: "https://cdn.example/a.js", creativeType: "application/javascript")]).staticImageURL == nil)
+        #expect(companion([.staticResource(url: "https://cdn.example/a.", creativeType: nil)]).staticImageURL == nil)
+        #expect(companion([.staticResource(url: "  ", creativeType: "image/png")]).staticImageURL == nil)
+        #expect(companion([.html("<b/>"), .iframe(url: "https://cdn.example/f")]).staticImageURL == nil)
+        #expect(companion([]).staticImageURL == nil)
+    }
+
+    // MARK: Untrusted indices
+
+    /// Renderers send indices the plan does not control: anything outside the resolution plans nothing, and never traps.
+    @Test func outOfRangeIndicesPlanNothing() async throws {
+        let single = await resolved(VASTSamples.inline42Verification)
+        let pod = await resolved(VASTSamples.pod41)
+        for resolution in [single, pod, ResolvedVAST()] {
+            for index in [-1, resolution.ads.count, Int.max, Int.min] {
+                let events: [AdLifecycleEvent] = [
+                    .video(.creativeView, adIndex: index), .video(.start, adIndex: index), .video(.progress(.percent(50)), adIndex: index),
+                    .videoClick(adIndex: index), .videoViewability(.viewable, adIndex: index), .companionView(adIndex: index, companionIndex: 0),
+                    .companionClick(adIndex: index, companionIndex: 0), .error(.fileNotFound, adIndex: index),
+                ]
+                for event in events {
+                    #expect(plan(event, resolution).isEmpty, "\(event)")
+                }
+            }
+        }
+        let companionCount = try #require(single.ads.first).inline.creatives.flatMap(\.companions).count
+        #expect(companionCount == 2)
+        for companionIndex in [-1, companionCount, Int.max, Int.min] {
+            #expect(plan(.companionView(adIndex: 0, companionIndex: companionIndex), single).isEmpty)
+            #expect(plan(.companionClick(adIndex: 0, companionIndex: companionIndex), single).isEmpty)
+        }
+        #expect(plan(.error(.undefinedError, adIndex: nil), ResolvedVAST()).isEmpty)
+    }
+
+    /// Hand-built resolutions whose origins and parents point outside the chain are planned without parents, never trap.
+    @Test func inconsistentHandBuiltResolutionsAreTotal() {
+        let inline = VASTInline(adTitle: "x", impressions: ["https://tracker.example/i"], errors: ["https://tracker.example/e"],
+                                creatives: [VASTCreative(linear: VASTLinear(duration: 5))])
+        let bogus = [VASTAdOrigin(hop: -1, ad: 0), VASTAdOrigin(hop: Int.max, ad: Int.max), VASTAdOrigin(hop: 0, ad: Int.min)]
+        let chain = [VASTHop(document: VASTDocument(ads: [VASTAd(body: .inline(inline))]), requestID: UUID(),
+                             parent: VASTAdOrigin(hop: Int.max, ad: -1))]
+        let vast = ResolvedVAST(chain: chain,
+                                ads: [ResolvedVASTAd(inline: inline, sequence: Int.max, impressions: inline.impressions, errors: inline.errors,
+                                                     origin: bogus)],
+                                adFailures: [VASTAdFailure(code: .wrapperTimeout, errorURLs: ["https://tracker.example/e"], origin: bogus)])
+        let impressions = plan(.video(.creativeView, adIndex: 0), vast)
+        #expect(impressions.map(\.template) == ["https://tracker.example/i"])
+        #expect(impressions.map(\.parentID) == [nil])
+        #expect(impressions.map(\.source) == ["bid 0.0 › VAST ad 1 › Impression"])
+        #expect(plan(.error(.fileNotFound, adIndex: 0), vast).map(\.template) == ["https://tracker.example/e"])
+        let failures = VASTTrackingPlan.resolutionRequests(vast: vast, context: Self.context, source: "bid 0.0")
+        #expect(failures.map(\.template) == ["https://tracker.example/e"])
+        #expect(failures.map(\.parentID) == [nil])
+        #expect(VASTLabel.ordinal(Int.max) == String(Int.max))
+        #expect(VASTLabel.ordinal(-1) == "0")
+    }
 }
