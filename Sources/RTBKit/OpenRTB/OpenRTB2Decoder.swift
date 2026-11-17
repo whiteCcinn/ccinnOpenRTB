@@ -3,7 +3,7 @@ import Foundation
 /// OpenRTB 2.0–2.6 `BidResponse` → `ParsedInput` (design D3), with the response-level and bid-level validation rules.
 struct OpenRTB2Decoder {
     /// Bid fields first defined by OpenRTB 2.6 / 2.5: their presence proves the version.
-    static let fieldsIntroducedIn26 = ["mtype", "slotinpod", "dur", "cattax", "langb"]
+    static let fieldsIntroducedIn26 = ["mtype", "slotinpod", "dur", "cattax", "langb", "apis"]
     static let fieldsIntroducedIn25 = ["burl", "lurl"]
 
     let request: BidRequestInfo?

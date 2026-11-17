@@ -66,18 +66,19 @@ enum BidRequestReader {
             }
         }
         let device = request.object("device", log: &log)
-        let summary = BidRequestSummary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [],
-                                        deviceType: device?.int("devicetype", log: &log))
-        var macros = MacroSources(log: log)
-        macros.readPublisher(site: request.object("site", log: &macros.log), app: request.object("app", log: &macros.log))
-        macros.readDevice(device)
-        let user = request.object("user", log: &macros.log)
-        macros.set("[GDPRCONSENT]", user?.string("consent", log: &macros.log) ?? user?.object("ext", log: &macros.log)?.string("consent", log: &macros.log))
-        let source = request.object("source", log: &macros.log)
-        macros.set("[TRANSACTIONID]", source?.string("tid", log: &macros.log) ?? source?.object("ext", log: &macros.log)?.string("tid", log: &macros.log))
-        macros.set("[BLOCKEDADCATEGORIES]", joined(request.strings("bcat", log: &macros.log)))
-        log = macros.log
-        return BidRequestInfo(summary: summary, vastMacros: macros.values, impressionMacros: impressionMacros)
+        let deviceType = device?.int("devicetype", log: &log)
+        var context = RequestContextReader(log: log)
+        context.readPublisher(site: request.object("site", log: &context.log), app: request.object("app", log: &context.log))
+        context.readDevice(device)
+        let user = request.object("user", log: &context.log)
+        context.set("[GDPRCONSENT]", user?.string("consent", log: &context.log) ?? user?.object("ext", log: &context.log)?.string("consent", log: &context.log))
+        // 2.6 `source.tid`; 2.5 exchanges often sent it in `source.ext.tid`.
+        let source = request.object("source", log: &context.log)
+        context.transactionID = source?.string("tid", log: &context.log) ?? source?.object("ext", log: &context.log)?.string("tid", log: &context.log)
+        context.set("[BLOCKEDADCATEGORIES]", joined(request.strings("bcat", log: &context.log)))
+        log = context.log
+        let summary = context.summary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [], deviceType: deviceType)
+        return BidRequestInfo(summary: summary, vastMacros: context.macroValues, impressionMacros: impressionMacros)
     }
 
     /// `imp.native.request` is a JSON string; an object is accepted with a warning.
@@ -132,18 +133,18 @@ enum BidRequestReader {
                 impressionMacros[itemID, default: [:]]["OPENRTB_ITEM_QTY"] = quantity
             }
         }
-        let context = request.object("context", log: &log)
-        let device = context?.object("device", log: &log)
-        let summary = BidRequestSummary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [],
-                                        deviceType: device?.int("type", log: &log))
-        var macros = MacroSources(log: log)
-        macros.readPublisher(site: context?.object("site", log: &macros.log), app: context?.object("app", log: &macros.log))
-        macros.readDevice(device)
-        macros.set("[GDPRCONSENT]", context?.object("user", log: &macros.log)?.string("consent", log: &macros.log))
-        macros.set("[TRANSACTIONID]", request.object("source", log: &macros.log)?.string("tid", log: &macros.log))
-        macros.set("[BLOCKEDADCATEGORIES]", joined(context?.object("restrictions", log: &macros.log)?.strings("bcat", log: &macros.log)))
-        log = macros.log
-        return BidRequestInfo(summary: summary, vastMacros: macros.values, impressionMacros: impressionMacros)
+        let contextObject = request.object("context", log: &log)
+        let device = contextObject?.object("device", log: &log)
+        let deviceType = device?.int("type", log: &log)
+        var context = RequestContextReader(log: log)
+        context.readPublisher(site: contextObject?.object("site", log: &context.log), app: contextObject?.object("app", log: &context.log))
+        context.readDevice(device)
+        context.set("[GDPRCONSENT]", contextObject?.object("user", log: &context.log)?.string("consent", log: &context.log))
+        context.transactionID = request.object("source", log: &context.log)?.string("tid", log: &context.log)
+        context.set("[BLOCKEDADCATEGORIES]", joined(contextObject?.object("restrictions", log: &context.log)?.strings("bcat", log: &context.log)))
+        log = context.log
+        let summary = context.summary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [], deviceType: deviceType)
+        return BidRequestInfo(summary: summary, vastMacros: context.macroValues, impressionMacros: impressionMacros)
     }
 
     // MARK: Helpers
@@ -173,30 +174,39 @@ enum BidRequestReader {
     }
 }
 
-/// Collects request-derived VAST macro values (VAST 4.1 §6.2 names) from the OpenRTB / AdCOM context objects, which share
-/// field names across 2.x and AdCOM.
-private struct MacroSources {
+/// Reads the publisher, device and source context shared by OpenRTB 2.x and AdCOM (same field names): the
+/// `BidRequestSummary` fields VAST macros need, plus the other request-derived VAST 4.x macro values (VAST 4.1 §6.2 names).
+private struct RequestContextReader {
     var log: IssueLog
-    private(set) var values: [String: String] = [:]
+    var domain: String?
+    var pageURL: String?
+    var appBundle: String?
+    var ifa: String?
+    var limitAdTracking: Bool?
+    var transactionID: String?
+    /// Other request-derived values under bracketed VAST macro names (`[DEVICEIP]`, `[LATLONG]`, …).
+    private(set) var extraMacros: [String: String] = [:]
 
     init(log: IssueLog) {
         self.log = log
     }
 
     mutating func set(_ key: String, _ value: String?) {
-        guard let value, !value.isEmpty else { return }
-        values[key] = value
+        guard let value = nonEmpty(value) else { return }
+        extraMacros[key] = value
     }
 
+    /// `site.domain`, else the host of `site.page` (the top-level page), else `app.domain`.
     mutating func readPublisher(site: JSONObjectReader?, app: JSONObjectReader?) {
         if let site {
-            let page = site.string("page", log: &log)
-            set("[PAGEURL]", page)
-            set("[DOMAIN]", site.string("domain", log: &log) ?? page.flatMap { URLComponents(string: $0)?.host })
+            pageURL = nonEmpty(site.string("page", log: &log))
+            domain = nonEmpty(site.string("domain", log: &log)) ?? pageURL.flatMap { nonEmpty(URLComponents(string: $0)?.host) }
             readContent(site.object("content", log: &log))
         }
         if let app {
-            set("[APPBUNDLE]", app.string("bundle", log: &log))
+            appBundle = nonEmpty(app.string("bundle", log: &log))
+            let appDomain = nonEmpty(app.string("domain", log: &log))
+            if domain == nil { domain = appDomain }
             set("[STOREURL]", app.string("storeurl", log: &log))
             readContent(app.object("content", log: &log))
         }
@@ -210,14 +220,33 @@ private struct MacroSources {
 
     mutating func readDevice(_ device: JSONObjectReader?) {
         guard let device else { return }
+        ifa = nonEmpty(device.string("ifa", log: &log))
+        limitAdTracking = device.flag("lmt", log: &log)
         set("[DEVICEUA]", device.string("ua", log: &log))
-        set("[IFA]", device.string("ifa", log: &log))
-        set("[LIMITADTRACKING]", device.flag("lmt", log: &log).map { $0 ? "1" : "0" })
         set("[DEVICEIP]", device.string("ip", log: &log) ?? device.string("ipv6", log: &log))
         set("[IFATYPE]", device.object("ext", log: &log)?.string("ifa_type", log: &log))
         if let geo = device.object("geo", log: &log), let latitude = geo.double("lat", log: &log), let longitude = geo.double("lon", log: &log),
            let lat = MacroEncoding.decimal(latitude), let lon = MacroEncoding.decimal(longitude) {
             set("[LATLONG]", lat + "," + lon)
         }
+    }
+
+    func summary(id: String, impressions: [BidRequestSummary.Impression], currencies: [String], deviceType: Int?) -> BidRequestSummary {
+        BidRequestSummary(id: id, impressions: impressions, currencies: currencies, deviceType: deviceType, domain: domain, pageURL: pageURL,
+                          appBundle: appBundle, ifa: ifa, limitAdTracking: limitAdTracking, transactionID: nonEmpty(transactionID))
+    }
+
+    /// Every request-derived VAST macro value under its bracketed name.
+    var macroValues: [String: String] {
+        var values = extraMacros
+        let typed: [(String, String?)] = [("[DOMAIN]", domain), ("[PAGEURL]", pageURL), ("[APPBUNDLE]", appBundle), ("[IFA]", ifa),
+                                          ("[LIMITADTRACKING]", limitAdTracking.map { $0 ? "1" : "0" }), ("[TRANSACTIONID]", nonEmpty(transactionID))]
+        for (key, value) in typed { if let value { values[key] = value } }
+        return values
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }

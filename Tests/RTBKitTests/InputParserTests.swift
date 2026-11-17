@@ -154,6 +154,11 @@ struct OpenRTB2Tests {
         #expect(InputParser.parse(plain).kind == .bidResponse(.v2("2.x")))
         let declared = #"{"id":"r","ver":"2.3","seatbid":[{"bid":[{"id":"b","impid":"1","price":1,"adm":"<p/>"}]}]}"#
         #expect(InputParser.parse(declared).kind == .bidResponse(.v2("2.3")))
+        // Every Bid field OpenRTB 2.6 introduced proves 2.6.
+        for field in [#""mtype":1"#, #""slotinpod":1"#, #""dur":15"#, #""cattax":2"#, #""langb":"en""#, #""apis":[7]"#] {
+            let json = #"{"id":"r","seatbid":[{"bid":[{"id":"b","impid":"1","price":1,"adm":"<p/>","# + field + "}]}]}"
+            #expect(InputParser.parse(json).kind == .bidResponse(.v2("2.6")), "\(field)")
+        }
     }
 
     @Test func burlInADeclaredOlderVersionIsInfo() throws {
@@ -424,6 +429,48 @@ struct BidRequestSummaryTests {
         #expect(summary.impressions[0].size == AdSize(width: 300, height: 250))
         #expect(summary.impressions[0].nativeHints?.required == [1])
         #expect(summary.impressions[1].formats == [.video])
+    }
+
+    @Test func requestDerivedMacroFieldsFromAnApp() throws {
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.response26Video(), request: OpenRTBFixtures.request26).request)
+        #expect(summary.appBundle == "com.example.app")
+        #expect(summary.ifa == "IFA-1")
+        #expect(summary.limitAdTracking == false)
+        #expect(summary.domain == nil)
+        #expect(summary.pageURL == nil)
+        #expect(summary.transactionID == nil)
+        let withDomain = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"app":{"bundle":"b","domain":"app.example"},"device":{"lmt":1}}"#
+        let app = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: withDomain).request)
+        #expect(app.domain == "app.example")
+        #expect(app.limitAdTracking == true)
+    }
+
+    @Test func requestDerivedMacroFieldsFromASite() throws {
+        let request = #"""
+        {"id":"r","imp":[{"id":"1","banner":{"w":300,"h":250}}],"site":{"domain":"news.example","page":"https://news.example/a?b=1"},
+         "source":{"tid":"tx-1"}}
+        """#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: request).request)
+        #expect(summary.domain == "news.example")
+        #expect(summary.pageURL == "https://news.example/a?b=1")
+        #expect(summary.transactionID == "tx-1")
+        #expect(summary.appBundle == nil)
+        // Without `site.domain`, the page's host is the domain of the top-level page.
+        let pageOnly = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"site":{"page":"https://www.example.org/x"}}"#
+        #expect(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: pageOnly).request?.domain == "www.example.org")
+    }
+
+    @Test func requestDerivedMacroFieldsFromAnOpenRTB3Request() throws {
+        let request = #"""
+        {"openrtb":{"ver":"3.0","domainver":"1.0","request":{"id":"r3","source":{"tid":"tx-3"},"item":[{"id":"1","spec":{"placement":{"display":{"w":320,"h":50}}}}],
+          "context":{"app":{"bundle":"com.example.three","domain":"three.example"},"device":{"type":4,"ifa":"IFA-3","lmt":1}}}}}
+        """#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec30Banner, request: request).request)
+        #expect(summary.appBundle == "com.example.three")
+        #expect(summary.domain == "three.example")
+        #expect(summary.ifa == "IFA-3")
+        #expect(summary.limitAdTracking == true)
+        #expect(summary.transactionID == "tx-3")
     }
 
     @Test func invalidRequestIsAWarningAndIgnored() {
