@@ -18,6 +18,8 @@ import Foundation
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
+/// Resolution-time failures (`ResolvedVAST.adFailures`) are planned by `resolutionRequests` (VASTResolutionPlan.swift).
+///
 /// Macros: the plan sets what it knows about the ad on top of the host's context: `[ERRORCODE]`, `[REASON]` (2 for
 /// `verificationNotExecuted`) and `[PODSEQUENCE]` (the `sequence` of the pod slot the ad plays in). Playback values
 /// (`[ADPLAYHEAD]`, `[ASSETURI]`, `[PLAYERSIZE]`, …) come from the host's context.
@@ -41,13 +43,6 @@ public enum VASTTrackingPlan {
         case .won, .rendered, .viewable, .click, .closed, .loss:
             return []
         }
-    }
-
-    /// The Error URLs of `vast.adFailures` (pod slots or buffet ads that failed without stopping playback), each with its
-    /// own `[ERRORCODE]`. The host calls this once, after resolving.
-    public static func resolutionRequests(vast: ResolvedVAST, context: MacroContext, source: String) -> [TrackerRequest] {
-        let planner = VASTPlanner(vast: vast, context: context, source: source)
-        return vast.adFailures.flatMap { planner.failureRequests($0) }
     }
 }
 
