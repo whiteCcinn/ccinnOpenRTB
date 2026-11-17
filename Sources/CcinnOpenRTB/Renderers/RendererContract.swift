@@ -59,6 +59,16 @@ struct RendererLogEntry: Equatable, Sendable {
     var message: String
 }
 
+/// A JavaScript tracker the host recorded in Real mode for the renderer to run (Native `jstracker`, `eventtrackers` /
+/// AdCOM events with method 2). The renderer runs each one exactly once (identity: `entryID`) in a hidden, non-persistent
+/// web view: `<script src>` when `request.url` is http(s), otherwise as markup. It then calls
+/// `monitor.finishRendererLoad(entryID, …)`. In Simulated mode the host records script trackers and never lists them here.
+struct ScriptTracker: Identifiable, Equatable, Sendable {
+    var entryID: UUID
+    var request: TrackerRequest
+    var id: UUID { entryID }
+}
+
 /// Implemented by the shell's session; renderers report everything through it.
 /// Members with default implementations are protocol REQUIREMENTS, so the session's implementations are dynamically
 /// dispatched through `any AdRenderingHost`.
@@ -79,9 +89,13 @@ protocol AdRenderingHost: AnyObject {
     /// Resolves a VAST tag for a Native video asset. The session overrides this with its monitor-backed fetcher and
     /// remembers the result, so `.video(e, adIndex:)` from that player maps to it.
     func resolveVAST(_ source: VASTSource) async -> ResolvedVAST
+    /// Real-mode script trackers waiting to be run, oldest first (observable on the session).
+    var scriptTrackers: [ScriptTracker] { get }
 }
 
 extension AdRenderingHost {
+    var scriptTrackers: [ScriptTracker] { [] }
+
     func playbackChanged(_ status: PlaybackStatus) {}
 
     func rendererLog(_ entry: RendererLogEntry) {}

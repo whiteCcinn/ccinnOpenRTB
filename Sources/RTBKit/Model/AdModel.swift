@@ -213,13 +213,20 @@ public struct BidRequestSummary: Sendable, Hashable {
         /// `imp.secure == 1`: creatives and trackers must be HTTPS.
         public var secure: Bool
         public var nativeHints: NativeRequestHints?
+        /// OpenRTB 2.6 `imp.qty.multiplier` (DOOH impressions per ad play), the `${AUCTION_MULTIPLIER}` value.
+        public var quantityMultiplier: Double?
+        /// OpenRTB 3.0 `item.qty`.
+        public var itemQuantity: Int?
 
-        public init(id: String, formats: Set<AdFormat>, size: AdSize? = nil, secure: Bool = false, nativeHints: NativeRequestHints? = nil) {
+        public init(id: String, formats: Set<AdFormat>, size: AdSize? = nil, secure: Bool = false, nativeHints: NativeRequestHints? = nil,
+                    quantityMultiplier: Double? = nil, itemQuantity: Int? = nil) {
             self.id = id
             self.formats = formats
             self.size = size
             self.secure = secure
             self.nativeHints = nativeHints
+            self.quantityMultiplier = quantityMultiplier
+            self.itemQuantity = itemQuantity
         }
     }
 
@@ -240,10 +247,31 @@ public struct BidRequestSummary: Sendable, Hashable {
     public var limitAdTracking: Bool?
     /// `source.tid`.
     public var transactionID: String?
+    /// `device.ip`, else `device.ipv6`.
+    public var deviceIP: String?
+    /// `device.ua`.
+    public var deviceUserAgent: String?
+    /// `device.geo.lat` / `device.geo.lon`.
+    public var latitude: Double?
+    public var longitude: Double?
+    /// `device.ext.ifa_type`.
+    public var ifaType: String?
+    /// `user.consent` (2.6), else `user.ext.consent`.
+    public var gdprConsent: String?
+    /// `bcat`, in request order.
+    public var blockedCategories: [String]
+    /// `site.content.id` or `app.content.id`.
+    public var contentID: String?
+    /// `site.content.url` or `app.content.url`.
+    public var contentURL: String?
+    /// `app.storeurl`.
+    public var storeURL: String?
 
     public init(id: String, impressions: [Impression], currencies: [String] = [], deviceType: Int? = nil, domain: String? = nil,
                 pageURL: String? = nil, appBundle: String? = nil, ifa: String? = nil, limitAdTracking: Bool? = nil,
-                transactionID: String? = nil) {
+                transactionID: String? = nil, deviceIP: String? = nil, deviceUserAgent: String? = nil, latitude: Double? = nil,
+                longitude: Double? = nil, ifaType: String? = nil, gdprConsent: String? = nil, blockedCategories: [String] = [],
+                contentID: String? = nil, contentURL: String? = nil, storeURL: String? = nil) {
         self.id = id
         self.impressions = impressions
         self.currencies = currencies
@@ -254,6 +282,16 @@ public struct BidRequestSummary: Sendable, Hashable {
         self.ifa = ifa
         self.limitAdTracking = limitAdTracking
         self.transactionID = transactionID
+        self.deviceIP = deviceIP
+        self.deviceUserAgent = deviceUserAgent
+        self.latitude = latitude
+        self.longitude = longitude
+        self.ifaType = ifaType
+        self.gdprConsent = gdprConsent
+        self.blockedCategories = blockedCategories
+        self.contentID = contentID
+        self.contentURL = contentURL
+        self.storeURL = storeURL
     }
 }
 
