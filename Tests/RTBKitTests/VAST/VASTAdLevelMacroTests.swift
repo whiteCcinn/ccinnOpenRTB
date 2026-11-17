@@ -10,11 +10,16 @@ struct VASTAdLevelMacroTests {
     private static let context = MacroContext(timestamp: Date(timeIntervalSince1970: 1_700_000_000), cacheBuster: "12345678")
     private static let macroKeys = ["[ADSERVINGID]", "[UNIVERSALADID]", "[ADTYPE]", "[ADCATEGORIES]"]
 
-    /// The macro values the plan sets for an ad (or one of its companions).
-    private func values(_ vast: ResolvedVAST, adIndex: Int = 0, companionIndex: Int? = nil) throws -> [String: String] {
+    /// The ad-level macro values the plan sets for an ad (or one of its companions): single values from `custom`, list
+    /// values (`[UNIVERSALADID]`) from `customLists`, each list shown as its items.
+    private func values(_ vast: ResolvedVAST, adIndex: Int = 0, companionIndex: Int? = nil) throws -> [String: [String]] {
         let planner = VASTPlanner(vast: vast, context: Self.context, source: "bid 0.0")
         let context = try #require(planner.macroContext(adIndex: adIndex, companionIndex: companionIndex))
-        return context.custom.filter { Self.macroKeys.contains($0.key) }
+        // A list macro lives in `customLists` only, never comma-joined in `custom`.
+        #expect(context.custom["[UNIVERSALADID]"] == nil)
+        var values = context.custom.filter { Self.macroKeys.contains($0.key) }.mapValues { [$0] }
+        values.merge(context.customLists.filter { Self.macroKeys.contains($0.key) }) { single, _ in single }
+        return values
     }
 
     private static func inline(version: String, adAttributes: String = "", inlineExtra: String = "", universalAdIds: String) -> String {
@@ -108,16 +113,17 @@ struct VASTAdLevelMacroTests {
 
     @Test func vast42ValuesForTheAdAndItsCompanions() async throws {
         let vast = await resolved(VASTSamples.inline42Verification)
-        #expect(try values(vast) == ["[ADSERVINGID]": "ccinn-42-serving-0001", "[UNIVERSALADID]": "Ad-ID CCIN0042000H", "[ADTYPE]": "video"])
+        #expect(try values(vast) == ["[ADSERVINGID]": ["ccinn-42-serving-0001"], "[UNIVERSALADID]": ["Ad-ID CCIN0042000H"],
+                                     "[ADTYPE]": ["video"]])
         // A companion's requests name its own creative.
-        #expect(try values(vast, companionIndex: 0)["[UNIVERSALADID]"] == "unknown unknown")
+        #expect(try values(vast, companionIndex: 0)["[UNIVERSALADID]"] == ["unknown unknown"])
     }
 
     @Test func vast41PodValuesArePerAd() async throws {
         let vast = await resolved(VASTSamples.pod41)
         for index in 0..<2 {
-            #expect(try values(vast, adIndex: index) == ["[ADSERVINGID]": "ccinn-pod-41-serving-\(index + 1)",
-                                                         "[UNIVERSALADID]": "Ad-ID CCIN004100\(index + 1)H", "[ADTYPE]": "video"])
+            #expect(try values(vast, adIndex: index) == ["[ADSERVINGID]": ["ccinn-pod-41-serving-\(index + 1)"],
+                                                         "[UNIVERSALADID]": ["Ad-ID CCIN004100\(index + 1)H"], "[ADTYPE]": ["video"]])
         }
     }
 
@@ -125,15 +131,15 @@ struct VASTAdLevelMacroTests {
     @Test func adTypeDefaultsToVideoFromVAST41() async throws {
         let ids = #"<UniversalAdId idRegistry="unknown">unknown</UniversalAdId>"#
         let absent = await resolved(Self.inline(version: "4.1", inlineExtra: "<AdServingId>s</AdServingId>", universalAdIds: ids))
-        #expect(try values(absent)["[ADTYPE]"] == "video")
+        #expect(try values(absent)["[ADTYPE]"] == ["video"])
         let audio = await resolved(Self.inline(version: "4.2", adAttributes: #" adType="audio""#, inlineExtra: "<AdServingId>s</AdServingId>",
                                                universalAdIds: ids))
-        #expect(try values(audio)["[ADTYPE]"] == "audio")
+        #expect(try values(audio)["[ADTYPE]"] == ["audio"])
     }
 
     @Test func vast40HasOnlyTheUniversalAdId() async throws {
         let vast = await resolved(VASTSamples.inline40)
-        #expect(try values(vast) == ["[UNIVERSALADID]": "Ad-ID CCIN0040000H"])
+        #expect(try values(vast) == ["[UNIVERSALADID]": ["Ad-ID CCIN0040000H"]])
     }
 
     @Test func vast30LeavesThemUnknown() async throws {
@@ -150,10 +156,12 @@ struct VASTAdLevelMacroTests {
         #expect(try values(await resolved(xml))["[ADCATEGORIES]"] == nil)
     }
 
-    @Test func severalUniversalAdIdsAreCommaSeparated() async throws {
+    /// VAST 4.2 §6.3: "Multiple UniversalAdIDs can be supported with a comma separating them"; §6.1: each value is encoded
+    /// on its own, so they go to `customLists` (decisions "VAST macro rulings"), one item per id.
+    @Test func severalUniversalAdIdsAreOneListItemEach() async throws {
         let two = #"<UniversalAdId idRegistry="ad-id.org">CNPA0484000H</UniversalAdId><UniversalAdId idRegistry="clearcast.co.uk">AAA/BBBB123/030</UniversalAdId>"#
         let vast = await resolved(Self.inline(version: "4.2", inlineExtra: "<AdServingId>s</AdServingId>", universalAdIds: two))
-        #expect(try values(vast)["[UNIVERSALADID]"] == "ad-id.org CNPA0484000H,clearcast.co.uk AAA/BBBB123/030")
+        #expect(try values(vast)["[UNIVERSALADID]"] == ["ad-id.org CNPA0484000H", "clearcast.co.uk AAA/BBBB123/030"])
     }
 
     @Test func outOfRangeIndicesHaveNoContext() async {
@@ -185,5 +193,9 @@ struct VASTAdLevelMacroTests {
             == "https://tracker.example/i?sid=-1&uid=ad-id.org%20CNPA0484000H&type=-1&cat=-1")
         #expect(try await impression(Self.inline(version: "3.0", universalAdIds: ""))
             == "https://tracker.example/i?sid=-1&uid=-1&type=-1&cat=-1")
+        // Several ids: each encoded on its own, joined by a literal comma (§6.1).
+        let two = #"<UniversalAdId idRegistry="ad-id.org">CNPA0484000H</UniversalAdId><UniversalAdId idRegistry="clearcast.co.uk">AAA/BBBB123/030</UniversalAdId>"#
+        #expect(try await impression(Self.inline(version: "4.2", inlineExtra: "<AdServingId>s</AdServingId>", universalAdIds: two))
+            == "https://tracker.example/i?sid=s&uid=ad-id.org%20CNPA0484000H,clearcast.co.uk%20AAA%2FBBBB123%2F030&type=video&cat=-1")
     }
 }

@@ -256,4 +256,31 @@ struct VASTValidationTests {
             }
         }
     }
+
+    // MARK: Companions
+
+    /// VAST error 604: "Couldn't find Companion resource with supported type".
+    @Test func companionWithNothingDisplayableIsReported() throws {
+        func companionIssues(_ resource: String, version: String = "3.0") -> [ValidationIssue] {
+            issues("""
+            <VAST version="\(version)"><Ad><InLine><AdSystem>s</AdSystem><AdTitle>t</AdTitle><Impression>https://tracker.example/i</Impression>
+            <Creatives><Creative><CompanionAds><Companion width="300" height="250">\(resource)</Companion></CompanionAds></Creative></Creatives>
+            </InLine></Ad></VAST>
+            """)
+        }
+        let unsupported = try #require(companionIssues(#"<StaticResource creativeType="text/html">https://cdn.example/c.html</StaticResource>"#)
+            .issue("vast.companion.resource.unsupported"))
+        #expect(unsupported.severity == .warning)
+        #expect(unsupported.message.contains("604"))
+        #expect(unsupported.path == "VAST/Ad[1]/InLine/Creatives/Creative[1]/CompanionAds/Companion[1]")
+        for displayable in [#"<StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
+                            #"<StaticResource creativeType="application/x-javascript">https://cdn.example/c.js</StaticResource>"#,
+                            "<HTMLResource><![CDATA[<b>x</b>]]></HTMLResource>", "<IFrameResource>https://cdn.example/f.html</IFrameResource>"] {
+            #expect(!companionIssues(displayable).codes().contains("vast.companion.resource.unsupported"), "\(displayable)")
+        }
+        // Wrapper companions only carry tracking: no resource needed, none checked.
+        let wrapper = issues(VASTFixture.wrapper(name: "w", adTagURI: "https://ads.example/v").replacingOccurrences(
+            of: "<Linear>", with: #"<CompanionAds><Companion width="1" height="1"><StaticResource creativeType="text/html">https://cdn.example/x</StaticResource></Companion></CompanionAds><Linear>"#))
+        #expect(!wrapper.codes().contains("vast.companion.resource.unsupported"))
+    }
 }

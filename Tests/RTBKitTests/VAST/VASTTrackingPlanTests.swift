@@ -428,12 +428,39 @@ struct VASTTrackingPlanTests {
         ])
     }
 
-    @Test func scriptAndUnrecognisedStaticResourcesDoNotNavigate() async throws {
+    /// VAST allows a script StaticResource (`application/x-javascript`): the player draws it (as `<script src>`), and the
+    /// script opens its own click-through, so the plan does not navigate.
+    @Test func scriptOnlyCompanionIsDisplayedAndDoesNotNavigate() async throws {
         let vast = await resolved(Self.companionVAST([
             #"<StaticResource creativeType="application/x-javascript">https://cdn.example/companion.js</StaticResource>"#,
-            "<StaticResource>https://cdn.example/companion</StaticResource>",
         ]))
-        for index in 0..<2 {
+        let companion = try #require(vast.ads.first).inline.creatives.flatMap(\.companions)[0]
+        #expect(companion.displayResource == .staticResource(url: "https://cdn.example/companion.js", creativeType: "application/x-javascript"))
+        #expect(!companion.playerOpensClickThrough)
+        #expect(companion.staticImageURL == nil)
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 0), vast).map(\.template) == ["https://tracker.example/c1/click"])
+        #expect(plan(.companionView(adIndex: 0, companionIndex: 0), vast).isEmpty)
+    }
+
+    @Test func imageAndScriptPrefersTheImageWhichNavigates() async throws {
+        let vast = await resolved(Self.companionVAST([
+            #"<StaticResource creativeType="application/x-javascript">https://cdn.example/c.js</StaticResource><StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
+        ]))
+        let companion = try #require(vast.ads.first).inline.creatives.flatMap(\.companions)[0]
+        #expect(companion.displayResource == .staticResource(url: "https://cdn.example/c.png", creativeType: "image/png"))
+        #expect(companion.playerOpensClickThrough)
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 0), vast).map(\.template) == ["https://tracker.example/c1/click",
+                                                                                              "https://advertiser.example/c1"])
+    }
+
+    @Test func unrecognisedStaticResourcesAreNotDisplayed() async throws {
+        let vast = await resolved(Self.companionVAST([
+            "<StaticResource>https://cdn.example/companion</StaticResource>",
+            #"<StaticResource creativeType="text/html">https://cdn.example/c.html</StaticResource>"#,
+        ]))
+        for (index, companion) in try #require(vast.ads.first).inline.creatives.flatMap(\.companions).enumerated() {
+            #expect(companion.displayResource == nil)
+            #expect(!companion.playerOpensClickThrough)
             #expect(plan(.companionClick(adIndex: 0, companionIndex: index), vast).map(\.category) == [.click])
         }
     }
@@ -444,18 +471,23 @@ struct VASTTrackingPlanTests {
             #"<HTMLResource><![CDATA[<b>x</b>]]></HTMLResource><StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
             // Iframe before HTML: HTML is preferred, no navigation.
             #"<IFrameResource>https://cdn.example/f.html</IFrameResource><HTMLResource><![CDATA[<b>x</b>]]></HTMLResource>"#,
-            // A script StaticResource does not render; the iframe does: no navigation.
+            // A script StaticResource comes last: the iframe is preferred, no navigation.
             #"<StaticResource creativeType="application/x-javascript">https://cdn.example/c.js</StaticResource><IFrameResource>https://cdn.example/f.html</IFrameResource>"#,
+            // Script then image: the image, which navigates.
+            #"<StaticResource creativeType="text/javascript">https://cdn.example/d.js</StaticResource><StaticResource>https://cdn.example/d.gif</StaticResource>"#,
         ]))
         let companions = try #require(vast.ads.first).inline.creatives.flatMap(\.companions)
         #expect(companions.map(\.displayResource) == [
             .staticResource(url: "https://cdn.example/c.png", creativeType: "image/png"),
             .html("<b>x</b>"),
             .iframe(url: "https://cdn.example/f.html"),
+            .staticResource(url: "https://cdn.example/d.gif", creativeType: nil),
         ])
+        #expect(companions.map(\.playerOpensClickThrough) == [true, false, false, true])
         #expect(plan(.companionClick(adIndex: 0, companionIndex: 0), vast).map(\.category) == [.click, .navigation])
         #expect(plan(.companionClick(adIndex: 0, companionIndex: 1), vast).map(\.category) == [.click])
         #expect(plan(.companionClick(adIndex: 0, companionIndex: 2), vast).map(\.category) == [.click])
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 3), vast).map(\.category) == [.click, .navigation])
     }
 
     @Test func ctvNeverNavigatesFromACompanion() async throws {
@@ -483,8 +515,14 @@ struct VASTTrackingPlanTests {
         #expect(display([html, iframe, png]) == png)
         #expect(display([iframe, html]) == html)
         #expect(display([iframe]) == iframe)
+        // A script StaticResource renders, after every other kind.
         #expect(display([script, iframe]) == iframe)
-        #expect(display([script]) == nil)
+        #expect(display([script, html]) == html)
+        #expect(display([script, png]) == png)
+        #expect(display([script]) == script)
+        let untypedScript = R.staticResource(url: "https://cdn.example/a.JS?v=2", creativeType: nil)
+        #expect(display([untypedScript]) == untypedScript)
+        #expect(display([R.staticResource(url: "https://cdn.example/a.js", creativeType: "text/ecmascript")]) != nil)
         #expect(display([]) == nil)
         // Image detection: the type wins; without one, the extension decides.
         let typed = R.staticResource(url: "https://cdn.example/a", creativeType: " IMAGE/JPEG ")
@@ -497,10 +535,14 @@ struct VASTTrackingPlanTests {
         // Blank resources never render.
         #expect(display([.staticResource(url: "  ", creativeType: "image/png"), .html(" \n"), .iframe(url: "")]) == nil)
         #expect(display([.html(" "), html]) == html)
-        // `staticImageURL` is a view of the same rule.
+        // `playerOpensClickThrough` and `staticImageURL` are views of the same rule: true / set only for an image.
+        for (resources, opens) in [([html, png], true), ([script, png], true), ([html, iframe], false), ([script], false), ([iframe], false),
+                                   ([], false)] as [([R], Bool)] {
+            let companion = VASTCompanion(resources: resources)
+            #expect(companion.playerOpensClickThrough == opens, "\(resources)")
+            #expect((companion.staticImageURL != nil) == opens, "\(resources)")
+        }
         #expect(VASTCompanion(resources: [html, png]).staticImageURL == "https://cdn.example/a.png")
-        #expect(VASTCompanion(resources: [html, iframe]).staticImageURL == nil)
-        #expect(VASTCompanion(resources: [script]).staticImageURL == nil)
     }
 
     // MARK: Untrusted indices
