@@ -227,12 +227,32 @@ public struct BidRequestSummary: Sendable, Hashable {
     public var currencies: [String]
     /// OpenRTB `device.devicetype`, when present.
     public var deviceType: Int?
+    /// `site.domain` (or `app.domain`).
+    public var domain: String?
+    /// `site.page`.
+    public var pageURL: String?
+    /// `app.bundle`.
+    public var appBundle: String?
+    /// `device.ifa`.
+    public var ifa: String?
+    /// `device.lmt == 1`.
+    public var limitAdTracking: Bool?
+    /// `source.tid`.
+    public var transactionID: String?
 
-    public init(id: String, impressions: [Impression], currencies: [String] = [], deviceType: Int? = nil) {
+    public init(id: String, impressions: [Impression], currencies: [String] = [], deviceType: Int? = nil, domain: String? = nil,
+                pageURL: String? = nil, appBundle: String? = nil, ifa: String? = nil, limitAdTracking: Bool? = nil,
+                transactionID: String? = nil) {
         self.id = id
         self.impressions = impressions
         self.currencies = currencies
         self.deviceType = deviceType
+        self.domain = domain
+        self.pageURL = pageURL
+        self.appBundle = appBundle
+        self.ifa = ifa
+        self.limitAdTracking = limitAdTracking
+        self.transactionID = transactionID
     }
 }
 
