@@ -1,0 +1,464 @@
+import CcinnOpenRTBKit
+import Foundation
+import RTBKit
+import Testing
+@testable import CcinnOpenRTB
+
+@MainActor
+@Suite("Ad session lifecycle")
+struct AdSessionTests {
+    private let display = Fixtures.candidate(.html("<div>ad</div>"))
+    private let video = Fixtures.candidate(.vast(.xml("<VAST version=\"4.2\"/>")), format: .video)
+
+    // MARK: Parsing and selection
+
+    @Test func everySessionStartsSimulatedEvenWithARealMonitor() {
+        let monitor = NetworkMonitor(transport: CountingTransport(), publishInterval: .zero)
+        monitor.mode = .real
+        let session = AdSession(services: Fixtures.services(Fixtures.input([]), recorder: KitRecorder()), monitor: monitor)
+        #expect(session.mode == .simulated)
+    }
+
+    @Test func parsingSelectsTheFirstBidAndSuggestsAPlacement() async {
+        let harness = SessionHarness(Fixtures.input([video, display]))
+        await harness.paste()
+        #expect(harness.session.selectedCandidateID == "0.0")
+        #expect(harness.session.placement == .interstitial)
+        harness.session.selectedCandidateID = video.id
+        #expect(harness.session.isParsing == false)
+    }
+
+    @Test func typingIsDebouncedAndOnlyTheLatestTextIsApplied() async throws {
+        let recorder = KitRecorder()
+        let session = AdSession(services: Fixtures.services(Fixtures.input([display]), recorder: recorder),
+                                monitor: NetworkMonitor(transport: CountingTransport(), publishInterval: .zero), parseDebounce: .milliseconds(30))
+        for character in "typing" { session.responseText.append(character) }
+        #expect(session.isParsing)
+        for _ in 0..<500 where session.isParsing { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(!session.isParsing)
+        #expect(recorder.parses == 1)
+        #expect(session.selectedCandidateID == "0.0")
+    }
+
+    @Test func noBidResponseRendersTheReason() async {
+        let harness = SessionHarness(ParsedInput(kind: .bidResponse(.v2("2.x")), responseID: "a", noBidReason: 2))
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .noBid(reason: 2))
+        #expect(harness.recorder.events.isEmpty)
+    }
+
+    // MARK: Lifecycle
+
+    @Test func renderSendsTheWinNoticeAndTheRendererReportsTheImpressionOnce() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .ready)
+        #expect(harness.recorder.events == [.won])
+        #expect(harness.session.renderRequest?.generation == harness.session.generation)
+
+        harness.session.report(.rendered)
+        harness.session.report(.rendered)
+        harness.session.fireManually(.rendered)
+        #expect(harness.recorder.events == [.won, .rendered])
+        #expect(harness.categories == [.win, .billing, .impression])
+        #expect(harness.session.lifecycleLog.filter { $0.outcome == .alreadyFired }.count == 2)
+    }
+
+    @Test func simulatedModeRecordsTrackersAndSendsNothing() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        harness.session.fireManually(.click(assetID: nil))
+        await harness.monitor.waitUntilIdle()
+        #expect(harness.transport.requests.isEmpty)
+        #expect(harness.monitor.liveEntries.allSatisfy { $0.state == .simulated })
+    }
+
+    @Test func turningTheExchangeWinNoticeOffSkipsIt() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        harness.session.macros.exchangeSendsWinNotice = false
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.recorder.events.isEmpty)
+        #expect(harness.categories.isEmpty)
+    }
+
+    @Test func vastIsResolvedOnceAndTheShellNeverSynthesisesRendered() async {
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .ready)
+        #expect(harness.recorder.resolutions == [.xml("<VAST version=\"4.2\"/>")])
+        #expect(harness.recorder.resolutionRequestCalls == 1)
+        #expect(harness.recorder.events == [.won])
+        #expect(harness.session.renderRequest?.vast == Fixtures.vast(ads: 1))
+        #expect(harness.session.issues.map(\.code) == ["vast.test"])
+        #expect(harness.categories == [.win, .error])
+    }
+
+    @Test func aVASTChainFailureFiresItsErrorOnce() async {
+        let harness = SessionHarness(Fixtures.input([video]), resolved: Fixtures.vast(ads: 0, failure: .noAdsAfterWrapper))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.fireManually(.error(.noAdsAfterWrapper, adIndex: nil))
+        #expect(harness.recorder.events == [.won, .error(.noAdsAfterWrapper, adIndex: nil)])
+    }
+
+    @Test func aNewRenderLetsEveryEventFireAgain() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        let first = harness.session.generation
+        await harness.renderAndWait()
+        #expect(harness.session.generation == first + 1)
+        harness.session.report(.rendered)
+        #expect(harness.recorder.events == [.won, .rendered, .won, .rendered])
+    }
+
+    @Test func resetIgnoresEventsUntilTheNextRender() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.reset()
+        #expect(harness.session.phase == .idle)
+        #expect(harness.session.renderRequest == nil)
+        harness.session.report(.rendered)
+        harness.session.fireManually(.click(assetID: nil))
+        #expect(harness.recorder.events == [.won])
+        #expect(harness.session.lifecycleLog.last?.outcome == .ignored("no ad on the device"))
+    }
+
+    @Test func aResolutionThatFinishesAfterResetIsDiscarded() async throws {
+        let gate = ResolutionGate()
+        let harness = SessionHarness(Fixtures.input([video]), gate: gate)
+        await harness.paste()
+        harness.session.render()
+        for _ in 0..<500 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        #expect(harness.session.phase == .preparing("Resolving VAST…"))
+        harness.session.reset()
+        gate.open()
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(harness.session.phase == .idle)
+        #expect(harness.session.prepared == nil)
+        #expect(harness.recorder.resolutionRequestCalls == 0)
+        #expect(harness.recorder.events == [.won])
+    }
+
+    @Test func loseSendsTheLossNoticeInsteadOfRendering() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.lose(LossReason.reason(code: 100))
+        #expect(harness.session.phase == .lost(LossReason.reason(code: 100)))
+        #expect(harness.session.renderRequest == nil)
+        harness.session.report(.rendered)
+        #expect(harness.recorder.events == [.won, .loss(reason: 100)])
+        #expect(harness.recorder.contexts.last?.lossReason == 100)
+        #expect(harness.categories == [.win, .loss])
+    }
+
+    @Test func lifecycleGateKeepsWinAndLossApart() {
+        var gate = LifecycleGate()
+        #expect(gate.admit(.won) == .admitted)
+        #expect(gate.admit(.loss(reason: 102)) == .contradictsOutcome)
+        var lost = LifecycleGate()
+        #expect(lost.admit(.loss(reason: 102)) == .admitted)
+        #expect(lost.admit(.loss(reason: 102)) == .alreadyFired)
+        #expect(lost.admit(.rendered) == .contradictsOutcome)
+    }
+
+    @Test func lifecycleGateRepeatsClicksAndInteractionsButNotMilestones() {
+        var gate = LifecycleGate()
+        #expect(gate.admit(.click(assetID: nil)) == .admitted)
+        #expect(gate.admit(.click(assetID: nil)) == .admitted)
+        #expect(gate.admit(.video(.mute, adIndex: 0)) == .admitted)
+        #expect(gate.admit(.video(.mute, adIndex: 0)) == .admitted)
+        #expect(gate.admit(.video(.firstQuartile, adIndex: 0)) == .admitted)
+        #expect(gate.admit(.video(.firstQuartile, adIndex: 0)) == .alreadyFired)
+        #expect(gate.admit(.video(.firstQuartile, adIndex: 1)) == .admitted)
+        #expect(gate.admit(.video(.progress(.seconds(5)), adIndex: 0)) == .admitted)
+        #expect(gate.admit(.video(.progress(.seconds(5)), adIndex: 0)) == .alreadyFired)
+        #expect(gate.admit(.video(.progress(.seconds(10)), adIndex: 0)) == .admitted)
+        #expect(gate.admit(.videoViewability(.viewable, adIndex: 0)) == .admitted)
+        #expect(gate.admit(.videoViewability(.notViewable, adIndex: 0)) == .alreadyFired)
+        #expect(gate.admit(.error(.vpaidError, adIndex: 0)) == .admitted)
+        #expect(gate.admit(.error(.vpaidError, adIndex: 0)) == .alreadyFired)
+        #expect(gate.admit(.error(.noSupportedMedia, adIndex: 0)) == .admitted)
+    }
+
+    // MARK: Markup by reference
+
+    @Test func winNoticeMarkupIsNotFetchedInSimulatedMode() async {
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.none, format: .video)]))
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .needsRealMode("The markup is delivered by the win notice — switch to Real to fetch it."))
+        #expect(harness.transport.requests.isEmpty)
+        #expect(harness.monitor.liveEntries.map(\.category) == [.win])
+        #expect(harness.monitor.liveEntries.first?.state == .simulated)
+        #expect(harness.monitor.liveEntries.first?.url == "https://win.dsp.example/w?p=2.5")
+        #expect(harness.recorder.events.isEmpty)
+    }
+
+    @Test func winNoticeMarkupInRealModeIsTheWinNoticeAndIsNotSentTwice() async {
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.none, format: .video)]))
+        harness.transport.respond("https://win.dsp.example/w?p=2.5", body: "  <VAST version=\"3.0\"><Ad/></VAST>")
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .ready)
+        #expect(harness.transport.requests.filter { $0.url.host == "win.dsp.example" }.count == 1)
+        #expect(harness.recorder.resolutions == [.xml("<VAST version=\"3.0\"><Ad/></VAST>")])
+        #expect(harness.recorder.events.isEmpty)
+        harness.session.report(.won)
+        #expect(harness.recorder.events.isEmpty)
+        #expect(harness.session.prepared?.markupFromWinNotice == true)
+        let winEntry = harness.monitor.liveEntries.first { $0.category == .win }
+        #expect(harness.monitor.liveEntries.first { $0.category == .content }?.parentID == nil)
+        #expect(winEntry != nil)
+    }
+
+    @Test func displayCurlMarkupIsContentAndFetchedInBothModes() async {
+        let candidate = Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")
+        let harness = SessionHarness(Fixtures.input([candidate]))
+        harness.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .ready)
+        #expect(harness.session.prepared?.candidate.markup == .html("<div>curl</div>"))
+        #expect(harness.transport.requests.map(\.url.absoluteString) == ["https://cdn.example/creative.html"])
+        #expect(harness.categories == [.win, .content])
+        #expect(harness.recorder.events == [.won])
+    }
+
+    @Test func fetchedMarkupIsSniffed() {
+        #expect(AdSession.markup(fromFetched: " <?xml version=\"1.0\"?><VAST/>", format: .banner) == .vast(.xml("<?xml version=\"1.0\"?><VAST/>")))
+        #expect(AdSession.markup(fromFetched: "{\"native\":{}}", format: .banner) == .native("{\"native\":{}}"))
+        #expect(AdSession.markup(fromFetched: "{\"ver\":\"1.2\"}", format: .native) == .native("{\"ver\":\"1.2\"}"))
+        #expect(AdSession.markup(fromFetched: "https://ads.example/vast.xml\n", format: .video) == .vast(.url("https://ads.example/vast.xml")))
+        #expect(AdSession.markup(fromFetched: "https://ads.example/vast.xml", format: .banner) == .html("https://ads.example/vast.xml"))
+        #expect(AdSession.markup(fromFetched: "<div>x</div>", format: .banner) == .html("<div>x</div>"))
+    }
+
+    // MARK: Real mode
+
+    @Test func realModeIsOnlyEnteredThroughTheConfirmation() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        harness.session.requestRealMode()
+        #expect(harness.session.mode == .simulated)
+        let first = try #require(harness.session.realModeConfirmation)
+        #expect(first.summary.hosts.map(\.name) == ["bill.dsp.example", "loss.dsp.example", "win.dsp.example"])
+        #expect(first.bidLabel == "bid bid-0.0 · seat seat-a")
+
+        harness.session.cancelRealMode()
+        #expect(harness.session.realModeConfirmation == nil)
+        #expect(harness.session.mode == .simulated)
+
+        // A confirmation that is no longer shown does nothing.
+        harness.session.confirmRealMode(first)
+        #expect(harness.session.mode == .simulated)
+
+        harness.session.requestRealMode()
+        let second = try #require(harness.session.realModeConfirmation)
+        #expect(second.id != first.id)
+        harness.session.confirmRealMode(second)
+        #expect(harness.session.mode == .real)
+        #expect(harness.session.realModeConfirmation == nil)
+
+        // Switching back ends it: the next switch asks again.
+        harness.session.useSimulatedMode()
+        #expect(harness.session.mode == .simulated)
+        harness.session.requestRealMode()
+        #expect(harness.session.mode == .simulated)
+        #expect(harness.session.realModeConfirmation != nil)
+    }
+
+    @Test func realModeSendsTrackersWithTheDeviceUserAgent() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        let tablet = try #require(DeviceCatalog.device(id: "ipad-10"))
+        harness.session.device = tablet
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        await harness.monitor.waitUntilIdle()
+        #expect(harness.transport.requests.map(\.url.host) == ["win.dsp.example", "bill.dsp.example", "imp.example"])
+        #expect(harness.transport.requests.allSatisfy { $0.headers["User-Agent"] == tablet.userAgent })
+    }
+
+    // MARK: Click-throughs
+
+    @Test func clickThroughsAreRecordedAndOpenedOnlyInRealModeWithTheSetting() async throws {
+        let simulated = SessionHarness(Fixtures.input([display]), opensClickThroughs: true)
+        await simulated.paste()
+        await simulated.renderAndWait()
+        simulated.session.fireManually(.click(assetID: nil))
+        let navigation = try #require(simulated.monitor.liveEntries.first { $0.category == .navigation })
+        let click = try #require(simulated.monitor.liveEntries.first { $0.category == .click })
+        #expect(navigation.parentID == click.id)
+        #expect(navigation.delivery == .simulated)
+        #expect(simulated.browser.opened.isEmpty)
+
+        let real = SessionHarness(Fixtures.input([display]), opensClickThroughs: true)
+        await real.paste()
+        real.enterRealMode()
+        await real.renderAndWait()
+        real.session.fireManually(.click(assetID: nil))
+        #expect(real.browser.opened == [URL(string: "https://landing.example/")])
+        #expect(real.monitor.liveEntries.first { $0.category == .navigation }?.delivery == .browser)
+
+        let settingOff = SessionHarness(Fixtures.input([display]), opensClickThroughs: false)
+        await settingOff.paste()
+        settingOff.enterRealMode()
+        await settingOff.renderAndWait()
+        settingOff.session.navigate(to: "https://landing.example/mraid", trigger: "mraid.open", source: "creative")
+        #expect(settingOff.browser.opened.isEmpty)
+        #expect(settingOff.monitor.liveEntries.last?.category == .navigation)
+    }
+
+    @Test func connectedTVNeverOpensClickThroughs() async throws {
+        let harness = SessionHarness(Fixtures.input([video]), opensClickThroughs: true)
+        harness.session.device = try #require(DeviceCatalog.device(id: "apple-tv-4k"))
+        #expect(harness.session.placement == .ctvInstream)
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        harness.session.fireManually(.videoClick(adIndex: 0))
+        #expect(harness.browser.opened.isEmpty)
+    }
+
+    // MARK: Viewability
+
+    @Test func displayViewabilityFiresAfterOneSecondInView() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.clock.set(10)
+        harness.session.report(.rendered)
+        harness.clock.set(10.5)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events == [.won, .rendered])
+        harness.clock.set(11)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events == [.won, .rendered, .viewable(.mrc50), .viewable(.mrc100)])
+        harness.clock.set(30)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events.count == 4)
+    }
+
+    @Test func theSliderBelowHalfHoldsViewabilityBack() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        harness.session.setVisibleFraction(0.4)
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        harness.clock.set(5)
+        harness.session.settleViewability()
+        #expect(!harness.recorder.events.contains(.viewable(.mrc50)))
+        harness.session.setVisibleFraction(0.6)
+        harness.clock.set(6)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events.suffix(1) == [.viewable(.mrc50)])
+    }
+
+    @Test func eachPodAdGetsItsOwnVideoViewabilityOutcome() async {
+        let harness = SessionHarness(Fixtures.input([video]), resolved: Fixtures.vast(ads: 2))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.report(.video(.creativeView, adIndex: 0))
+        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.clock.set(1.9)
+        harness.session.settleViewability()
+        #expect(!harness.recorder.events.contains(.videoViewability(.viewable, adIndex: 0)))
+        harness.clock.set(2)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events.contains(.videoViewability(.viewable, adIndex: 0)))
+        harness.session.report(.video(.complete, adIndex: 0))
+
+        // Ad 2 is skipped after one second of playback: not viewable, decided at the skip.
+        harness.clock.set(3)
+        harness.session.report(.video(.creativeView, adIndex: 1))
+        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 1, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.clock.set(4)
+        harness.session.report(.video(.skip, adIndex: 1))
+        harness.clock.set(10)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events == [
+            .won, .video(.creativeView, adIndex: 0), .videoViewability(.viewable, adIndex: 0), .video(.complete, adIndex: 0),
+            .video(.creativeView, adIndex: 1), .video(.skip, adIndex: 1), .videoViewability(.notViewable, adIndex: 1),
+        ])
+        #expect(!harness.recorder.events.contains(.rendered))
+    }
+
+    @Test func pausedOrHiddenVideoIsNotViewable() async {
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.setVisibleFraction(0.3)
+        harness.session.report(.video(.creativeView, adIndex: 0))
+        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: false))
+        harness.clock.set(5)
+        harness.session.settleViewability()
+        harness.session.report(.video(.complete, adIndex: 0))
+        #expect(harness.recorder.events.suffix(2) == [.video(.complete, adIndex: 0), .videoViewability(.notViewable, adIndex: 0)])
+    }
+
+    @Test func nativeVideoAssetReachesVideo50() async {
+        let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
+        let harness = SessionHarness(Fixtures.input([native]))
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.placement == .inFeed)
+        harness.session.setVisibleFraction(1)
+        harness.session.report(.rendered)
+        harness.session.report(.video(.creativeView, adIndex: 0))
+        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.clock.set(2)
+        harness.session.settleViewability()
+        #expect(harness.recorder.events.filter {
+            if case .viewable = $0 { true } else { false }
+        } == [.viewable(.mrc50), .viewable(.mrc100), .viewable(.video50)])
+        #expect(!harness.recorder.events.contains { if case .videoViewability = $0 { true } else { false } })
+    }
+
+    @Test func nativeVideoVASTIsResolvedThroughTheMonitorAndRemembered() async {
+        let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
+        let harness = SessionHarness(Fixtures.input([native]), resolved: Fixtures.vast(ads: 1))
+        await harness.paste()
+        await harness.renderAndWait()
+        let resolved = await harness.session.resolveNativeVideo(.url("https://vast.example/tag"))
+        _ = await harness.session.resolveNativeVideo(.url("https://vast.example/tag"))
+        #expect(resolved == Fixtures.vast(ads: 1))
+        #expect(harness.session.nativeVideoVAST == resolved)
+        #expect(harness.recorder.resolutionRequestCalls == 1)
+    }
+
+    // MARK: Macros
+
+    @Test func macroContextComesFromTheBidThePanelAndTheDevice() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        harness.session.macros.clearingPrice = "1,23"
+        harness.session.macros.customMacros = [MacroEntry(key: "${CAMPAIGN}", value: "spring")]
+        harness.session.macros.deterministic = true
+        await harness.paste()
+        await harness.renderAndWait()
+        let context = try #require(harness.recorder.contexts.first)
+        #expect(context.price == 1.23)
+        #expect(context.auctionID == "auction-1")
+        #expect(context.bidID == "bid-0.0")
+        #expect(context.seatID == "seat-a")
+        #expect(context.custom["CAMPAIGN"] == "spring")
+        #expect(context.custom["[DOMAIN]"] == "news.example.com")
+        #expect(context.custom["[TRANSACTIONID]"] == MacroSettings.deterministicTransactionID)
+        #expect(context.timestamp == MacroSettings.deterministicTimestamp)
+        #expect(context.cacheBuster == MacroSettings.deterministicCacheBuster)
+        #expect(context.device == DeviceCatalog.defaultDevice)
+        #expect(context.playerWidth == 320 && context.playerHeight == 50)
+        #expect(abs((context.marketBidRatio ?? 0) - 1.23 / 2.5) < 1e-9)
+    }
+}
