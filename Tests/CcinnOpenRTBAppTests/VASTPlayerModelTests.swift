@@ -256,11 +256,24 @@ struct VASTPlayerModelTests {
         model.companionClicked(choice, adIndex: 0, url: nil)
         #expect(host.events.filter { $0 == .companionView(adIndex: 0, companionIndex: 0) }.count == 1)
         #expect(host.events.last == .companionClick(adIndex: 0, companionIndex: 0))
-        #expect(host.navigations.isEmpty, "the .companionClick tracking plan records the CompanionClickThrough navigation")
-        // The companion's own markup navigated elsewhere: that navigation is the player's to record.
-        model.companionClicked(choice, adIndex: 0, url: "https://adv.example/other")
-        #expect(host.navigations == [.init(url: "https://adv.example/other", trigger: "companion creative navigation")])
+        #expect(host.navigations.isEmpty, "an image companion: the .companionClick plan records the CompanionClickThrough navigation")
+        model.companionClicked(choice, adIndex: 0, url: "https://adv.example/elsewhere")
+        #expect(host.navigations.isEmpty, "an image companion never navigates from the player")
+    }
+
+    /// HTML / iframe / script companions open their own click-through; the plan does not navigate for them.
+    @Test func htmlCompanionsNavigateToWhatTheyOpened() async {
+        let companion = VASTCompanion(id: "h", width: 300, height: 250, resources: [.html("<a href='https://adv.example/companion'>x</a>")],
+                                      clickThrough: "https://adv.example/companion")
+        let (model, host, engine) = make([RendererFixtures.linearAd(duration: 2, companions: [companion])])
+        model.start()
+        await waitForLoad(engine)
+        let choice = CompanionChoice(companionIndex: 0, companion: companion, resource: .html("<a href='https://adv.example/companion'>x</a>"))
         model.companionClicked(choice, adIndex: 0, url: "https://adv.example/companion")
-        #expect(host.navigations.count == 1, "the same URL as CompanionClickThrough is the plan's navigation")
+        #expect(host.events.last == .companionClick(adIndex: 0, companionIndex: 0))
+        #expect(host.navigations == [.init(url: "https://adv.example/companion", trigger: "companion creative navigation")],
+                "exactly one navigation, even to the CompanionClickThrough URL")
+        model.companionClicked(choice, adIndex: 0, url: nil)
+        #expect(host.navigations.count == 1)
     }
 }

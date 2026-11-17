@@ -4,12 +4,20 @@ import RTBKit
 
 /// How a companion is drawn.
 enum CompanionResource: Equatable, Sendable {
-    /// `StaticResource` image, fetched as content.
+    /// An image `StaticResource`, fetched as content.
     case image(url: String)
-    /// `HTMLResource` (or a script `StaticResource` wrapped in a script tag), in the creative web view.
+    /// `HTMLResource`, in the creative web view.
     case html(String)
     /// `IFrameResource`, loaded in the creative web view (subject to the Simulated-mode sandbox).
     case iframe(url: String)
+    /// A script `StaticResource`, drawn as `<script src>` in the creative web view.
+    case script(url: String)
+
+    /// Only an image's click-through is opened by the tracking plan (`.companionClick` → CompanionClickThrough); HTML,
+    /// iframe and script companions open their own, which the player records with `host.navigate`.
+    var playerOpensClickThrough: Bool {
+        if case .image = self { true } else { false }
+    }
 }
 
 struct CompanionChoice: Equatable, Sendable {
@@ -25,31 +33,12 @@ struct CompanionChoice: Equatable, Sendable {
 }
 
 enum CompanionPicker {
-    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic"]
     private static let defaultSize = CGSize(width: 300, height: 250)
 
-    /// The best resource of a companion: an image, then HTML, then an iframe (which the Simulated sandbox blocks).
+    /// The resource to draw — the single call site of the shared rule. Switch it to kit-vast's
+    /// `VASTCompanion.displayResource` / `playerOpensClickThrough` when they are on this branch.
     static func resource(of companion: VASTCompanion) -> CompanionResource? {
-        var html: CompanionResource?
-        var iframe: CompanionResource?
-        for resource in companion.resources {
-            switch resource {
-            case let .staticResource(url, creativeType):
-                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-                let type = creativeType?.lowercased() ?? ""
-                if type.hasPrefix("image/") || (type.isEmpty && hasImageExtension(trimmed)) { return .image(url: trimmed) }
-                if type.contains("javascript") || type.contains("ecmascript") {
-                    html = html ?? .html("<script src=\"\(HTMLEscaping.attribute(trimmed))\"></script>")
-                }
-            case let .html(markup):
-                if !markup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { html = html ?? .html(markup) }
-            case let .iframe(url):
-                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { iframe = iframe ?? .iframe(url: trimmed) }
-            }
-        }
-        return html ?? iframe
+        CompanionDisplayRule.resource(of: companion)
     }
 
     /// The largest renderable companion that fits `fitting` (below the player); any size when `fitting` is `nil` (an end
@@ -66,12 +55,60 @@ enum CompanionPicker {
         }
         return best?.choice
     }
+}
+
+/// Local copy of the shared companion rule (decisions "Renderer contract rulings"), until kit-vast's
+/// `VASTCompanion.displayResource` reaches this branch: an image `StaticResource` (`creativeType` `image/*`, or untyped
+/// with an image file extension), then the first non-blank `HTMLResource`, then `IFrameResource`, then a script
+/// `StaticResource`; `nil` when nothing renders.
+private enum CompanionDisplayRule {
+    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic"]
+
+    static func resource(of companion: VASTCompanion) -> CompanionResource? {
+        var html: CompanionResource?
+        var iframe: CompanionResource?
+        var script: CompanionResource?
+        for resource in companion.resources {
+            switch resource {
+            case let .staticResource(url, creativeType):
+                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                let type = creativeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+                if type.isEmpty ? hasImageExtension(trimmed) : type.hasPrefix("image/") { return .image(url: trimmed) }
+                if script == nil, type.contains("javascript") || type.contains("ecmascript") { script = .script(url: trimmed) }
+            case let .html(markup):
+                if html == nil, !markup.allSatisfy(\.isWhitespace) { html = .html(markup) }
+            case let .iframe(url):
+                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                if iframe == nil, !trimmed.isEmpty { iframe = .iframe(url: trimmed) }
+            }
+        }
+        return html ?? iframe ?? script
+    }
 
     private static func hasImageExtension(_ url: String) -> Bool {
         var path = Substring(url)
         if let end = path.firstIndex(where: { $0 == "?" || $0 == "#" }) { path = path[..<end] }
         guard let dot = path.lastIndex(of: ".") else { return false }
         return imageExtensions.contains(path[path.index(after: dot)...].lowercased())
+    }
+}
+
+/// The document an HTML / iframe / script companion is drawn in (values escaped).
+enum CompanionDocument {
+    static func html(for resource: CompanionResource) -> String {
+        switch resource {
+        case let .html(markup):
+            HTMLDocumentBuilder.document(for: markup)
+        case let .iframe(url):
+            HTMLDocumentBuilder.document(for: """
+            <iframe src="\(HTMLEscaping.attribute(url))" style="border:0;width:100%;height:100%;display:block" scrolling="no"></iframe>
+            """)
+        case let .script(url):
+            HTMLDocumentBuilder.document(for: "<script src=\"\(HTMLEscaping.attribute(url))\"></script>")
+        case let .image(url):
+            HTMLDocumentBuilder.document(for: "<img src=\"\(HTMLEscaping.attribute(url))\" style=\"max-width:100%\">")
+        }
     }
 }
 

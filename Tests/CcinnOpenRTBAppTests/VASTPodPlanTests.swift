@@ -63,22 +63,41 @@ struct CompanionTests {
                                                                                                              resources: resources))
     }
 
-    @Test func resourcesMapToWhatTheRendererCanShow() {
-        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.staticResource(url: "https://c.example/a.png", creativeType: "image/png")]))
-            == .image(url: "https://c.example/a.png"))
-        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.staticResource(url: "https://c.example/a.JPG?x=1", creativeType: nil)]))
-            == .image(url: "https://c.example/a.JPG?x=1"))
-        guard case let .html(script) = CompanionPicker.resource(of: VASTCompanion(resources: [
-            .staticResource(url: "https://c.example/a.js?a=1&b=\"2\"", creativeType: "application/x-javascript"),
-        ])) else {
-            Issue.record("script companion not wrapped")
-            return
+    /// The shared rule (decisions "Renderer contract rulings"; kit-vast `VASTCompanion.displayResource` /
+    /// `playerOpensClickThrough`): an image StaticResource, then HTML, then iframe, then a script StaticResource.
+    @Test func resourcesFollowTheSharedDisplayRule() {
+        let image = VASTCompanion.Resource.staticResource(url: "https://c.example/a.png", creativeType: "image/png")
+        let script = VASTCompanion.Resource.staticResource(url: "https://c.example/a.js", creativeType: "application/x-javascript")
+        let html = VASTCompanion.Resource.html("<i>x</i>")
+        let iframe = VASTCompanion.Resource.iframe(url: "https://c.example/f")
+        func resource(_ resources: [VASTCompanion.Resource]) -> CompanionResource? {
+            CompanionPicker.resource(of: VASTCompanion(resources: resources))
         }
-        #expect(script == #"<script src="https://c.example/a.js?a=1&amp;b=&quot;2&quot;"></script>"#)
-        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.iframe(url: "https://c.example/f"), .html("<i>x</i>")])) == .html("<i>x</i>"),
-                "HTML is preferred over an iframe that the Simulated sandbox would block")
-        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.iframe(url: "https://c.example/f")])) == .iframe(url: "https://c.example/f"))
-        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.staticResource(url: "", creativeType: "image/png")])) == nil)
+        #expect(resource([script, iframe, html, image]) == .image(url: "https://c.example/a.png"), "an image wins whatever the order")
+        #expect(resource([script, iframe, html]) == .html("<i>x</i>"))
+        #expect(resource([script, iframe]) == .iframe(url: "https://c.example/f"), "an iframe beats a script")
+        #expect(resource([script]) == .script(url: "https://c.example/a.js"))
+        #expect(resource([.staticResource(url: "https://c.example/a.JPG?x=1", creativeType: nil)]) == .image(url: "https://c.example/a.JPG?x=1"))
+        #expect(resource([.staticResource(url: "https://c.example/a.png", creativeType: " IMAGE/PNG ")]) == .image(url: "https://c.example/a.png"),
+                "creativeType is trimmed and case-insensitive")
+        #expect(resource([.staticResource(url: "https://c.example/a.png", creativeType: "text/html")]) == nil,
+                "a typed non-image StaticResource is not an image, whatever its extension")
+        #expect(resource([.staticResource(url: "", creativeType: "image/png"), .html("  \n ")]) == nil)
+        #expect(resource([]) == nil)
+    }
+
+    @Test func onlyAnImageLetsThePlanOpenTheClickThrough() {
+        #expect(CompanionResource.image(url: "u").playerOpensClickThrough)
+        #expect(!CompanionResource.html("<b>x</b>").playerOpensClickThrough)
+        #expect(!CompanionResource.iframe(url: "u").playerOpensClickThrough)
+        #expect(!CompanionResource.script(url: "u").playerOpensClickThrough)
+    }
+
+    @Test func scriptsAndIframesAreDrawnInAnEscapedDocument() {
+        let script = CompanionDocument.html(for: .script(url: "https://c.example/a.js?a=1&b=\"2\""))
+        #expect(script.contains(#"<script src="https://c.example/a.js?a=1&amp;b=&quot;2&quot;"></script>"#))
+        let iframe = CompanionDocument.html(for: .iframe(url: "https://c.example/f\"><script>x</script>"))
+        #expect(!iframe.contains("<script>x</script>"))
     }
 
     @Test func picksTheLargestRenderableCompanionThatFits() {

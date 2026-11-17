@@ -228,20 +228,22 @@ final class VASTPlayerModel {
         host?.report(.companionView(adIndex: adIndex, companionIndex: choice.companionIndex))
     }
 
-    /// A click on a companion: `.companionClick`, whose tracking plan fires `CompanionClickTracking` and then records the
-    /// `CompanionClickThrough` navigation. Only when the companion's own markup (HTML / iframe) navigated somewhere else does
-    /// the player record that navigation itself (`url`). Never on CTV.
+    /// A click on a companion: `.companionClick` (its tracking plan fires `CompanionClickTracking`). Exactly one navigation
+    /// follows (decisions "Renderer contract rulings"): for an image the plan records the `CompanionClickThrough`
+    /// navigation; an HTML / iframe / script companion opened `url` itself, which the player records. Never on CTV.
     func companionClicked(_ choice: CompanionChoice, adIndex: Int, url: String?) {
         guard !stopped, configuration.allowsClickThrough else { return }
         host?.report(.companionClick(adIndex: adIndex, companionIndex: choice.companionIndex))
-        let clickThrough = choice.companion.clickThrough?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let markupURL = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !markupURL.isEmpty, markupURL != clickThrough {
-            let source = items.indices.contains(adIndex) ? items[adIndex].source : configuration.source
-            host?.navigate(to: markupURL, trigger: "companion creative navigation", source: source + " › Companion \(choice.companionIndex + 1)")
-        } else if clickThrough.isEmpty {
-            log(.warning, "Companion \(choice.companionIndex + 1) of ad \(adIndex + 1) has no CompanionClickThrough: CompanionClickTracking only")
+        if choice.resource.playerOpensClickThrough {
+            let clickThrough = choice.companion.clickThrough?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if clickThrough.isEmpty {
+                log(.warning, "Companion \(choice.companionIndex + 1) of ad \(adIndex + 1) has no CompanionClickThrough: CompanionClickTracking only")
+            }
+            return
         }
+        guard let opened = url?.trimmingCharacters(in: .whitespacesAndNewlines), !opened.isEmpty else { return }
+        let source = items.indices.contains(adIndex) ? items[adIndex].source : configuration.source
+        host?.navigate(to: opened, trigger: "companion creative navigation", source: source + " › Companion \(choice.companionIndex + 1)")
     }
 
     // MARK: Pod

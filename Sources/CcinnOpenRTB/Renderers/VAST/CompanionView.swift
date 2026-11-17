@@ -17,7 +17,7 @@ struct CompanionView: View {
         switch choice.resource {
         case let .image(url):
             CompanionImage(url: url, choice: choice, adIndex: adIndex, player: player, host: host, source: source)
-        case .html, .iframe:
+        case .html, .iframe, .script:
             CompanionWeb(choice: choice, adIndex: adIndex, player: player, host: host, source: source)
         }
     }
@@ -57,7 +57,8 @@ private struct CompanionImage: View {
     }
 }
 
-/// An HTML or iframe companion in a creative web view (no MRAID; the Simulated-mode sandbox applies).
+/// An HTML, iframe or script companion in a creative web view (no MRAID; the Simulated-mode sandbox applies). It opens its
+/// own click-through: a navigation it makes after a user gesture is reported as `.companionClick` + that navigation.
 private struct CompanionWeb: View {
     let choice: CompanionChoice
     let adIndex: Int
@@ -94,21 +95,8 @@ private struct CompanionWeb: View {
             }
         }
         controller = created
-        created.load(CreativeWebController.Content(document: Self.document(for: choice.resource), mraid: nil,
+        created.load(CreativeWebController.Content(document: CompanionDocument.html(for: choice.resource), mraid: nil,
                                                    blocksNetwork: HTMLAdModel.blocksNetwork(host.monitor), disableScroll: true,
                                                    networkParentID: nil, source: CompanionView.source(source, companionIndex: choice.companionIndex)))
-    }
-
-    static func document(for resource: CompanionResource) -> String {
-        switch resource {
-        case let .html(markup):
-            return HTMLDocumentBuilder.document(for: markup)
-        case let .iframe(url):
-            return HTMLDocumentBuilder.document(for: """
-            <iframe src="\(HTMLEscaping.attribute(url))" style="border:0;width:100%;height:100%;display:block" scrolling="no"></iframe>
-            """)
-        case let .image(url):
-            return HTMLDocumentBuilder.document(for: "<img src=\"\(HTMLEscaping.attribute(url))\" style=\"max-width:100%\">")
-        }
     }
 }
