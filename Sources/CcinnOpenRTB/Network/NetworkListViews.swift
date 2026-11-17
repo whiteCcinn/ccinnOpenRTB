@@ -33,8 +33,9 @@ enum NetworkCells {
         }
     }
 
+    /// The Mode badge already says "Blocked", so the narrow Status column shows a dash for it.
     static func status(_ entry: NetworkEntry) -> some View {
-        Text(Theme.statusText(for: entry))
+        Text(entry.state == .blocked ? "—" : Theme.statusText(for: entry))
             .monospacedDigit()
             .foregroundStyle(Theme.color(for: entry.state))
             .help(failureMessage(entry) ?? entry.note ?? "")
@@ -84,7 +85,7 @@ struct NetworkTableView: View {
                 TableColumn("+ms") { NetworkCells.offset($0, origin: origin) }.width(min: 44, ideal: 56, max: 110)
                 TableColumn("Category") { CategoryBadge(category: $0.category) }.width(min: 80, ideal: 100, max: 140)
                 TableColumn("Trigger") { Text($0.trigger).lineLimit(1).help($0.source) }.width(min: 70, ideal: 118, max: 260)
-                TableColumn("URL") { NetworkCells.url($0) }.width(min: 120, ideal: 220)
+                TableColumn("URL") { NetworkCells.url($0) }.width(min: 100, ideal: 180)
                 TableColumn("Mode") { DeliveryBadge(delivery: $0.delivery) }.width(min: 70, ideal: 88, max: 120)
                 TableColumn("Status") { NetworkCells.status($0) }.width(min: 40, ideal: 52, max: 90)
                 TableColumn("Duration") { NetworkCells.duration($0) }.width(min: 48, ideal: 62, max: 100)
@@ -122,9 +123,9 @@ struct NetworkTreeView: View {
                     }
                     .help(node.entry.source)
                 }
-                .width(min: 200, ideal: 280)
+                .width(min: 180, ideal: 250)
                 TableColumn("+ms") { NetworkCells.offset($0.entry, origin: origin) }.width(min: 44, ideal: 56, max: 110)
-                TableColumn("URL") { NetworkCells.url($0.entry) }.width(min: 120, ideal: 200)
+                TableColumn("URL") { NetworkCells.url($0.entry) }.width(min: 100, ideal: 170)
                 TableColumn("Mode") { DeliveryBadge(delivery: $0.entry.delivery) }.width(min: 70, ideal: 88, max: 120)
                 TableColumn("Status") { NetworkCells.status($0.entry) }.width(min: 40, ideal: 52, max: 90)
                 TableColumn("Duration") { NetworkCells.duration($0.entry) }.width(min: 48, ideal: 62, max: 100)

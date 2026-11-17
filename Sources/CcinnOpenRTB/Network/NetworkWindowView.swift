@@ -76,7 +76,7 @@ struct NetworkMonitorView: View {
                     .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
                 if let id = model.selection, let entry = all.first(where: { $0.id == id }) {
                     NetworkDetailView(entry: entry, entries: all, origin: origin, monitor: monitor) { model.selection = $0 }
-                        .frame(minWidth: 320, idealWidth: 400, maxWidth: 720, maxHeight: .infinity)
+                        .frame(minWidth: 320, idealWidth: 380, maxWidth: 480, maxHeight: .infinity)
                 }
             }
             Divider()
