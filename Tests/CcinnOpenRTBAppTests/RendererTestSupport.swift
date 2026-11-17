@@ -44,7 +44,16 @@ final class RecordingHost: AdRenderingHost {
     /// Fetch through the monitor (samples, `data:`) instead of `contents`.
     var fetchesThroughMonitor = false
 
+    struct Fetch: Equatable {
+        var url: String
+        var trigger: String
+        var source: String
+    }
+
+    private(set) var fetches: [Fetch] = []
+
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
+        fetches.append(Fetch(url: url, trigger: trigger, source: source))
         if fetchesThroughMonitor {
             return try await monitor.fetchContent(url, trigger: trigger, source: source, parentID: nil, userAgent: device.userAgent).data
         }

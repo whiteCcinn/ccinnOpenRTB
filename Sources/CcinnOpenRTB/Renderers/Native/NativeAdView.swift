@@ -13,7 +13,17 @@ struct NativeAdView: View {
         ZStack {
             if let model {
                 FullscreenChrome(placement: request.placement, isClosed: model.isClosed, onClose: model.close) {
-                    NativeLayoutView(model: model, request: request, host: host)
+                    switch model.assets {
+                    case .ready:
+                        NativeLayoutView(model: model, request: request, host: host)
+                    case .loading:
+                        ZStack {
+                            Color(nsColor: .textBackgroundColor)
+                            ProgressView().controlSize(.small)
+                        }
+                    case let .failed(message):
+                        RendererMessageView(symbol: "exclamationmark.triangle", title: "Native assets did not load", detail: message)
+                    }
                 }
             }
         }
@@ -21,6 +31,7 @@ struct NativeAdView: View {
             let active = model ?? NativeAdModel(ad: ad, request: request, host: host)
             model = active
             active.appeared()
+            await active.loadAssets()
             async let images: Void = active.loadImages()
             async let video: Void = active.resolveVideo()
             _ = await (images, video)
