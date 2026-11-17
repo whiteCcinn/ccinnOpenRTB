@@ -208,7 +208,8 @@ struct VASTMacroTests {
                                    openRTBDeviceType: 4)
         let context = MacroContext(assetURI: "https://cdn.example/a.mp4?x=1", playerWidth: 640, playerHeight: 360, reason: 2, device: device)
         let result = MacroExpander.expand("s=[PLAYERSIZE]&a=[ASSETURI]&ua=[DEVICEUA]&r=[REASON]", context: context)
-        #expect(result.url == "s=640%2C360&a=https%3A%2F%2Fcdn.example%2Fa.mp4%3Fx%3D1&ua=Mozilla%2F5.0%20%28iPhone%3B%20CPU%29&r=2")
+        // [PLAYERSIZE] is Array<integer>: the comma separates items and stays literal (IAB example "640,360").
+        #expect(result.url == "s=640,360&a=https%3A%2F%2Fcdn.example%2Fa.mp4%3Fx%3D1&ua=Mozilla%2F5.0%20%28iPhone%3B%20CPU%29&r=2")
     }
 
     @Test func breakPositionIsDerivedFromTheContentPlayhead() {
@@ -237,8 +238,33 @@ struct VASTMacroTests {
     }
 
     @Test func supportedVASTVersionsAndServerSide() {
-        #expect(MacroExpander.expand("[VASTVERSIONS]", context: MacroContext()).url == "2%2C3%2C5%2C6%2C7%2C8%2C11%2C12%2C13%2C14")
+        // Array<integer> of AdCOM Creative Subtypes (IAB example "2,3,5,6,7,8,11").
+        #expect(MacroExpander.expand("[VASTVERSIONS]", context: MacroContext()).url == "2,3,5,6,7,8,11,12,13,14")
         #expect(MacroExpander.expand("[SERVERSIDE]", context: MacroContext()).url == "0")
+    }
+
+    /// VAST 4.1/4.2 §6.1 Array<T>: each item is percent-encoded on its own and items are joined with literal commas
+    /// (IAB example: [MEDIAMIME] "video%2Fmp4,application%2Fx-mpegURL").
+    @Test func listMacrosEncodeEachItemAndKeepTheCommas() {
+        let context = MacroContext(custom: ["[BLOCKEDADCATEGORIES]": "ignored", "[MEDIAMIME]": "ignored"],
+                                   customLists: ["[BLOCKEDADCATEGORIES]": ["IAB1-6", "IAB1-7"], "[MEDIAMIME]": ["video/mp4", "application/x-mpegURL"],
+                                                 "[UNIVERSALADID]": ["ad-id.org CNPA0484000H", "a,b"], "[APIFRAMEWORKS]": []])
+        let result = MacroExpander.expand("b=[BLOCKEDADCATEGORIES]&m=[MEDIAMIME]&u=[UNIVERSALADID]&a=[APIFRAMEWORKS]", context: context)
+        #expect(result.url == "b=IAB1-6,IAB1-7&m=video%2Fmp4,application%2Fx-mpegURL&u=ad-id.org%20CNPA0484000H,a%2Cb&a=")
+        #expect(result.unknown.isEmpty)
+    }
+
+    @Test func latLongIsATwoItemList() {
+        let context = MacroContext(customLists: ["[LATLONG]": ["51.004703", "-3.754806"]])
+        #expect(MacroExpander.expand("[LATLONG]", context: context).url == "51.004703,-3.754806")
+    }
+
+    /// The request's `device.ua` describes the real device the impression was for; it wins over the simulated device's UA.
+    @Test func theRequestUserAgentWinsOverTheSimulatedDevice() {
+        let device = DeviceProfile(id: "d", name: "D", family: .iPhone, screenWidth: 393, screenHeight: 852, scale: 3, os: "iOS", osVersion: "18",
+                                   make: "Apple", model: "iPhone", userAgent: "Simulated UA", openRTBDeviceType: 4)
+        #expect(MacroExpander.expand("[DEVICEUA]", context: MacroContext(device: device)).url == "Simulated%20UA")
+        #expect(MacroExpander.expand("[DEVICEUA]", context: MacroContext(custom: ["[DEVICEUA]": "Request UA"], device: device)).url == "Request%20UA")
     }
 
     @Test func ipv6HostsAndArrayParametersAreNotMacros() {

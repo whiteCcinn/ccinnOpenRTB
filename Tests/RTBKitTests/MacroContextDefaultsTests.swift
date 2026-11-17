@@ -56,6 +56,50 @@ struct MacroContextDefaultsTests {
                            "[LIMITADTRACKING]": "1", "[TRANSACTIONID]": "tx-1"])
     }
 
+    /// decisions.md "Request facts for the remaining macros": typed request facts become VAST macros only here.
+    @Test func requestFactsMapToTheirVASTMacros() {
+        let request = BidRequestSummary(id: "r", impressions: [], deviceIP: "192.0.2.1", deviceUserAgent: "Request UA", latitude: 51.004703,
+                                        longitude: -3.754806, ifaType: "rida", gdprConsent: "CONSENT", blockedCategories: ["IAB1-6", "IAB1-7"],
+                                        contentID: "ep-1", contentURL: "https://media.example/ep1.mp4", storeURL: "https://apps.example/pub")
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(context.custom["[DEVICEIP]"] == "192.0.2.1")
+        #expect(context.custom["[DEVICEUA]"] == "Request UA")
+        #expect(context.custom["[IFATYPE]"] == "rida")
+        #expect(context.custom["[GDPRCONSENT]"] == "CONSENT")
+        #expect(context.custom["[CONTENTID]"] == "ep-1")
+        #expect(context.custom["[CONTENTURI]"] == "https://media.example/ep1.mp4")
+        #expect(context.custom["[STOREURL]"] == "https://apps.example/pub")
+        #expect(context.customLists["[LATLONG]"] == ["51.004703", "-3.754806"])
+        #expect(context.customLists["[BLOCKEDADCATEGORIES]"] == ["IAB1-6", "IAB1-7"])
+        #expect(MacroExpander.expand("ll=[LATLONG]&b=[BLOCKEDADCATEGORIES]&ua=[DEVICEUA]", context: context).url
+            == "ll=51.004703,-3.754806&b=IAB1-6,IAB1-7&ua=Request%20UA")
+    }
+
+    @Test func absentFactsLeaveTheirMacrosUnknown() {
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: BidRequestSummary(id: "r", impressions: []), device: phone)
+        #expect(context.customLists["[LATLONG]"] == nil)
+        #expect(context.customLists["[BLOCKEDADCATEGORIES]"] == nil)
+        #expect(MacroExpander.expand("[LATLONG]|[DEVICEIP]|[GDPRCONSENT]|[DEVICEUA]", context: context).url == "-1|-1|-1|UA")
+    }
+
+    /// The simulator's player plays VAST 2.0–4.2 (AdCOM Creative Subtypes), listed as an Array<integer>.
+    @Test func supportedVASTVersionsAreAList() {
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: nil, device: phone)
+        #expect(context.customLists["[VASTVERSIONS]"] == ["2", "3", "5", "6", "7", "8", "11", "12", "13", "14"])
+    }
+
+    /// `${AUCTION_MULTIPLIER}` (2.6 imp.qty.multiplier) and `${OPENRTB_ITEM_QTY}` (3.0 item.qty) of the impression the bid won.
+    @Test func quantityMacrosComeFromTheMatchingImpression() {
+        let request = BidRequestSummary(id: "r", impressions: [
+            BidRequestSummary.Impression(id: "other", formats: [.banner], quantityMultiplier: 9, itemQuantity: 9),
+            BidRequestSummary.Impression(id: "imp-1", formats: [.banner], quantityMultiplier: 2.5, itemQuantity: 3),
+        ])
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(MacroExpander.expandOpenRTB("${AUCTION_MULTIPLIER}|${OPENRTB_ITEM_QTY}", context: context).url == "2.5|3")
+        let none = MacroContext.simulatorDefaults(candidate: bid, request: BidRequestSummary(id: "r", impressions: []), device: phone)
+        #expect(MacroExpander.expandOpenRTB("${AUCTION_MULTIPLIER}|${OPENRTB_ITEM_QTY}", context: none).url == "|")
+    }
+
     /// VAST `[APPBUNDLE]` is the publisher app the ad runs in; `Bid.bundle` is the advertised app, so it never stands in.
     @Test func appBundleNeverComesFromTheAdvertisedApp() {
         var installAd = bid

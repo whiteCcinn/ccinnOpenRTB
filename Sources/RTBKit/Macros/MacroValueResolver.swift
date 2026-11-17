@@ -69,49 +69,51 @@ struct MacroValueResolver {
 
     /// The text to substitute, or `nil` when the macro is unknown. Known macros without a value become `-1`
     /// (VAST 4.1 §6.1: "unknown or not available").
+    ///
+    /// Lookup order: what the player sets for this request (error code, playheads, player size, …); then
+    /// `customLists["[NAME]"]`, then `custom["[NAME]"]` (request-derived and user-set values); then what the simulator
+    /// derives (the simulated device's UA, the clock, the cache-buster, the VAST versions it plays).
     mutating func vastValue(name: String) -> String? {
         let macro = VASTMacro(rawValue: name)
-        if let macro, let value = contextValue(macro) { return MacroEncoding.percentEncode(value) }
-        if let custom = context.custom["[" + name + "]"] { return MacroEncoding.percentEncode(custom) }
-        if let macro, let value = derivedValue(macro) { return MacroEncoding.percentEncode(value) }
+        let key = "[" + name + "]"
+        if let macro, let value = playerValue(macro) { return value.encoded }
+        if let list = context.customLists[key] { return MacroValue.list(list).encoded }
+        if let custom = context.custom[key] { return MacroValue.scalar(custom).encoded }
+        if let macro, let value = derivedValue(macro) { return value.encoded }
         return macro == nil ? nil : MacroEncoding.unknownVASTValue
     }
 
     /// Values the player sets on the context for this request.
-    private func contextValue(_ macro: VASTMacro) -> String? {
+    private func playerValue(_ macro: VASTMacro) -> MacroValue? {
         switch macro {
-        case .errorCode: return context.errorCode.map(String.init)
-        case .reason: return context.reason.map(String.init)
-        case .timestamp: return context.timestamp.flatMap { MacroEncoding.iso8601($0, timeZone: timeZone) }
-        case .cacheBusting: return context.cacheBuster
-        case .adPlayhead: return context.adPlayhead.flatMap(MacroEncoding.playhead)
-        case .contentPlayhead, .mediaPlayhead: return context.contentPlayhead.flatMap(MacroEncoding.playhead)
-        case .assetURI: return context.assetURI
+        case .errorCode: return context.errorCode.map { .scalar(String($0)) }
+        case .reason: return context.reason.map { .scalar(String($0)) }
+        case .timestamp: return context.timestamp.flatMap { MacroEncoding.iso8601($0, timeZone: timeZone) }.map(MacroValue.scalar)
+        case .cacheBusting: return context.cacheBuster.map(MacroValue.scalar)
+        case .adPlayhead: return context.adPlayhead.flatMap(MacroEncoding.playhead).map(MacroValue.scalar)
+        case .contentPlayhead, .mediaPlayhead: return context.contentPlayhead.flatMap(MacroEncoding.playhead).map(MacroValue.scalar)
+        case .assetURI: return context.assetURI.map(MacroValue.scalar)
         case .playerSize:
+            // Array<integer>: "640,360".
             guard let width = context.playerWidth, let height = context.playerHeight else { return nil }
-            return "\(width),\(height)"
-        case .deviceUA: return context.device?.userAgent
+            return .list([String(width), String(height)])
         default: return nil
         }
     }
 
-    /// Values the simulator can always produce.
-    private mutating func derivedValue(_ macro: VASTMacro) -> String? {
+    /// Values the simulator can always produce. The simulated device's UA comes after the request's `device.ua`.
+    private mutating func derivedValue(_ macro: VASTMacro) -> MacroValue? {
         switch macro {
-        case .timestamp: return MacroEncoding.iso8601(now(), timeZone: timeZone)
-        case .cacheBusting: return cacheBuster()
+        case .deviceUA: return context.device.map { .scalar($0.userAgent) }
+        case .timestamp: return MacroEncoding.iso8601(now(), timeZone: timeZone).map(MacroValue.scalar)
+        case .cacheBusting: return .scalar(cacheBuster())
         case .breakPosition:
             // 1 pre-roll, 2 mid-roll, 3 post-roll, 4 standalone (no content).
-            guard let playhead = context.contentPlayhead, playhead.isFinite, playhead >= 0 else { return "4" }
-            return playhead == 0 ? "1" : "2"
-        case .vastVersions:
-            // AdCOM Creative Subtypes the simulator plays: VAST 2.0, 3.0, 2.0/3.0 wrappers, 4.0, 4.0 wrapper, 4.1, 4.1 wrapper,
-            // 4.2, 4.2 wrapper.
-            return "2,3,5,6,7,8,11,12,13,14"
-        case .serverSide:
-            return "0"
-        default:
-            return nil
+            guard let playhead = context.contentPlayhead, playhead.isFinite, playhead >= 0 else { return .scalar("4") }
+            return .scalar(playhead == 0 ? "1" : "2")
+        case .vastVersions: return .list(VASTMacro.playableVASTVersions)
+        case .serverSide: return .scalar("0")
+        default: return nil
         }
     }
 
@@ -169,6 +171,24 @@ enum VASTMacro: String, CaseIterable {
     case limitAdTracking = "LIMITADTRACKING", regulations = "REGULATIONS", gdprConsent = "GDPRCONSENT"
     // Errors and verification
     case errorCode = "ERRORCODE", reason = "REASON"
+
+    /// `[VASTVERSIONS]` of the simulator's player, as AdCOM "Creative Subtypes": VAST 2.0, 3.0, 2.0 wrapper, 3.0 wrapper,
+    /// 4.0, 4.0 wrapper, 4.1, 4.1 wrapper, 4.2, 4.2 wrapper.
+    static let playableVASTVersions = ["2", "3", "5", "6", "7", "8", "11", "12", "13", "14"]
+}
+
+/// A macro value before encoding: VAST 4.1/4.2 §6.1 `Array<T>` items are percent-encoded one by one and joined with
+/// literal commas; scalars are percent-encoded whole.
+enum MacroValue {
+    case scalar(String)
+    case list([String])
+
+    var encoded: String {
+        switch self {
+        case let .scalar(value): MacroEncoding.percentEncode(value)
+        case let .list(items): items.map(MacroEncoding.percentEncode).joined(separator: ",")
+        }
+    }
 }
 
 // MARK: - Encoding helpers
