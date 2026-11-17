@@ -35,23 +35,23 @@ struct SystemChrome: View {
     }
 
     private var homeIndicatorSize: CGSize? {
-        switch layout.device.family {
-        case .iPhone where layout.device.cutout != .none: CGSize(width: layout.isLandscape ? 210 : 136, height: 5)
-        case .tablet: CGSize(width: 320, height: 5)
-        case .androidPhone, .foldable, .dualScreen: CGSize(width: 108, height: 4)
-        default: nil
+        switch layout.chrome {
+        case .iPhone: CGSize(width: layout.isLandscape ? 210 : 136, height: 5)
+        case .iPad: CGSize(width: min(320, pane.width * 0.3), height: 5)
+        case .android: CGSize(width: 108, height: 4)
+        case .iPhoneHomeButton, .television: nil
         }
     }
 
     private var homeIndicatorBottom: CGFloat {
-        layout.device.family == .iPhone ? 8 : 10
+        layout.chrome == .iPhone ? 8 : 10
     }
 
     @ViewBuilder private var cutout: some View {
         let isLandscape = layout.isLandscape
         switch layout.cutout {
         case .dynamicIsland:
-            let size = CGSize(width: 125, height: 36.7)
+            let size = CutoutGeometry.islandSize(for: layout.device)
             Capsule()
                 .fill(.black)
                 .frame(width: isLandscape ? size.height : size.width, height: isLandscape ? size.width : size.height)
@@ -102,39 +102,33 @@ struct StatusBar: View {
     var lightContent = false
 
     var body: some View {
-        let family = layout.device.family
+        let phone = layout.chrome == .iPhone || layout.chrome == .iPhoneHomeButton
+        let ears = layout.chrome == .iPhone
         HStack(spacing: 6) {
             Text(timeText)
-                .font(.system(size: family == .iPhone ? 16 : 13, weight: family == .iPhone ? .semibold : .medium))
+                .font(.system(size: phone ? 16 : 13, weight: phone ? .semibold : .medium))
                 .monospacedDigit()
-                .frame(width: family == .iPhone && layout.cutout != .none ? earWidth : nil, alignment: family == .iPhone ? .center : .leading)
+                .frame(width: ears ? earWidth : nil, alignment: ears ? .center : .leading)
             Spacer(minLength: 0)
             HStack(spacing: 5) {
                 Image(systemName: "cellularbars")
                 Image(systemName: "wifi")
                 BatteryGlyph()
             }
-            .font(.system(size: family == .iPhone ? 13 : 11, weight: .semibold))
-            .frame(width: family == .iPhone && layout.cutout != .none ? earWidth : nil, alignment: family == .iPhone ? .center : .trailing)
+            .font(.system(size: phone ? 13 : 11, weight: .semibold))
+            .frame(width: ears ? earWidth : nil, alignment: ears ? .center : .trailing)
         }
         .foregroundStyle(lightContent ? Color.white : Color.primary)
-        .padding(.horizontal, family == .iPhone && layout.cutout != .none ? 0 : 16)
-        .padding(.top, verticalOffset)
-        .frame(maxHeight: .infinity, alignment: family == .iPhone ? .center : .center)
+        .padding(.horizontal, ears ? 0 : 16)
+        .padding(.top, ears ? 4 : 0)
+        .frame(maxHeight: .infinity)
     }
 
     /// Each side of the island / notch.
     private var earWidth: CGFloat { max(60, (width - 130) / 2) }
 
-    private var verticalOffset: CGFloat {
-        layout.device.family == .iPhone && layout.cutout != .none ? 4 : 0
-    }
-
     private var timeText: String {
-        switch layout.device.family {
-        case .tablet: "9:41  Mon Nov 17"
-        default: "9:41"
-        }
+        layout.chrome == .iPad ? "9:41  Tue Nov 17" : "9:41"
     }
 }
 
@@ -149,6 +143,18 @@ private struct BatteryGlyph: View {
                     RoundedRectangle(cornerRadius: 1.6, style: .continuous).frame(width: 16, height: 7).padding(.leading, 2)
                 }
             RoundedRectangle(cornerRadius: 1).frame(width: 1.5, height: 4).opacity(0.45)
+        }
+    }
+}
+
+/// Cutout sizes in points (approx.: measured from Apple's device frames).
+enum CutoutGeometry {
+    /// The Dynamic Island pill: 125×36.7 pt on iPhone 14 Pro – 17 Pro; about 30% narrower on the iPhone 18 Pro models,
+    /// whose Face ID sits under the display.
+    static func islandSize(for device: DeviceProfile) -> CGSize {
+        switch device.id {
+        case "iphone-18-pro", "iphone-18-pro-max": CGSize(width: 88, height: 36.7)
+        default: CGSize(width: 125, height: 36.7)
         }
     }
 }

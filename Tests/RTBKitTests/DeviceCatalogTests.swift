@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import RTBKit
 
@@ -28,8 +29,9 @@ struct DeviceCatalogTests {
     }
 
     @Test func requiredModelsArePresent() {
-        let required = ["iphone-se-3", "iphone-13-mini", "iphone-15", "iphone-15-plus", "iphone-15-pro", "iphone-15-pro-max", "iphone-16-pro",
-                        "iphone-16-pro-max", "pixel-8", "galaxy-s24", "galaxy-z-fold", "pixel-fold", "surface-duo", "ipad-10", "ipad-pro-11",
+        let required = ["iphone-se-3", "iphone-13-mini", "iphone-15", "iphone-15-plus", "iphone-15-pro", "iphone-15-pro-max", "iphone-16e",
+                        "iphone-16-pro", "iphone-16-pro-max", "iphone-17", "iphone-air", "iphone-17-pro", "iphone-17-pro-max", "iphone-18-pro",
+                        "iphone-18-pro-max", "iphone-duo", "ipad-pro-11-m5", "pixel-8", "galaxy-s24", "galaxy-z-fold", "pixel-fold", "surface-duo", "ipad-10", "ipad-pro-11",
                         "apple-tv-4k", "google-tv", "fire-tv-stick-4k", "roku-express"]
         for id in required {
             #expect(DeviceCatalog.device(id: id) != nil, "missing \(id)")
@@ -49,6 +51,15 @@ struct DeviceCatalogTests {
         #expect(try size("iphone-15-pro-max") == (430, 932, 3))
         #expect(try size("iphone-16-pro") == (402, 874, 3))
         #expect(try size("iphone-16-pro-max") == (440, 956, 3))
+        // 2025–2026 (Apple tech specs ÷ 3; useyourloaf "iPhone 17 Screen Sizes").
+        #expect(try size("iphone-16e") == (390, 844, 3))
+        #expect(try size("iphone-17") == (402, 874, 3))
+        #expect(try size("iphone-air") == (420, 912, 3))
+        #expect(try size("iphone-17-pro") == (402, 874, 3))
+        #expect(try size("iphone-17-pro-max") == (440, 956, 3))
+        #expect(try size("iphone-18-pro") == (402, 874, 3))
+        #expect(try size("iphone-18-pro-max") == (440, 956, 3))
+        #expect(try size("ipad-pro-11-m5") == (834, 1210, 2))
         #expect(try size("pixel-8") == (412, 915, 2.625))
         #expect(try size("galaxy-s24") == (360, 780, 3))
         #expect(try size("ipad-10") == (820, 1180, 2))
@@ -101,6 +112,9 @@ struct DeviceCatalogTests {
                 #expect(device.os == "iOS" && device.make == "Apple")
                 #expect(device.userAgent.contains("iPhone"))
                 #expect(device.openRTBDeviceType == 4)
+            case .foldable where device.make == "Apple":
+                #expect(device.os == "iOS" && device.userAgent.contains("iPhone"))
+                #expect(device.openRTBDeviceType == 4)
             case .androidPhone, .foldable, .dualScreen:
                 #expect(device.os == "Android")
                 #expect(device.userAgent.contains("Android"))
@@ -132,10 +146,41 @@ struct DeviceCatalogTests {
         #expect(Set(tvs.map(\.openRTBDeviceType)) == [3, 7])
     }
 
+    /// iOS 26 and later keep `18_6` in the WebKit User-Agent (the OS version is frozen there), while `device.osv` carries
+    /// the real version.
+    @Test func appleDevicesRunTheCurrentReleaseButKeepTheFrozenUserAgentToken() {
+        for device in devices where device.make == "Apple" && device.family != .ctv {
+            #expect(device.osVersion == "27.2", "\(device.id)")
+            #expect(device.userAgent.contains("OS 18_6 like Mac OS X"), "\(device.id)")
+        }
+    }
+
+    @Test func iPhoneDuoIsABookFoldableWithAnIPhoneCoverScreen() throws {
+        let duo = try #require(DeviceCatalog.device(id: "iphone-duo"))
+        #expect(duo.family == .foldable && duo.make == "Apple")
+        // Inner 7.6" 1878×2670 px: 669×951 pt rendered at @3x and downsampled, wider than tall when open (fold vertical).
+        #expect(duo.screenWidth == 951 && duo.screenHeight == 669 && duo.scale == 3)
+        // Cover 5.4" 1398×2034 px @3x, with the Dynamic Island; the inner screen's camera is under the display.
+        #expect(duo.foldedWidth == 466 && duo.foldedHeight == 678)
+        #expect(duo.cutout == .dynamicIsland)
+        let cover = try #require(duo.foldedSafeArea)
+        #expect(cover.top > duo.safeArea.top && cover.bottom == 34)
+    }
+
+    @Test func coverScreenInsetsOnlyOnFoldables() {
+        for device in devices where device.foldedSafeArea != nil {
+            #expect(device.family == .foldable, "\(device.id)")
+        }
+    }
+
     @Test func cutoutsMatchTheHardware() throws {
         #expect(try #require(DeviceCatalog.device(id: "iphone-se-3")).cutout == .none)
         #expect(try #require(DeviceCatalog.device(id: "iphone-13-mini")).cutout == .notch)
         #expect(try #require(DeviceCatalog.device(id: "iphone-15")).cutout == .dynamicIsland)
+        #expect(try #require(DeviceCatalog.device(id: "iphone-16e")).cutout == .notch)
+        #expect(try #require(DeviceCatalog.device(id: "iphone-air")).cutout == .dynamicIsland)
+        #expect(try #require(DeviceCatalog.device(id: "iphone-air")).safeArea == DeviceInsets(top: 68, bottom: 34))
+        #expect(try #require(DeviceCatalog.device(id: "iphone-17-pro")).safeArea == DeviceInsets(top: 62, bottom: 34))
         #expect(try #require(DeviceCatalog.device(id: "iphone-16-pro-max")).cutout == .dynamicIsland)
         #expect(try #require(DeviceCatalog.device(id: "pixel-8")).cutout == .punchHole)
         #expect(try #require(DeviceCatalog.device(id: "galaxy-s24")).cutout == .punchHole)
@@ -143,8 +188,19 @@ struct DeviceCatalogTests {
         #expect(try #require(DeviceCatalog.device(id: "iphone-se-3")).safeArea.bottom == 0)
     }
 
-    @Test func defaultDeviceIsAModernIPhone() {
+    @Test func defaultDeviceIsACurrentIPhone() {
         #expect(DeviceCatalog.defaultDevice.family == .iPhone)
-        #expect(DeviceCatalog.defaultDevice.id == "iphone-15-pro")
+        #expect(DeviceCatalog.defaultDevice.id == "iphone-17-pro")
+    }
+
+    @Test func profilesRoundTripThroughCodableWithAndWithoutTheCoverInsets() throws {
+        let duo = try #require(DeviceCatalog.device(id: "iphone-duo"))
+        let decoded = try JSONDecoder().decode(DeviceProfile.self, from: JSONEncoder().encode(duo))
+        #expect(decoded == duo)
+        // Profiles saved before `foldedSafeArea` existed still decode.
+        var legacy = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(DeviceCatalog.defaultDevice)) as? [String: Any])
+        legacy["foldedSafeArea"] = nil
+        let old = try JSONDecoder().decode(DeviceProfile.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(old.foldedSafeArea == nil)
     }
 }

@@ -53,6 +53,35 @@ struct ScreenLayoutTests {
         #expect(rotated.crease == .horizontal(y: 345))
     }
 
+    @Test func iPhoneDuoClosedIsAnIPhoneAndOpenIsALittleTablet() throws {
+        let duo = try device("iphone-duo")
+        let closed = ScreenLayout(device: duo, landscape: false, folded: true, spanned: false)
+        #expect(closed.canvasSize == CGSize(width: 466, height: 678))
+        #expect(closed.cutout == .dynamicIsland)
+        #expect(closed.safeArea == duo.foldedSafeArea)
+        #expect(closed.chrome == .iPhone)
+        let closedLandscape = ScreenLayout(device: duo, landscape: true, folded: true, spanned: false)
+        #expect(!closedLandscape.showsStatusBar)
+        #expect(closedLandscape.safeArea.leading == duo.foldedSafeArea?.top)
+
+        let open = ScreenLayout(device: duo, landscape: false, folded: false, spanned: false)
+        #expect(open.canvasSize == CGSize(width: 951, height: 669))
+        #expect(open.crease == .vertical(x: 475.5))
+        #expect(open.cutout == .none)
+        #expect(open.safeArea == duo.safeArea)
+        #expect(open.chrome == .iPad)
+        #expect(ScreenLayout(device: duo, landscape: true, folded: false, spanned: false).showsStatusBar)
+    }
+
+    @Test func chromeFollowsThePlatform() throws {
+        #expect(ScreenLayout(device: try device("iphone-se-3"), landscape: false, folded: false, spanned: false).chrome == .iPhoneHomeButton)
+        #expect(ScreenLayout(device: try device("iphone-16e"), landscape: false, folded: false, spanned: false).chrome == .iPhone)
+        #expect(ScreenLayout(device: try device("ipad-10"), landscape: false, folded: false, spanned: false).chrome == .iPad)
+        #expect(ScreenLayout(device: try device("pixel-fold"), landscape: false, folded: true, spanned: false).chrome == .android)
+        #expect(ScreenLayout(device: try device("surface-duo"), landscape: false, folded: false, spanned: false).chrome == .android)
+        #expect(ScreenLayout(device: try device("roku-express"), landscape: false, folded: false, spanned: false).chrome == .television)
+    }
+
     @Test func dualScreenSingleAndSpanned() throws {
         let duo = try device("surface-duo")
         let single = ScreenLayout(device: duo, landscape: false, folded: false, spanned: false)

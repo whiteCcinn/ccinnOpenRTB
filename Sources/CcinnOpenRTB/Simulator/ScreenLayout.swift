@@ -9,6 +9,18 @@ import RTBKit
 /// - Dual-screen: both screens are always shown with the hinge between them; `spanned` makes the app (and the ad) use
 ///   both screens, otherwise it lives on the first screen.
 struct ScreenLayout: Equatable {
+    /// The system UI style of the screen in use (status bar, home indicator, landscape rules).
+    enum Chrome: Equatable {
+        /// Face ID iPhone screens, including the iPhone Duo's cover screen.
+        case iPhone
+        /// Touch ID iPhones: no insets in landscape, no home indicator.
+        case iPhoneHomeButton
+        /// iPads and the iPhone Duo's open screen: a slim status bar kept in landscape.
+        case iPad
+        case android
+        case television
+    }
+
     enum Crease: Equatable {
         case vertical(x: CGFloat)
         case horizontal(y: CGFloat)
@@ -35,6 +47,7 @@ struct ScreenLayout: Equatable {
     /// Safe-area insets of `contentFrame`, rotated with the device (landscape values are approximations of UIKit's).
     let safeArea: DeviceInsets
     let cornerRadius: CGFloat
+    let chrome: Chrome
     let showsStatusBar: Bool
     /// Where the app (and the ad) lives: the first screen, or the whole canvas when spanned.
     let contentFrame: CGRect
@@ -56,8 +69,11 @@ struct ScreenLayout: Equatable {
         isFolded = useCover
         cornerRadius = device.cornerRadius
         cutout = device.family == .foldable && !useCover ? .none : device.cutout
-        safeArea = Self.safeArea(of: device, rotated: rotated)
-        showsStatusBar = !isTV && !(rotated && device.family == .iPhone)
+        let chrome = Self.chrome(of: device, cover: useCover)
+        self.chrome = chrome
+        let portraitInsets = useCover ? (device.foldedSafeArea ?? device.safeArea) : device.safeArea
+        safeArea = Self.safeArea(portraitInsets, chrome: chrome, rotated: rotated)
+        showsStatusBar = chrome != .television && !(rotated && (chrome == .iPhone || chrome == .iPhoneHomeButton))
 
         if device.family == .dualScreen, let hingeWidth = device.hingeWidth, hingeWidth > 0 {
             let gap = CGFloat(hingeWidth)
@@ -92,19 +108,30 @@ struct ScreenLayout: Equatable {
         }
     }
 
-    /// Landscape: iPhones with a notch or island inset both long sides by the portrait top inset, hide the status bar and
-    /// keep a 21 pt home indicator; the SE has no insets; Android and iPad keep their status and navigation bars.
-    private static func safeArea(of device: DeviceProfile, rotated: Bool) -> DeviceInsets {
-        guard rotated else { return device.family == .ctv ? DeviceInsets() : device.safeArea }
+    static func chrome(of device: DeviceProfile, cover: Bool) -> Chrome {
+        guard device.family != .ctv else { return .television }
+        guard device.os == "iOS" || device.os == "iPadOS" else { return .android }
         switch device.family {
-        case .ctv:
+        case .iPhone: return device.cutout == .none ? .iPhoneHomeButton : .iPhone
+        case .foldable: return cover ? .iPhone : .iPad
+        case .tablet, .androidPhone, .dualScreen, .ctv: return .iPad
+        }
+    }
+
+    /// Landscape (approximations of UIKit's values): Face ID iPhone screens inset both long sides by the portrait top
+    /// inset, hide the status bar and keep a 21 pt home indicator; Touch ID iPhones have no insets; iPad-style and Android
+    /// screens keep their status and navigation bars.
+    private static func safeArea(_ portrait: DeviceInsets, chrome: Chrome, rotated: Bool) -> DeviceInsets {
+        switch chrome {
+        case .television:
             return DeviceInsets()
         case .iPhone:
-            guard device.cutout == .notch || device.cutout == .dynamicIsland else { return DeviceInsets() }
-            let side = device.safeArea.top
-            return DeviceInsets(top: 0, leading: side, bottom: landscapeHomeIndicatorInset, trailing: side)
-        case .androidPhone, .foldable, .dualScreen, .tablet:
-            return DeviceInsets(top: device.safeArea.top, bottom: device.safeArea.bottom)
+            guard rotated else { return portrait }
+            return DeviceInsets(top: 0, leading: portrait.top, bottom: landscapeHomeIndicatorInset, trailing: portrait.top)
+        case .iPhoneHomeButton:
+            return rotated ? DeviceInsets() : portrait
+        case .iPad, .android:
+            return rotated ? DeviceInsets(top: portrait.top, bottom: portrait.bottom) : portrait
         }
     }
 }

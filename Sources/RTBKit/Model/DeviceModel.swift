@@ -45,6 +45,9 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
     /// Foldables: the cover (folded) screen size in points; the main fields describe the unfolded screen.
     public var foldedWidth: Double?
     public var foldedHeight: Double?
+    /// Foldables whose cover screen is laid out differently from the main one (e.g. an iPhone-style cover screen with the
+    /// Dynamic Island on a foldable whose open screen is tablet-like); `nil`: the cover screen uses `safeArea`.
+    public var foldedSafeArea: DeviceInsets?
     public var os: String
     public var osVersion: String
     public var make: String
@@ -58,7 +61,7 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
 
     public init(id: String, name: String, family: Family, screenWidth: Double, screenHeight: Double, scale: Double, cornerRadius: Double = 0,
                 safeArea: DeviceInsets = DeviceInsets(), cutout: Cutout = .none, hingeWidth: Double? = nil, foldedWidth: Double? = nil,
-                foldedHeight: Double? = nil, os: String, osVersion: String, make: String, model: String, userAgent: String,
+                foldedHeight: Double? = nil, foldedSafeArea: DeviceInsets? = nil, os: String, osVersion: String, make: String, model: String, userAgent: String,
                 openRTBDeviceType: Int, input: Input = .touch, supportsClickThrough: Bool = true) {
         self.id = id
         self.name = name
@@ -72,6 +75,7 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
         self.hingeWidth = hingeWidth
         self.foldedWidth = foldedWidth
         self.foldedHeight = foldedHeight
+        self.foldedSafeArea = foldedSafeArea
         self.os = os
         self.osVersion = osVersion
         self.make = make

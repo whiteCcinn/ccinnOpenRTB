@@ -11,6 +11,10 @@ import Foundation
 /// - **Corner radii and safe areas** for iPhones are the values UIKit reports (`safeAreaInsets`, and the display corner
 ///   radius measured by the developer community); Android values are **approx.** (status bar / gesture bar heights vary
 ///   by OEM skin and font scale).
+/// - **Current Apple models** (2025–2026: iPhone 16e, 17, Air, 17 Pro/Pro Max, 18 Pro/Pro Max, iPhone Duo, iPad Pro M5)
+///   come from Apple's tech specs (pixels ÷ scale) and the safe areas UIKit reports (useyourloaf.com "iPhone 17 Screen
+///   Sizes"). Where a value was not published when this catalog was written (iPhone 18 Pro insets, iPhone Duo insets) it
+///   is marked **approx.** with what it is based on.
 /// - **User-Agents** are the in-app forms an ad SDK sends: the `WKWebView` UA on iOS/iPadOS (no `Version/… Safari/…`
 ///   suffix), the Android System WebView UA (`; wv`), and the media-stack UA on TV platforms (AppleCoreMedia, Dalvik,
 ///   Roku DVP). Build identifiers inside them follow the real format but are illustrative, not tied to a release.
@@ -34,17 +38,18 @@ public enum DeviceCatalog {
         return devices.isEmpty ? nil : Group(family: family, devices: devices)
     }
 
-    public static var defaultDevice: DeviceProfile { iPhone15Pro }
+    public static var defaultDevice: DeviceProfile { iPhone17Pro }
 
     public static func device(id: String) -> DeviceProfile? { all.first { $0.id == id } }
 
     // MARK: - iPhone
 
-    /// iOS 18.6: every iPhone below runs it, and Safari/WKWebView keep reporting `18_6` in the UA on later releases.
-    private static let iOSVersion = "18.6"
-    private static let iOSVersionToken = iOSVersion.replacingOccurrences(of: ".", with: "_")
+    /// iOS / iPadOS 27.2 (November 2026; every Apple phone and tablet below runs it). `device.osv` carries it, but WebKit
+    /// froze the OS token of the User-Agent at `18_6` from iOS 26 on, so in-app web views still report `18_6`.
+    private static let iOSVersion = "27.2"
+    private static let frozenUserAgentOSToken = "18_6"
 
-    private static let iPhoneUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS \(iOSVersionToken) like Mac OS X) "
+    private static let iPhoneUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS \(frozenUserAgentOSToken) like Mac OS X) "
         + "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
 
     private static func iPhone(_ id: String, _ name: String, model: String, width: Double, height: Double, scale: Double,
@@ -54,9 +59,10 @@ public enum DeviceCatalog {
                       userAgent: iPhoneUserAgent, openRTBDeviceType: 4)
     }
 
-    // HIG: 393×852 pt @3x (2556×1179 px). Dynamic Island; safe area 59/34 pt; display corner radius 55 pt.
-    private static let iPhone15Pro = iPhone("iphone-15-pro", "iPhone 15 Pro", model: "iPhone16,1", width: 393, height: 852, scale: 3,
-                                            cornerRadius: 55, safeArea: DeviceInsets(top: 59, bottom: 34), cutout: .dynamicIsland)
+    // Apple: 6.3" 2622×1206 px @3x → 402×874 pt. Dynamic Island; UIKit safe area 62/34 pt (landscape 62 on both sides);
+    // display corner radius 62 pt.
+    private static let iPhone17Pro = iPhone("iphone-17-pro", "iPhone 17 Pro", model: "iPhone18,1", width: 402, height: 874, scale: 3,
+                                            cornerRadius: 62, safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland)
 
     private static let iPhones: [DeviceProfile] = [
         // HIG: 375×667 pt @2x (1334×750 px). Rectangular LCD with a Touch ID home button: 20 pt status bar, no bottom inset.
@@ -71,7 +77,9 @@ public enum DeviceCatalog {
         // HIG: 430×932 pt @3x (2796×1290 px). Dynamic Island; safe area 59/34 pt; display corner radius 55 pt.
         iPhone("iphone-15-plus", "iPhone 15 Plus", model: "iPhone15,5", width: 430, height: 932, scale: 3, cornerRadius: 55,
                safeArea: DeviceInsets(top: 59, bottom: 34), cutout: .dynamicIsland),
-        iPhone15Pro,
+        // HIG: 393×852 pt @3x (2556×1179 px). Dynamic Island; safe area 59/34 pt; display corner radius 55 pt.
+        iPhone("iphone-15-pro", "iPhone 15 Pro", model: "iPhone16,1", width: 393, height: 852, scale: 3, cornerRadius: 55,
+               safeArea: DeviceInsets(top: 59, bottom: 34), cutout: .dynamicIsland),
         // Same geometry as iPhone 15 Plus.
         iPhone("iphone-15-pro-max", "iPhone 15 Pro Max", model: "iPhone16,2", width: 430, height: 932, scale: 3, cornerRadius: 55,
                safeArea: DeviceInsets(top: 59, bottom: 34), cutout: .dynamicIsland),
@@ -80,6 +88,28 @@ public enum DeviceCatalog {
                safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
         // HIG: 440×956 pt @3x (2868×1320 px). Safe area 62/34 pt; display corner radius 62 pt. (iPhone 17 Pro Max: same size.)
         iPhone("iphone-16-pro-max", "iPhone 16 Pro Max", model: "iPhone17,2", width: 440, height: 956, scale: 3, cornerRadius: 62,
+               safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
+        // Apple: 6.1" 2532×1170 px @3x → 390×844 pt (the iPhone 14 panel). Notch, not an island; safe area 47/34 pt and display
+        // corner radius 47.33 pt as on iPhone 14 (approx.: inherited from the same panel).
+        iPhone("iphone-16e", "iPhone 16e", model: "iPhone17,5", width: 390, height: 844, scale: 3, cornerRadius: 47.33,
+               safeArea: DeviceInsets(top: 47, bottom: 34), cutout: .notch),
+        // Apple: 6.3" 2622×1206 px @3x → 402×874 pt, the 17 Pro's panel (ProMotion, Dynamic Island). Safe area 62/34 pt.
+        iPhone("iphone-17", "iPhone 17", model: "iPhone18,3", width: 402, height: 874, scale: 3, cornerRadius: 62,
+               safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
+        // Apple: 6.5" 2736×1260 px @3x → 420×912 pt (a size of its own). Safe area 68/34 pt (landscape 68 on both sides).
+        // Display corner radius approx. (as the 6.3"/6.9" models).
+        iPhone("iphone-air", "iPhone Air", model: "iPhone18,4", width: 420, height: 912, scale: 3, cornerRadius: 62,
+               safeArea: DeviceInsets(top: 68, bottom: 34), cutout: .dynamicIsland),
+        iPhone17Pro,
+        // Apple: 6.9" 2868×1320 px @3x → 440×956 pt. Safe area 62/34 pt.
+        iPhone("iphone-17-pro-max", "iPhone 17 Pro Max", model: "iPhone18,2", width: 440, height: 956, scale: 3, cornerRadius: 62,
+               safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
+        // September 2026. Apple: 6.3" 2622×1206 px @3x → 402×874 pt and 6.9" 2868×1320 px @3x → 440×956 pt, the 17 Pro
+        // sizes. The Dynamic Island is narrower (Face ID moved under the display: the simulator draws it smaller); safe
+        // area approx.: the 17 Pro's 62/34 pt (Apple kept the bezels).
+        iPhone("iphone-18-pro", "iPhone 18 Pro", model: "iPhone19,1", width: 402, height: 874, scale: 3, cornerRadius: 62,
+               safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
+        iPhone("iphone-18-pro-max", "iPhone 18 Pro Max", model: "iPhone19,2", width: 440, height: 956, scale: 3, cornerRadius: 62,
                safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
     ]
 
@@ -108,6 +138,17 @@ public enum DeviceCatalog {
     // MARK: - Foldables
 
     private static let foldables: [DeviceProfile] = [
+        // iPhone Duo (September 2026), Apple's book-style foldable: one folding OLED inside, a cover screen outside.
+        // - Inner: 7.6" 1878×2670 px at 430 ppi; iOS lays it out at 669×951 pt @3x and downsamples (the simulator and App
+        //   Store screenshots are 2007×2853 px). Open, it is wider than tall (951×669) with the fold running vertically;
+        //   the front camera is under the display (no cutout). Insets approx.: an iPad-style 24 pt status bar and 20 pt
+        //   home indicator (third-party measurements disagree).
+        // - Cover: 5.4" 1398×2034 px at 460 ppi → 466×678 pt @3x, with the Dynamic Island; insets approx. as on the
+        //   6.1" island iPhones (59/34 pt).
+        DeviceProfile(id: "iphone-duo", name: "iPhone Duo", family: .foldable, screenWidth: 951, screenHeight: 669, scale: 3,
+                      cornerRadius: 30, safeArea: DeviceInsets(top: 24, bottom: 20), cutout: .dynamicIsland, foldedWidth: 466,
+                      foldedHeight: 678, foldedSafeArea: DeviceInsets(top: 59, bottom: 34), os: "iOS", osVersion: iOSVersion,
+                      make: "Apple", model: "iPhone19,5", userAgent: iPhoneUserAgent, openRTBDeviceType: 4),
         // Galaxy Z Fold5 (Samsung spec): main 2176×1812 px (1812 wide when held as a book), cover 2316×904 px. In points at
         // 2.625: main 690×829, cover 344×882. Approx.: the density is an assumption (Chrome's Fold cover preset is 344×882).
         // Main screen: under-display camera (no visible cutout); cover screen: centred punch-hole.
@@ -137,7 +178,7 @@ public enum DeviceCatalog {
     // MARK: - Tablets
 
     /// SDKs report the mobile iPad form (the default WKWebView content mode would send the desktop Mac UA instead).
-    private static let iPadUserAgent = "Mozilla/5.0 (iPad; CPU OS \(iOSVersionToken) like Mac OS X) "
+    private static let iPadUserAgent = "Mozilla/5.0 (iPad; CPU OS \(frozenUserAgentOSToken) like Mac OS X) "
         + "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
 
     private static let tablets: [DeviceProfile] = [
@@ -146,9 +187,13 @@ public enum DeviceCatalog {
                       safeArea: DeviceInsets(top: 24, bottom: 20), os: "iPadOS", osVersion: iOSVersion, make: "Apple", model: "iPad13,18",
                       userAgent: iPadUserAgent, openRTBDeviceType: 5),
         // HIG: 834×1194 pt @2x (2388×1668 px), iPad Pro 11-inch (1st–4th gen). Same insets and corner radius as above.
-        DeviceProfile(id: "ipad-pro-11", name: "iPad Pro 11\"", family: .tablet, screenWidth: 834, screenHeight: 1194, scale: 2, cornerRadius: 18,
-                      safeArea: DeviceInsets(top: 24, bottom: 20), os: "iPadOS", osVersion: iOSVersion, make: "Apple", model: "iPad14,3",
-                      userAgent: iPadUserAgent, openRTBDeviceType: 5),
+        DeviceProfile(id: "ipad-pro-11", name: "iPad Pro 11\" (4th gen)", family: .tablet, screenWidth: 834, screenHeight: 1194, scale: 2,
+                      cornerRadius: 18, safeArea: DeviceInsets(top: 24, bottom: 20), os: "iPadOS", osVersion: iOSVersion, make: "Apple",
+                      model: "iPad14,3", userAgent: iPadUserAgent, openRTBDeviceType: 5),
+        // Apple: iPad Pro 11-inch (M4, 2024; M5, 2025) 2420×1668 px @2x → 834×1210 pt. Same insets; corner radius approx.
+        DeviceProfile(id: "ipad-pro-11-m5", name: "iPad Pro 11\" (M5)", family: .tablet, screenWidth: 834, screenHeight: 1210, scale: 2,
+                      cornerRadius: 18, safeArea: DeviceInsets(top: 24, bottom: 20), os: "iPadOS", osVersion: iOSVersion, make: "Apple",
+                      model: "iPad17,1", userAgent: iPadUserAgent, openRTBDeviceType: 5),
     ]
 
     // MARK: - Connected TV

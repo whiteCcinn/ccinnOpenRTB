@@ -56,6 +56,10 @@ struct DeviceFrameStyle: Equatable {
         let natural: Insets
         var hasHomeButton = false
         switch device.family {
+        case .foldable where device.make == "Apple":
+            // iPhone Duo: thin, even bezel around both screens.
+            natural = Insets(top: 9, leading: 9, bottom: 9, trailing: 9)
+            body = .phone
         case .iPhone where device.cutout == .none:
             // Home-button iPhone: tall forehead and chin.
             natural = Insets(top: 96, leading: 18, bottom: 96, trailing: 18)
