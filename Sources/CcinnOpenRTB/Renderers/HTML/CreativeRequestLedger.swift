@@ -25,6 +25,7 @@ struct CreativeRequestLedger {
     private(set) var recordedCount = 0
     private var overflowed = false
     private var open: [String: UUID] = [:]
+    private var openURLs: [String: String] = [:]
     private var seen: Set<String> = []
 
     init(capacity: Int = CreativeRequestLedger.defaultCapacity) {
@@ -38,17 +39,27 @@ struct CreativeRequestLedger {
         seen.insert(rid)
         let id = record(url, kind, blocked)
         open[rid] = id
+        openURLs[rid] = url
         return .recorded(id)
+    }
+
+    /// The URL of a request still waiting for its outcome.
+    func openURL(rid: String) -> String? {
+        openURLs[rid]
     }
 
     /// The entry of a request that finished, once.
     mutating func end(rid: String) -> UUID? {
-        open.removeValue(forKey: rid)
+        openURLs[rid] = nil
+        return open.removeValue(forKey: rid)
     }
 
     /// Every request still waiting for its outcome (the document is going away); the ledger forgets them.
     mutating func drainOpen() -> [UUID] {
-        defer { open.removeAll() }
+        defer {
+            open.removeAll()
+            openURLs.removeAll()
+        }
         return Array(open.values)
     }
 

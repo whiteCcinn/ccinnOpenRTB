@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CcinnOpenRTBKit
 import Foundation
@@ -48,6 +49,15 @@ final class RecordingHost: AdRenderingHost {
     func playbackChanged(_ status: PlaybackStatus) { statuses.append(status) }
 
     func rendererLog(_ entry: RendererLogEntry) { logs.append(entry) }
+
+    /// What `resolveVAST` answers (the default resolver is a kit placeholder until kit-vast merges).
+    var vastResolution = ResolvedVAST()
+    private(set) var resolvedSources: [VASTSource] = []
+
+    func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
+        resolvedSources.append(source)
+        return vastResolution
+    }
 
     /// The VAST events reported for one pod ad, in order.
     func videoEvents(adIndex: Int) -> [VASTEvent] {
@@ -113,5 +123,18 @@ enum Wait {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return true
+    }
+}
+
+enum TestImages {
+    /// A solid PNG of `width` × `height` pixels.
+    static func png(width: Int = 4, height: Int = 2) -> Data {
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0) else { return Data() }
+        for x in 0..<width {
+            for y in 0..<height { bitmap.setColor(.systemTeal, atX: x, y: y) }
+        }
+        return bitmap.representation(using: .png, properties: [:]) ?? Data()
     }
 }

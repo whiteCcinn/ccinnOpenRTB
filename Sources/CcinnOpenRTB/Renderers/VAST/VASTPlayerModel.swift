@@ -68,6 +68,10 @@ final class VASTPlayerModel {
     private(set) var isMuted: Bool
     private(set) var skipState: SkipButtonState = .hidden
     private(set) var endCard: EndCard?
+    /// Pod ads that reached their first frame.
+    private(set) var startedAds = 0
+    /// The last media error the player reported (shown when no ad could play).
+    private(set) var lastError: VASTErrorCode?
 
     @ObservationIgnored private let engine: any PlaybackEngine
     @ObservationIgnored private weak var host: (any AdRenderingHost)?
@@ -100,6 +104,7 @@ final class VASTPlayerModel {
     // MARK: State for the views
 
     var adCount: Int { items.count }
+    var isTornDown: Bool { stopped }
     var adNumber: Int { (currentItem?.adIndex ?? 0) + 1 }
     var showsLearnMore: Bool { configuration.allowsClickThrough && currentItem?.clickThrough != nil && phase == .playing }
     var remaining: Double { PlayerClock.remaining(playhead: playhead, duration: duration) }
@@ -314,6 +319,7 @@ final class VASTPlayerModel {
     }
 
     private func fail(_ item: VASTPodItem, code: VASTErrorCode, _ message: String) {
+        lastError = code
         log(.error, message)
         host?.report(.error(code, adIndex: item.adIndex))
     }
@@ -377,9 +383,12 @@ final class VASTPlayerModel {
 
     private func emit(_ events: [VASTEvent], _ item: VASTPodItem) {
         for event in events {
-            if event == .creativeView, configuration.reportsRendered, !renderedReported {
-                renderedReported = true
-                host?.report(.rendered)
+            if event == .creativeView {
+                startedAds += 1
+                if configuration.reportsRendered, !renderedReported {
+                    renderedReported = true
+                    host?.report(.rendered)
+                }
             }
             host?.report(.video(event, adIndex: item.adIndex))
         }

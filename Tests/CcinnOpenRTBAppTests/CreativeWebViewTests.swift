@@ -289,6 +289,22 @@ struct CreativeWebViewTests {
         #expect(harness.entries().allSatisfy { $0.delivery == .renderer })
     }
 
+    @Test func httpScriptsInTheHTTPSCreativeAreMixedContentEvenWhenAllowed() async throws {
+        let server = try LoopbackServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let harness = await load(#"<script src="http://127.0.0.1:\#(port)/tag.js"></script>"#, blocks: false, mraid: false)
+        defer { harness.controller.teardown() }
+        let explained = await Wait.until {
+            harness.entries().contains { entry in
+                if case let .failed(message) = entry.state { return entry.url.hasSuffix("/tag.js") && message.contains("mixed content") }
+                return false
+            }
+        }
+        #expect(explained, "\(harness.entries().map(\.state))")
+        #expect(server.connectionCount == 0)
+    }
+
     @Test func navigationsWithoutAGestureAreBlockedAutoRedirects() async throws {
         let harness = await load(Self.recorder)
         defer { harness.controller.teardown() }

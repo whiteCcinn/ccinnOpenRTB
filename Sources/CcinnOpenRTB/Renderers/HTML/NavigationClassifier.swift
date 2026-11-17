@@ -6,8 +6,8 @@ struct NavigationFacts: Equatable, Sendable {
     var isMainFrame: Bool
     /// `target=_blank` / `window.open` (no target frame).
     var targetsNewWindow: Bool
-    /// The controller is loading the creative document and has not seen its navigation yet.
-    var isAwaitingInitialLoad: Bool
+    /// The navigation of the document the controller is loading (its base URL, before that navigation was seen).
+    var isInitialDocument: Bool
     /// The document's URL now (`WKWebView.url`), to recognise same-document fragment navigations.
     var currentURL: String?
 }
@@ -30,7 +30,7 @@ enum NavigationClassifier {
     static let gestureWindow: TimeInterval = 1
 
     static func decide(_ facts: NavigationFacts, lastGesture: Date?, now: Date) -> NavigationDecision {
-        if facts.isAwaitingInitialLoad, facts.isMainFrame, facts.url == CreativeWebController.baseURL.absoluteString {
+        if facts.isInitialDocument, facts.isMainFrame {
             return .allow
         }
         if !facts.isMainFrame, !facts.targetsNewWindow {

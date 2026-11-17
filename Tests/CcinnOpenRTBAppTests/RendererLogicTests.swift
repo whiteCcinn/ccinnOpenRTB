@@ -225,3 +225,36 @@ struct FullscreenChromePolicyTests {
         }
     }
 }
+
+@Suite("CTV remote")
+struct CTVRemoteTests {
+    @Test func arrowsMoveTheFocusAndSelectActivatesIt() {
+        var focus = CTVFocusModel()
+        focus.setAvailable([.playPause, .skip])
+        #expect(CTVRemote.handle(.select, focus: &focus) == .togglePlayback)
+        #expect(CTVRemote.handle(.right, focus: &focus) == CTVRemoteAction.none)
+        #expect(focus.focused == .skip)
+        #expect(CTVRemote.handle(.select, focus: &focus) == .skip)
+        #expect(CTVRemote.handle(.right, focus: &focus) == CTVRemoteAction.none)
+        #expect(focus.focused == .skip, "no wrapping")
+        #expect(CTVRemote.handle(.up, focus: &focus) == CTVRemoteAction.none)
+        #expect(focus.focused == .playPause)
+    }
+
+    @Test func playPauseAndBackWorkWhateverHasFocus() {
+        var focus = CTVFocusModel()
+        focus.setAvailable([.playPause, .skip])
+        _ = CTVRemote.handle(.right, focus: &focus)
+        #expect(CTVRemote.handle(.playPause, focus: &focus) == .togglePlayback)
+        #expect(CTVRemote.handle(.back, focus: &focus) == .close)
+    }
+
+    @Test func aDisappearingSkipButtonGivesTheFocusBack() {
+        var focus = CTVFocusModel()
+        focus.setAvailable([.playPause, .skip])
+        _ = CTVRemote.handle(.right, focus: &focus)
+        focus.setAvailable([.playPause])
+        #expect(focus.focused == .playPause)
+        #expect(CTVRemote.handle(.select, focus: &focus) == .togglePlayback)
+    }
+}

@@ -86,3 +86,42 @@ struct CTVFocusModel: Equatable, Sendable {
         }
     }
 }
+
+/// A key of the TV remote (arrows, select, play/pause, back), as the simulator maps the keyboard.
+enum CTVRemoteKey: Sendable {
+    case left, right, up, down
+    /// Return / the remote's select button.
+    case select
+    /// Space / the remote's play-pause button.
+    case playPause
+    /// Escape / the remote's Back button.
+    case back
+}
+
+/// What a remote key does in the CTV player.
+enum CTVRemoteAction: Equatable, Sendable {
+    case none, togglePlayback, skip, close
+}
+
+enum CTVRemote {
+    /// Moves the focus or picks the action of the key (pure). Select activates the focused control; Play/Pause always
+    /// toggles playback; Back closes the ad.
+    static func handle(_ key: CTVRemoteKey, focus: inout CTVFocusModel) -> CTVRemoteAction {
+        switch key {
+        case .left: focus.move(.left)
+        case .right: focus.move(.right)
+        case .up: focus.move(.up)
+        case .down: focus.move(.down)
+        case .playPause: return .togglePlayback
+        case .back: return .close
+        case .select:
+            switch focus.focused {
+            case .playPause: return .togglePlayback
+            case .skip: return .skip
+            // Click-through does not exist on CTV.
+            case .learnMore: return .none
+            }
+        }
+        return .none
+    }
+}

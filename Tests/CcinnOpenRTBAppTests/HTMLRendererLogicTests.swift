@@ -43,7 +43,9 @@ struct CreativeRequestLedgerTests {
             Issue.record("not recorded")
             return
         }
+        #expect(ledger.openURL(rid: "f1:2") != nil)
         #expect(ledger.end(rid: "f1:2") == secondID)
+        #expect(ledger.openURL(rid: "f1:2") == nil)
         #expect(ledger.end(rid: "f1:2") == nil, "an end is used once")
         #expect(ledger.end(rid: "f1:1") == firstID)
         #expect(ledger.end(rid: "unknown") == nil)
@@ -88,7 +90,7 @@ struct NavigationClassifierTests {
 
     private func facts(_ url: String, mainFrame: Bool = true, newWindow: Bool = false, initial: Bool = false, current: String? = nil)
         -> NavigationFacts {
-        NavigationFacts(url: url, isMainFrame: mainFrame, targetsNewWindow: newWindow, isAwaitingInitialLoad: initial,
+        NavigationFacts(url: url, isMainFrame: mainFrame, targetsNewWindow: newWindow, isInitialDocument: initial,
                         currentURL: current ?? base)
     }
 
@@ -167,5 +169,17 @@ struct BridgeChannelTests {
         #expect(BridgeMessage.decode(["channel": "open"]) == nil)
         #expect(BridgeMessage.decode(["channel": "mraidError", "message": "resize properties not set", "action": "resize"])
             == .mraidError(message: "resize properties not set", action: "resize"))
+    }
+}
+
+@Suite("Mixed content")
+struct MixedContentTests {
+    @Test func failedHTTPLoadsInAnHTTPSPageAreExplained() {
+        let https = CreativeWebController.baseURL
+        #expect(CreativeWebController.explain("load error", url: "http://cdn.example/a.js", page: https).contains("mixed content"))
+        #expect(CreativeWebController.explain("load error", url: "https://cdn.example/a.js", page: https) == "load error")
+        #expect(CreativeWebController.explain("load error", url: "http://cdn.example/a.js", page: CreativeWebController.trackerBaseURL)
+            == "load error")
+        #expect(CreativeWebController.explain("load error", url: nil, page: https) == "load error")
     }
 }

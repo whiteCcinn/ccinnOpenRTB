@@ -23,6 +23,16 @@ final class CreativeWebController: NSObject {
         return components.url ?? URL(fileURLWithPath: "/")
     }()
 
+    /// Script-tracker pages (Real mode only): http, so an http tracker is not blocked as mixed content. A creative keeps
+    /// the https base: its http scripts are blocked as an app's ATS / cleartext policy would block them.
+    nonisolated static let trackerBaseURL: URL = {
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = "ccinn-openrtb.invalid"
+        components.path = "/"
+        return components.url ?? URL(fileURLWithPath: "/")
+    }()
+
     struct Content: Equatable {
         /// The full document (see `HTMLDocumentBuilder`).
         var document: String
@@ -34,6 +44,8 @@ final class CreativeWebController: NSObject {
         var networkParentID: UUID?
         /// Source path for navigations: `bid 0.0 › adm`.
         var source: String
+        /// The document's URL (`loadHTMLString` base). The sandbox exempts only `CreativeWebController.baseURL`.
+        var baseURL: URL = CreativeWebController.baseURL
     }
 
     enum Event: Equatable {
@@ -151,7 +163,7 @@ final class CreativeWebController: NSObject {
             guard let self, token == self.loadToken, !Task.isCancelled, !self.tornDown else { return }
             for list in lists { userContent.add(list) }
             self.awaitingInitialLoad = true
-            self.initialNavigation = self.webView.loadHTMLString(content.document, baseURL: Self.baseURL)
+            self.initialNavigation = self.webView.loadHTMLString(content.document, baseURL: content.baseURL)
         }
     }
 
@@ -222,7 +234,7 @@ final class CreativeWebController: NSObject {
         case let .network(network):
             handle(network)
         case let .windowOpen(url):
-            navigationAttempt(NavigationFacts(url: url, isMainFrame: isMainFrame, targetsNewWindow: true, isAwaitingInitialLoad: false),
+            navigationAttempt(NavigationFacts(url: url, isMainFrame: isMainFrame, targetsNewWindow: true, isInitialDocument: false),
                               trigger: "window.open")
         case let .console(level, text):
             let mapped: RendererLogEntry.Level = switch level {
@@ -245,7 +257,11 @@ final class CreativeWebController: NSObject {
         case let .start(rid, url, kind):
             if ledger.start(rid: rid, url: url, kind: kind, blocked: content.blocksNetwork, record: record) == .overflow { logOverflow() }
         case let .end(rid, status, bytes, error):
-            if let id = ledger.end(rid: rid) { monitor.finishRendererLoad(id, status: status, error: error, responseBytes: bytes) }
+            let url = ledger.openURL(rid: rid)
+            if let id = ledger.end(rid: rid) {
+                let explained = error.map { Self.explain($0, url: url, page: content.baseURL) }
+                monitor.finishRendererLoad(id, status: status, error: explained, responseBytes: bytes)
+            }
         case let .timing(url, kind, status, bytes):
             switch ledger.timing(url: url, kind: kind, blocked: content.blocksNetwork, record: record) {
             case let .recorded(id): monitor.finishRendererLoad(id, status: status ?? 200, responseBytes: bytes)
@@ -255,6 +271,12 @@ final class CreativeWebController: NSObject {
         case .overflow:
             logOverflow()
         }
+    }
+
+    /// A failed http load from an https page was blocked as mixed content; say so (the page only sees "load error").
+    nonisolated static func explain(_ error: String, url: String?, page: URL) -> String {
+        guard page.scheme == "https", let url, URLText.scheme(url)?.lowercased() == "http" else { return error }
+        return error + " (http content in an https page is blocked as mixed content, as an app's ATS / cleartext policy would)"
     }
 
     private func logOverflow() {
@@ -300,10 +322,11 @@ final class CreativeWebController: NSObject {
 extension CreativeWebController: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        let facts = NavigationFacts(url: navigationAction.request.url?.absoluteString ?? "",
-                                    isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false,
+        let url = navigationAction.request.url?.absoluteString ?? ""
+        let facts = NavigationFacts(url: url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false,
                                     targetsNewWindow: navigationAction.targetFrame == nil,
-                                    isAwaitingInitialLoad: awaitingInitialLoad, currentURL: webView.url?.absoluteString)
+                                    isInitialDocument: awaitingInitialLoad && url == content?.baseURL.absoluteString,
+                                    currentURL: webView.url?.absoluteString)
         let decision = NavigationClassifier.decide(facts, lastGesture: lastGesture, now: Date())
         if decision == .allow {
             if facts.isMainFrame, awaitingInitialLoad { awaitingInitialLoad = false }
@@ -337,7 +360,7 @@ extension CreativeWebController: WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
         navigationAttempt(NavigationFacts(url: navigationAction.request.url?.absoluteString ?? "", isMainFrame: false, targetsNewWindow: true,
-                                          isAwaitingInitialLoad: false), trigger: "new window")
+                                          isInitialDocument: false), trigger: "new window")
         return nil
     }
 
