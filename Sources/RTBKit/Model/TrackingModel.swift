@@ -110,6 +110,10 @@ public struct MacroContext: Sendable, Hashable {
     public var lossReason: Int?
     public var minimumToWin: Double?
     public var custom: [String: String]
+    /// List-valued macros (VAST 4.1/4.2 §6.1 `Array<T>`, e.g. `[BLOCKEDADCATEGORIES]`, `[UNIVERSALADID]`, `[VASTVERSIONS]`), keyed
+    /// like `custom`. The expander percent-encodes each item on its own and joins them with literal commas
+    /// (`abc%2Fdef,y%3Dz`). An entry here wins over the same key in `custom`.
+    public var customLists: [String: [String]]
 
     // VAST
     public var errorCode: Int?
@@ -128,7 +132,8 @@ public struct MacroContext: Sendable, Hashable {
 
     public init(auctionID: String? = nil, bidID: String? = nil, impID: String? = nil, seatID: String? = nil, adID: String? = nil,
                 price: Double? = nil, encryptedPrice: String? = nil, currency: String? = nil, marketBidRatio: Double? = nil,
-                lossReason: Int? = nil, minimumToWin: Double? = nil, custom: [String: String] = [:], errorCode: Int? = nil,
+                lossReason: Int? = nil, minimumToWin: Double? = nil, custom: [String: String] = [:], customLists: [String: [String]] = [:],
+                errorCode: Int? = nil,
                 adPlayhead: Double? = nil, contentPlayhead: Double? = nil, assetURI: String? = nil, playerWidth: Int? = nil,
                 playerHeight: Int? = nil, reason: Int? = nil, timestamp: Date? = nil, cacheBuster: String? = nil, device: DeviceProfile? = nil) {
         self.auctionID = auctionID
@@ -143,6 +148,7 @@ public struct MacroContext: Sendable, Hashable {
         self.lossReason = lossReason
         self.minimumToWin = minimumToWin
         self.custom = custom
+        self.customLists = customLists
         self.errorCode = errorCode
         self.adPlayhead = adPlayhead
         self.contentPlayhead = contentPlayhead
