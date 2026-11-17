@@ -21,6 +21,11 @@ public enum JSONValue: Sendable, Hashable {
     }
 
     public static func parse(_ data: Data) throws -> JSONValue {
+        // JSONSerialization recurses per nesting level and overflows a 512 KB thread stack (Swift concurrency's
+        // cooperative pool) at roughly 500 nested objects, so hostile input is rejected before it gets there.
+        guard !exceedsNesting(data, limit: maxDepth) else {
+            throw ParseError(description: "JSON nested deeper than \(maxDepth) levels")
+        }
         let object: Any
         do {
             object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
@@ -31,6 +36,37 @@ public enum JSONValue: Sendable, Hashable {
     }
 
     private static let maxDepth = 128
+
+    /// Whether more than `limit` arrays/objects are open at once, ignoring brackets inside strings. One pass, no allocation.
+    private static func exceedsNesting(_ data: Data, limit: Int) -> Bool {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for byte in data {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: "\""):
+                inString = true
+            case UInt8(ascii: "{"), UInt8(ascii: "["):
+                depth += 1
+                if depth > limit { return true }
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                depth = max(0, depth - 1)
+            default:
+                break
+            }
+        }
+        return false
+    }
 
     private static func convert(_ object: Any, depth: Int) throws -> JSONValue {
         guard depth <= maxDepth else { throw ParseError(description: "JSON nested deeper than \(maxDepth) levels") }
