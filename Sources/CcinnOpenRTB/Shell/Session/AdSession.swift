@@ -91,8 +91,9 @@ final class AdSession: AdRenderingHost {
     private(set) var playback: [Int: PlaybackStatus] = [:]
     /// The pod ad playing most recently.
     private(set) var currentAdIndex = 0
-    /// Real-mode script trackers (Native `jstracker`, method 2) the renderer injects and reports with
-    /// `monitor.finishRendererLoad`.
+    /// Real-mode script trackers (Native `jstracker`, `eventtrackers` / AdCOM events with method 2) for the renderer to run
+    /// once each and report with `monitor.finishRendererLoad` (host requirement). Simulated mode records them and never
+    /// lists them; a new render starts an empty list.
     private(set) var scriptTrackers: [ScriptTracker] = []
     /// The Native video asset's VAST, resolved through `resolveVAST(_:)`.
     private(set) var nativeVideoVAST: ResolvedVAST?
@@ -816,13 +817,6 @@ struct RealModeConfirmation: Identifiable, Equatable, Sendable {
     let id = UUID()
     var bidLabel: String?
     var summary: TrackerHosts.Summary
-}
-
-/// A Real-mode script tracker for the renderer to inject.
-struct ScriptTracker: Identifiable, Equatable, Sendable {
-    var entryID: UUID
-    var request: TrackerRequest
-    var id: UUID { entryID }
 }
 
 /// One line of the renderer console, numbered in arrival order.

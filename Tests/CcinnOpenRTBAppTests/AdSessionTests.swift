@@ -522,6 +522,41 @@ struct AdSessionTests {
         #expect(harness.recorder.events.suffix(2) == [.companionView(adIndex: 0, companionIndex: 0), .video(.start, adIndex: 1)])
     }
 
+    @Test func scriptTrackersAreListedForTheRendererOnlyInRealModeAndOnlyForTheCurrentRender() async throws {
+        let recorder = KitRecorder()
+        var services = Fixtures.services(Fixtures.input([display]), recorder: recorder)
+        services.trackingRequests = { event, _, _, _, _, _ in
+            guard event == .rendered else { return [] }
+            return [TrackerRequest(category: .impression, trigger: "jstracker", source: "Native", template: "https://js.example/t.js",
+                                   url: "https://js.example/t.js", isScript: true)]
+        }
+        let transport = CountingTransport()
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let session = AdSession(services: services, monitor: monitor, clock: ManualSessionClock(), browser: RecordingBrowser(),
+                                opensClickThroughs: { false }, parseDebounce: .zero)
+        session.responseText = "response"
+        await session.parseNow()
+
+        session.render()
+        for _ in 0..<500 where session.phase != .ready { try await Task.sleep(for: .milliseconds(1)) }
+        session.rendererHost.report(.rendered)
+        #expect(session.scriptTrackers.isEmpty)
+        #expect(monitor.liveEntries.contains { $0.url == "https://js.example/t.js" })
+
+        session.requestRealMode()
+        session.confirmRealMode(try #require(session.realModeConfirmation))
+        session.render()
+        for _ in 0..<500 where session.phase != .ready { try await Task.sleep(for: .milliseconds(1)) }
+        let host: any AdRenderingHost = session.rendererHost
+        host.report(.rendered)
+        #expect(host.scriptTrackers.map(\.request.url) == ["https://js.example/t.js"])
+        #expect(host.scriptTrackers == session.scriptTrackers)
+
+        session.render()
+        #expect(host.scriptTrackers.isEmpty)
+        #expect(session.scriptTrackers.isEmpty)
+    }
+
     @Test func rendererLogIsKeptInOrderAndCapped() async {
         let harness = SessionHarness(Fixtures.input([display]))
         for index in 0..<(AdSession.consoleCapacity + 5) {

@@ -47,6 +47,11 @@ final class RendererHostProxy: AdRenderingHost {
         current?.rendererLog(entry)
     }
 
+    /// The session's Real-mode script trackers while this render is current (read through, so it stays observable).
+    var scriptTrackers: [ScriptTracker] {
+        current?.scriptTrackers ?? []
+    }
+
     func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
         guard let session = current else { return ResolvedVAST() }
         return await session.resolveVAST(source)
