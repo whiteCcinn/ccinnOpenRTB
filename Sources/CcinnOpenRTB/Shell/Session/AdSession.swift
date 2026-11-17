@@ -157,6 +157,12 @@ final class AdSession: AdRenderingHost {
         }
     }
 
+    /// Scrolls the mock feed by `delta` points (positive: content moves down, towards the top of the feed).
+    func scrollFeed(by delta: CGFloat) {
+        guard placement == .inFeed, delta.isFinite else { return }
+        feedOffset = feedGeometry.clamped(feedOffset - delta)
+    }
+
     /// What the renderer draws; `nil` unless an ad is on the device.
     var renderRequest: RenderRequest? {
         guard phase == .ready, let prepared else { return nil }
