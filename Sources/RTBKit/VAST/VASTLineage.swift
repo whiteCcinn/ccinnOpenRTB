@@ -84,7 +84,7 @@ struct VASTLayer: Sendable {
 
     /// `Wrapper Ad[1] id="w1"` / `InLine Ad[2] 'Title'`.
     var adLabel: String {
-        let position = "Ad[\(origin.ad + 1)]"
+        let position = "Ad[" + VASTLabel.ordinal(origin.ad) + "]"
         switch ad.body {
         case .wrapper:
             return "Wrapper " + position + (ad.id.map { " id=\"\($0)\"" } ?? "")

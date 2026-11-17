@@ -14,9 +14,12 @@ import Foundation
 /// | `.videoClick(i)` | ad i's ClickTracking, then a navigation to its ClickThrough (none when the device cannot open click-throughs) |
 /// | `.videoViewability(v, i)` | ad i's `Viewable` / `NotViewable` / `ViewUndetermined` |
 /// | `.companionView(i, c)` | the companion's `creativeView` Tracking |
-/// | `.companionClick(i, c)` | its CompanionClickTracking, then a navigation to CompanionClickThrough (none on CTV) |
+/// | `.companionClick(i, c)` | its CompanionClickTracking, then a navigation to CompanionClickThrough only for an image `StaticResource` companion (none on CTV); HTML, iframe and script companions open their own click-through |
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
+///
+/// Indices come from renderers and are never trusted: an `adIndex` or `companionIndex` outside the resolution (negative,
+/// `count`, `Int.max`, …) plans nothing.
 ///
 /// Resolution-time failures (`ResolvedVAST.adFailures`) are planned by `resolutionRequests` (VASTResolutionPlan.swift).
 ///
@@ -170,7 +173,9 @@ struct VASTPlanner {
         var requests = companion.clickTrackings.map { url in
             make(url, .click, "VAST companion click", adIndex, layer, element + "/CompanionClickTracking", context: adContext)
         }
-        if canNavigate, let clickThrough = companion.clickThrough {
+        // Exactly one navigation per click (decisions "Renderer contract rulings"): the plan navigates only for a companion
+        // the player draws as an image; HTML, iframe and script companions navigate themselves and the renderer reports it.
+        if canNavigate, companion.staticImageURL != nil, let clickThrough = companion.clickThrough {
             requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, layer, element + "/CompanionClickThrough",
                                  context: adContext))
         }
@@ -185,7 +190,7 @@ struct VASTPlanner {
     }
 
     private static func companionElement(_ companion: VASTCompanion, _ index: Int) -> String {
-        "Companion \(index + 1)" + (companion.id.map { " id=\"\($0)\"" } ?? "")
+        "Companion " + VASTLabel.ordinal(index) + (companion.id.map { " id=\"\($0)\"" } ?? "")
     }
 
     // MARK: Errors
@@ -277,7 +282,7 @@ struct VASTPlanner {
 
     private func make(_ template: String, _ category: TrackerCategory, _ trigger: String, _ adIndex: Int, _ layer: VASTLayer?,
                       _ element: String, context: MacroContext) -> TrackerRequest {
-        let documentParts = layer.map { [$0.documentLabel, $0.adLabel] } ?? ["VAST ad \(adIndex + 1)"]
+        let documentParts = layer.map { [$0.documentLabel, $0.adLabel] } ?? ["VAST ad " + VASTLabel.ordinal(adIndex)]
         return request(template, category, trigger, adIndex: adIndex, path: documentParts + [element], parentID: layer?.hop.requestID,
                        context: context)
     }
@@ -285,7 +290,7 @@ struct VASTPlanner {
     private func request(_ template: String, _ category: TrackerCategory, _ trigger: String, adIndex: Int?, path: [String], parentID: UUID?,
                          context: MacroContext) -> TrackerRequest {
         let expanded = MacroExpander.expand(template, context: context)
-        let podSuffix = vast.ads.count > 1 ? adIndex.map { " (ad \($0 + 1) of \(vast.ads.count))" } ?? "" : ""
+        let podSuffix = vast.ads.count > 1 ? adIndex.map { " (ad " + VASTLabel.ordinal($0) + " of \(vast.ads.count))" } ?? "" : ""
         let sourcePath = ([source] + path).filter { !$0.isEmpty }.joined(separator: " › ")
         return TrackerRequest(parentID: parentID, category: category, trigger: trigger + podSuffix, source: sourcePath, template: template,
                               url: expanded.url, replacedMacros: expanded.replaced, unknownMacros: expanded.unknown)
@@ -354,5 +359,14 @@ private struct VASTErrorSources {
             cursor = match + 1
             return (url: url, location: candidates[match].location)
         }
+    }
+}
+
+/// Labels for VAST requests and issues.
+enum VASTLabel {
+    /// The 1-based position of a 0-based index. Total: never overflows, even for an index nobody validated.
+    static func ordinal(_ index: Int) -> String {
+        let (next, overflow) = index.addingReportingOverflow(1)
+        return overflow ? String(index) : String(next)
     }
 }
