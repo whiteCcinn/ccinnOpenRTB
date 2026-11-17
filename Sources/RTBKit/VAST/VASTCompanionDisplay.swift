@@ -29,6 +29,12 @@ public extension VASTCompanion {
         return html ?? iframe
     }
 
+    /// The image URL when `displayResource` is a StaticResource, otherwise `nil`. A view of the same rule, not a second one.
+    var staticImageURL: String? {
+        guard case let .staticResource(url, _) = displayResource else { return nil }
+        return url
+    }
+
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic"]
 
     private static func isImage(url: String, creativeType: String?) -> Bool {

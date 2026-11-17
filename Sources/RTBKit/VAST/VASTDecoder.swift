@@ -103,7 +103,7 @@ struct VASTDecoder {
     private mutating func decodeAd(_ element: VASTXMLElement, at path: String) -> VASTAd? {
         checkChildren(of: element, at: path)
         let sequence = sequenceAttribute(of: element, feature: "Ad@sequence", at: path)
-        if element.attribute("adType") != nil { checkIntroduced("Ad@adType", at: path + "@adType") }
+        let adType = decodeAdType(of: element, at: path)
 
         let bodies = element.children.filter { $0.name == "InLine" || $0.name == "Wrapper" }
         guard let body = bodies.first else {
@@ -115,9 +115,23 @@ struct VASTDecoder {
         }
         let id = nonEmpty(element.attribute("id"))
         if body.name == "InLine" {
-            return VASTAd(id: id, sequence: sequence, body: .inline(decodeInline(body, at: path + "/InLine")))
+            return VASTAd(id: id, sequence: sequence, body: .inline(decodeInline(body, at: path + "/InLine")), adType: adType)
         }
-        return VASTAd(id: id, sequence: sequence, body: .wrapper(decodeWrapper(body, at: path + "/Wrapper")))
+        return VASTAd(id: id, sequence: sequence, body: .wrapper(decodeWrapper(body, at: path + "/Wrapper")), adType: adType)
+    }
+
+    /// VAST 4.1 §3.3.2 `adType`: `video`, `audio` or `hybrid` (absent: assumed `video`). Kept as written, trimmed.
+    private mutating func decodeAdType(of element: VASTXMLElement, at path: String) -> String? {
+        guard let raw = element.attribute("adType") else { return nil }
+        checkIntroduced("Ad@adType", at: path + "@adType")
+        guard let adType = nonEmpty(raw) else {
+            report(.warning, "vast.ad.adType.invalid", "adType is empty; it must be video, audio or hybrid (absent means video).", path + "@adType")
+            return nil
+        }
+        if !VASTSpecRules.adTypes.contains(adType) {
+            report(.warning, "vast.ad.adType.invalid", "adType=\"\(adType)\" must be video, audio or hybrid.", path + "@adType")
+        }
+        return adType
     }
 
     private mutating func sequenceAttribute(of element: VASTXMLElement, feature: String?, at path: String) -> Int? {
@@ -147,7 +161,8 @@ struct VASTDecoder {
         if adTitle == nil {
             report(.error, "vast.inline.adTitle.missing", "An InLine ad must have an <AdTitle>.", path + "/AdTitle")
         }
-        if let version, version >= .v4_1, nonEmpty(element.firstChild(named: "AdServingId")?.trimmedText) == nil {
+        let adServingID = nonEmpty(element.firstChild(named: "AdServingId")?.trimmedText)
+        if let version, version >= .v4_1, adServingID == nil {
             report(.warning, "vast.inline.adServingId.missing", "VAST \(version.rawValue) requires <AdServingId> in an InLine ad.",
                    path + "/AdServingId")
         }
@@ -167,7 +182,25 @@ struct VASTDecoder {
         return VASTInline(adSystem: adSystem, adTitle: adTitle, impressions: impressions, errors: errors, creatives: creatives,
                           viewableImpression: decodeViewableImpression(element.firstChild(named: "ViewableImpression"),
                                                                        at: path + "/ViewableImpression"),
-                          verifications: decodeAllVerifications(of: element, at: path))
+                          verifications: decodeAllVerifications(of: element, at: path), adServingID: adServingID,
+                          categories: decodeCategories(element.children(named: "Category"), at: path + "/Category"))
+    }
+
+    /// VAST 4.1 §3.4.5: "If category is used, the authority= attribute must be provided."
+    private mutating func decodeCategories(_ elements: [VASTXMLElement], at path: String) -> [VASTCategory] {
+        elements.enumerated().compactMap { index, element in
+            let categoryPath = path + "[\(index + 1)]"
+            guard let code = nonEmpty(element.trimmedText) else {
+                report(.warning, "vast.inline.category.empty", "<Category> has no category code; it is ignored.", categoryPath)
+                return nil
+            }
+            let authority = nonEmpty(element.attribute("authority"))
+            if authority == nil {
+                report(.warning, "vast.inline.category.authority.missing",
+                       "<Category> \(code) has no authority attribute; it is required whenever a category is given.", categoryPath + "@authority")
+            }
+            return VASTCategory(code: code, authority: authority)
+        }
     }
 
     // MARK: - Wrapper
@@ -250,8 +283,29 @@ struct VASTDecoder {
 
         return VASTCreative(id: nonEmpty(element.attribute("id")), adID: nonEmpty(element.attribute("adId")), sequence: sequence,
                             linear: linearElement.map { decodeLinear($0, at: path + "/Linear", context: context) },
-                            companions: decodeCompanions(companionAds, at: path + "/CompanionAds"),
-                            hasNonLinear: nonLinearAds != nil)
+                            companions: decodeCompanions(companionAds, at: path + "/CompanionAds", context: context),
+                            hasNonLinear: nonLinearAds != nil,
+                            universalAdIDs: decodeUniversalAdIDs(element.children(named: "UniversalAdId"), at: path + "/UniversalAdId"))
+    }
+
+    /// VAST 4.1 §3.7.1: the content is the source of truth; VAST 4.0's `idValue` attribute (a duplicate of it, removed in
+    /// 4.1) is used only when the content is empty; both default to "unknown". Several elements are allowed from VAST 4.2.
+    private mutating func decodeUniversalAdIDs(_ elements: [VASTXMLElement], at path: String) -> [VASTUniversalAdID] {
+        if elements.count > 1, let version, version < .v4_2 {
+            report(.info, "vast.element.newerVersion",
+                   "Several <UniversalAdId> elements in one creative were introduced in VAST 4.2, but the document declares \(version.rawValue).",
+                   path + "[2]")
+        }
+        return elements.enumerated().map { index, element in
+            let elementPath = elements.count > 1 ? path + "[\(index + 1)]" : path
+            let registry = nonEmpty(element.attribute("idRegistry"))
+            if registry == nil {
+                report(.warning, "vast.universalAdId.idRegistry.missing",
+                       "<UniversalAdId> must have an idRegistry attribute (use \"unknown\" when there is no registry).", elementPath + "@idRegistry")
+            }
+            return VASTUniversalAdID(registry: registry ?? "unknown",
+                                     value: nonEmpty(element.trimmedText) ?? nonEmpty(element.attribute("idValue")) ?? "unknown")
+        }
     }
 
     // MARK: - Linear
@@ -469,15 +523,16 @@ struct VASTDecoder {
 
     // MARK: - Companions
 
-    private mutating func decodeCompanions(_ element: VASTXMLElement?, at path: String) -> [VASTCompanion] {
+    private mutating func decodeCompanions(_ element: VASTXMLElement?, at path: String, context: Context) -> [VASTCompanion] {
         guard let element else { return [] }
         checkChildren(of: element, at: path)
         return element.children(named: "Companion").enumerated().map { index, companion in
-            decodeCompanion(companion, at: path + "/Companion[\(index + 1)]")
+            decodeCompanion(companion, at: path + "/Companion[\(index + 1)]", context: context)
         }
     }
 
-    private mutating func decodeCompanion(_ element: VASTXMLElement, at path: String) -> VASTCompanion {
+    /// A wrapper's companions carry only tracking (`creativeView`, CompanionClickTracking), so they need no resource.
+    private mutating func decodeCompanion(_ element: VASTXMLElement, at path: String, context: Context) -> VASTCompanion {
         checkChildren(of: element, at: path)
         checkIntroducedChildren(of: element, at: path)
 
@@ -507,7 +562,7 @@ struct VASTDecoder {
                 }
             }
         }
-        if resources.isEmpty {
+        if resources.isEmpty, context == .inline {
             report(.warning, "vast.companion.resource.missing", "<Companion> needs a StaticResource, IFrameResource or HTMLResource.", path)
         }
 

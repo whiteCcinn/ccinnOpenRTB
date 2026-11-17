@@ -119,6 +119,11 @@ enum VASTSpecRules {
     // MARK: - Media
 
     static let deliveryValues: Set<String> = ["progressive", "streaming"]
+
+    // MARK: - Ad
+
+    /// VAST 4.1 §3.3.2 `Ad@adType` values.
+    static let adTypes: Set<String> = ["video", "audio", "hybrid"]
 }
 
 public extension VASTEvent {

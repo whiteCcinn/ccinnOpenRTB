@@ -57,8 +57,19 @@ struct VASTPlanner {
     let context: MacroContext
     let source: String
 
-    /// `custom` key of `[PODSEQUENCE]` (VAST 4.1: "the value of the sequence attribute on the Ad that was played").
-    static let podSequenceMacro = "[PODSEQUENCE]"
+    /// `MacroContext.custom` keys of the ad-level VAST macros the plan fills (VAST 4.1 / 4.2, all "Contexts: All tracking
+    /// pixels"). `[ADCATEGORIES]` is not one of them: it is a VAST request macro, "List of desired ad categories" (§6.3).
+    enum Macro {
+        /// §6.7 `[PODSEQUENCE]`: "The value of the sequence attribute on the <Ad> that is currently playing".
+        static let podSequence = "[PODSEQUENCE]"
+        /// §6.7 `[ADSERVINGID]`: "The value of the <AdServingId> for the currently playing ad".
+        static let adServingID = "[ADSERVINGID]"
+        /// §6.3 `[UNIVERSALADID]`: "registryID idvalue - with a space separating registryID and value"; 4.2: "Multiple
+        /// UniversalAdIDs can be supported with a comma separating them".
+        static let universalAdID = "[UNIVERSALADID]"
+        /// §6.3 `[ADTYPE]`: "video, audio, or hybrid, as defined in the adType attribute of the VAST <Ad> element".
+        static let adType = "[ADTYPE]"
+    }
 
     /// `[REASON]` for `verificationNotExecuted`: 2 = verification not supported (the simulator never runs the scripts).
     static let verificationNotSupported = 2
@@ -68,7 +79,7 @@ struct VASTPlanner {
     func videoEvent(_ event: VASTEvent, adIndex: Int) -> [TrackerRequest] {
         guard let ad = ad(at: adIndex) else { return [] }
         let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
-        let adContext = adContext(ad)
+        let adContext = adContext(ad, lineage: lineage)
         var requests: [TrackerRequest] = []
 
         if event == .creativeView {
@@ -123,7 +134,7 @@ struct VASTPlanner {
     func videoClick(adIndex: Int) -> [TrackerRequest] {
         guard let ad = ad(at: adIndex) else { return [] }
         let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
-        let adContext = adContext(ad)
+        let adContext = adContext(ad, lineage: lineage)
         var requests = Self.attributed(ad.clickTrackings, lineage, \.linearClickTrackings).map { url, layer in
             make(url, .click, "VAST click", adIndex, layer, "VideoClicks/ClickTracking", context: adContext)
         }
@@ -147,7 +158,7 @@ struct VASTPlanner {
         case .undetermined: (element, part) = ("ViewUndetermined", { $0.viewUndetermined })
         }
         let urls = Self.attributed(part(ad.viewableImpression), lineage) { body in body.viewableImpression.map(part) ?? [] }
-        let adContext = adContext(ad)
+        let adContext = adContext(ad, lineage: lineage)
         return urls.map { url, layer in
             make(url, .viewability, "VAST " + element, adIndex, layer, "ViewableImpression/" + element, context: adContext)
         }
@@ -155,42 +166,74 @@ struct VASTPlanner {
 
     // MARK: Companions
 
+    /// The companion's `creativeView`, after the matching tracking companions of every wrapper above it (outermost first;
+    /// `VASTCompanionMatch`). Identical URLs fire once.
     func companionView(adIndex: Int, companionIndex: Int) -> [TrackerRequest] {
-        guard let (ad, companion) = companion(adIndex: adIndex, companionIndex: companionIndex) else { return [] }
-        let layer = VASTLineage(origin: ad.origin, chain: vast.chain)?.inlineLayer
-        let adContext = adContext(ad)
-        return companion.trackingEvents.filter { $0.event == .creativeView }.map { tracking in
-            make(tracking.url, .event, "VAST companion creativeView", adIndex, layer,
-                 Self.companionElement(companion, companionIndex) + "/creativeView", context: adContext)
+        guard let target = companionTarget(adIndex: adIndex, companionIndex: companionIndex) else { return [] }
+        let views = target.layered { companion in companion.trackingEvents.filter { $0.event == .creativeView }.map(\.url) }
+        return views.map { url, layer, element in
+            make(url, .event, "VAST companion creativeView", adIndex, layer, element + "/creativeView", context: target.context)
         }
     }
 
+    /// The CompanionClickTracking of the matching wrapper companions (outermost first) and of the companion, then the
+    /// navigation to its CompanionClickThrough, only when it is displayed from a StaticResource and the device can open it.
     func companionClick(adIndex: Int, companionIndex: Int) -> [TrackerRequest] {
-        guard let (ad, companion) = companion(adIndex: adIndex, companionIndex: companionIndex) else { return [] }
-        let layer = VASTLineage(origin: ad.origin, chain: vast.chain)?.inlineLayer
-        let element = Self.companionElement(companion, companionIndex)
-        let adContext = adContext(ad)
-        var requests = companion.clickTrackings.map { url in
-            make(url, .click, "VAST companion click", adIndex, layer, element + "/CompanionClickTracking", context: adContext)
+        guard let target = companionTarget(adIndex: adIndex, companionIndex: companionIndex) else { return [] }
+        var requests = target.layered(\.clickTrackings).map { url, layer, element in
+            make(url, .click, "VAST companion click", adIndex, layer, element + "/CompanionClickTracking", context: target.context)
         }
-        // Exactly one navigation per click (decisions "Renderer contract rulings"): the plan navigates only when the
-        // companion is displayed from a StaticResource; HTML and iframe companions navigate themselves (the renderer reports it).
+        // Exactly one navigation per click (decisions "Renderer contract rulings"): HTML and iframe companions navigate
+        // themselves, and the renderer reports it.
+        let companion = target.companion
         if canNavigate, case .staticResource = companion.displayResource, let clickThrough = companion.clickThrough {
-            requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, layer, element + "/CompanionClickThrough",
-                                 context: adContext))
+            requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, target.lineage?.inlineLayer,
+                                 target.element + "/CompanionClickThrough", context: target.context))
         }
         return requests
     }
 
-    private func companion(adIndex: Int, companionIndex: Int) -> (ResolvedVASTAd, VASTCompanion)? {
-        guard let ad = ad(at: adIndex) else { return nil }
-        let companions = ad.inline.creatives.flatMap(\.companions)
-        guard companions.indices.contains(companionIndex) else { return nil }
-        return (ad, companions[companionIndex])
+    /// A companion of a resolved ad, with what its requests need.
+    private struct CompanionTarget {
+        let companion: VASTCompanion
+        let lineage: VASTLineage?
+        /// `Companion 2 id="c"`.
+        let element: String
+        let context: MacroContext
+
+        /// `part` of every matching wrapper companion (outermost wrapper first), then of the companion itself, each URL with
+        /// its layer and element label; a URL already listed is dropped.
+        func layered(_ part: (VASTCompanion) -> [String]) -> [(url: String, layer: VASTLayer?, element: String)] {
+            var entries: [(url: String, layer: VASTLayer?, element: String)] = []
+            for layer in lineage?.layers.dropLast() ?? [] {
+                let candidates = layer.wrapperCompanions
+                for index in VASTCompanionMatch.wrapperCompanionIndices(for: companion, in: candidates) {
+                    entries += part(candidates[index]).map { (url: $0, layer: layer, element: VASTLabel.companion(candidates[index], index: index)) }
+                }
+            }
+            entries += part(companion).map { (url: $0, layer: lineage?.inlineLayer, element: element) }
+            var seen = Set<String>()
+            return entries.filter { seen.insert($0.url).inserted }
+        }
     }
 
-    private static func companionElement(_ companion: VASTCompanion, _ index: Int) -> String {
-        "Companion " + VASTLabel.ordinal(index) + (companion.id.map { " id=\"\($0)\"" } ?? "")
+    /// `companionIndex` indexes `ads[adIndex].inline.creatives.flatMap(\.companions)`; `nil` outside it.
+    private func companionTarget(adIndex: Int, companionIndex: Int) -> CompanionTarget? {
+        guard let ad = ad(at: adIndex), let (creative, companion) = Self.companion(at: companionIndex, in: ad.inline) else { return nil }
+        let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
+        return CompanionTarget(companion: companion, lineage: lineage, element: VASTLabel.companion(companion, index: companionIndex),
+                               context: adContext(ad, lineage: lineage, creative: creative))
+    }
+
+    /// The creative and companion at a flattened companion index. Total: any `index` outside the companions is `nil`.
+    private static func companion(at index: Int, in inline: VASTInline) -> (VASTCreative, VASTCompanion)? {
+        guard index >= 0 else { return nil }
+        var remaining = index
+        for creative in inline.creatives {
+            if remaining < creative.companions.count { return (creative, creative.companions[remaining]) }
+            remaining -= creative.companions.count
+        }
+        return nil
     }
 
     // MARK: Errors
@@ -214,7 +257,7 @@ struct VASTPlanner {
 
     private func adErrors(_ ad: ResolvedVASTAd, adIndex: Int, code: VASTErrorCode) -> [TrackerRequest] {
         let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
-        let errorContext = Self.withErrorCode(code, adContext(ad))
+        let errorContext = Self.withErrorCode(code, adContext(ad, lineage: lineage))
         return Self.attributed(ad.errors, lineage, \.errors).map { url, layer in
             make(url, .error, "VAST error \(code.rawValue)", adIndex, layer, "Error", context: errorContext)
         }
@@ -235,9 +278,42 @@ struct VASTPlanner {
 
     // MARK: Macro context
 
-    /// The host's context with what the plan knows about `ad`: its pod slot's `[PODSEQUENCE]`.
-    private func adContext(_ ad: ResolvedVASTAd) -> MacroContext {
-        Self.withPodSequence(ad.sequence, context)
+    /// The macro context of one ad's requests, or of one of its companions' (`companionIndex`); `nil` when an index is out
+    /// of range.
+    func macroContext(adIndex: Int, companionIndex: Int? = nil) -> MacroContext? {
+        if let companionIndex { return companionTarget(adIndex: adIndex, companionIndex: companionIndex)?.context }
+        guard let ad = ad(at: adIndex) else { return nil }
+        return adContext(ad, lineage: VASTLineage(origin: ad.origin, chain: vast.chain))
+    }
+
+    /// The host's context with what the plan knows about the ad that is playing (`Macro`). Values the document does not
+    /// provide are left out, so the expander reports them as unknown (`-1`). `creative` is the creative a request is about
+    /// (a companion's); by default, the played Linear's.
+    private func adContext(_ ad: ResolvedVASTAd, lineage: VASTLineage?, creative: VASTCreative? = nil) -> MacroContext {
+        var adContext = Self.withPodSequence(ad.sequence, context)
+        let values: [(key: String, value: String?)] = [
+            (Macro.adServingID, ad.inline.adServingID),
+            (Macro.universalAdID, Self.universalAdID(of: creative ?? ad.inline.playedCreative)),
+            (Macro.adType, Self.adType(of: lineage)),
+        ]
+        for (key, value) in values {
+            if let value { adContext.custom[key] = value }
+        }
+        return adContext
+    }
+
+    /// `registryID idvalue` per `UniversalAdId`, comma-separated (VAST 4.2 §6.3).
+    private static func universalAdID(of creative: VASTCreative?) -> String? {
+        guard let ids = creative?.universalAdIDs, !ids.isEmpty else { return nil }
+        return ids.map { $0.registry + " " + $0.value }.joined(separator: ",")
+    }
+
+    /// The InLine `<Ad>`'s `adType`; when absent, `video` for documents of VAST 4.1 and later (§3.3.2: "assumed to be video
+    /// if attribute is not present"), unknown before 4.1, which has no such attribute.
+    private static func adType(of lineage: VASTLineage?) -> String? {
+        guard let inlineLayer = lineage?.inlineLayer else { return nil }
+        if let adType = inlineLayer.ad.adType { return adType }
+        return VASTSpecVersion.parsingVersion(of: inlineLayer.hop.document?.version) >= .v4_1 ? "video" : nil
     }
 
     /// The `sequence` of the pod slot a chain of documents started in (the outermost ad that has one).
@@ -253,7 +329,7 @@ struct VASTPlanner {
     private static func withPodSequence(_ sequence: Int?, _ context: MacroContext) -> MacroContext {
         guard let sequence else { return context }
         var adContext = context
-        adContext.custom[podSequenceMacro] = String(sequence)
+        adContext.custom[Macro.podSequence] = String(sequence)
         return adContext
     }
 
@@ -359,14 +435,5 @@ private struct VASTErrorSources {
             cursor = match + 1
             return (url: url, location: candidates[match].location)
         }
-    }
-}
-
-/// Labels for VAST requests and issues.
-enum VASTLabel {
-    /// The 1-based position of a 0-based index. Total: never overflows, even for an index nobody validated.
-    static func ordinal(_ index: Int) -> String {
-        let (next, overflow) = index.addingReportingOverflow(1)
-        return overflow ? String(index) : String(next)
     }
 }

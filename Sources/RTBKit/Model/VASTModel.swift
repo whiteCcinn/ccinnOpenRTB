@@ -144,15 +144,32 @@ public struct VASTCreative: Sendable, Hashable {
     public var companions: [VASTCompanion]
     /// Present when the creative is NonLinear (rendered as an overlay note, not played).
     public var hasNonLinear: Bool
+    /// VAST 4.0+ `UniversalAdId` elements (one in 4.0 / 4.1, several from 4.2), in document order.
+    public var universalAdIDs: [VASTUniversalAdID]
 
     public init(id: String? = nil, adID: String? = nil, sequence: Int? = nil, linear: VASTLinear? = nil, companions: [VASTCompanion] = [],
-                hasNonLinear: Bool = false) {
+                hasNonLinear: Bool = false, universalAdIDs: [VASTUniversalAdID] = []) {
         self.id = id
         self.adID = adID
         self.sequence = sequence
         self.linear = linear
         self.companions = companions
         self.hasNonLinear = hasNonLinear
+        self.universalAdIDs = universalAdIDs
+    }
+}
+
+/// VAST 4.0+ `Creative/UniversalAdId` (VAST 4.1 / 4.2 §3.7.1): the creative's identifier in a registry such as Ad-ID.
+public struct VASTUniversalAdID: Sendable, Hashable {
+    /// `idRegistry`; "unknown" when absent (the spec's default).
+    public var registry: String
+    /// The element's content, which is the source of truth from VAST 4.1. Falls back to VAST 4.0's `idValue` attribute,
+    /// then to "unknown" (the spec's default).
+    public var value: String
+
+    public init(registry: String = "unknown", value: String = "unknown") {
+        self.registry = registry
+        self.value = value
     }
 }
 
@@ -193,9 +210,14 @@ public struct VASTInline: Sendable, Hashable {
     public var creatives: [VASTCreative]
     public var viewableImpression: VASTViewableImpression?
     public var verifications: [VASTVerification]
+    /// VAST 4.1+ `AdServingId` (§3.4.3): the ad server's pseudo-unique id for this ad, for `[ADSERVINGID]`.
+    public var adServingID: String?
+    /// VAST 4.0+ `Category` elements (§3.4.5): the ad content's categories.
+    public var categories: [VASTCategory]
 
     public init(adSystem: String? = nil, adTitle: String? = nil, impressions: [String] = [], errors: [String] = [],
-                creatives: [VASTCreative] = [], viewableImpression: VASTViewableImpression? = nil, verifications: [VASTVerification] = []) {
+                creatives: [VASTCreative] = [], viewableImpression: VASTViewableImpression? = nil, verifications: [VASTVerification] = [],
+                adServingID: String? = nil, categories: [VASTCategory] = []) {
         self.adSystem = adSystem
         self.adTitle = adTitle
         self.impressions = impressions
@@ -203,6 +225,21 @@ public struct VASTInline: Sendable, Hashable {
         self.creatives = creatives
         self.viewableImpression = viewableImpression
         self.verifications = verifications
+        self.adServingID = adServingID
+        self.categories = categories
+    }
+}
+
+/// VAST 4.0+ `InLine/Category` (VAST 4.1 / 4.2 §3.4.5): an ad content category code, and the list it comes from.
+public struct VASTCategory: Sendable, Hashable {
+    /// The category code or label (e.g. `232` in the IAB Ad Product Taxonomy).
+    public var code: String
+    /// `authority`: the URL of the organisation that maintains the list. Required whenever categories are given.
+    public var authority: String?
+
+    public init(code: String, authority: String? = nil) {
+        self.code = code
+        self.authority = authority
     }
 }
 
@@ -243,11 +280,15 @@ public struct VASTAd: Sendable, Hashable {
     /// Position in an ad pod; `nil` = stand-alone / buffet.
     public var sequence: Int?
     public var body: Body
+    /// VAST 4.1+ `adType` attribute (§3.3.2): `video`, `audio` or `hybrid`, as written; `nil` when absent (the spec then
+    /// assumes `video`).
+    public var adType: String?
 
-    public init(id: String? = nil, sequence: Int? = nil, body: Body) {
+    public init(id: String? = nil, sequence: Int? = nil, body: Body, adType: String? = nil) {
         self.id = id
         self.sequence = sequence
         self.body = body
+        self.adType = adType
     }
 }
 

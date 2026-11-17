@@ -90,6 +90,7 @@ private struct VASTResolution {
             chain[0].document = document
             // Resolve first, then finish: `finish(await …)` would load `self` (and its chain) before the call mutates it.
             let outcome = await resolveDocument(document, hop: 0, trail: Trail(), policy: .player)
+            if case let .resolved(ads) = outcome { reportUnmatchedWrapperCompanions(ads) }
             return finish(outcome)
         }
     }
@@ -265,6 +266,32 @@ private struct VASTResolution {
             inner.wrapperCount += 1
             let policy = Policy(allowsMultipleAds: wrapper.allowMultipleAds, followsWrappers: wrapper.followAdditionalWrappers)
             return await resolveDocument(document, hop: hop, trail: inner, policy: policy)
+        }
+    }
+
+    // MARK: Wrapper companions
+
+    /// Wrapper companion tracking that matches no InLine companion (`VASTCompanionMatch`) is never fired: report each
+    /// wrapper layer and InLine companion it concerns, once.
+    private mutating func reportUnmatchedWrapperCompanions(_ ads: [ResolvedVASTAd]) {
+        var reported = Set<String>()
+        for ad in ads {
+            guard let lineage = VASTLineage(origin: ad.origin, chain: chain) else { continue }
+            let companions = ad.inline.creatives.flatMap(\.companions)
+            for layer in lineage.layers.dropLast() {
+                let candidates = layer.wrapperCompanions
+                guard !candidates.isEmpty else { continue }
+                for (index, companion) in companions.enumerated()
+                    where VASTCompanionMatch.wrapperCompanionIndices(for: companion, in: candidates).isEmpty {
+                    let path = Self.path(hop: layer.origin.hop, "VAST/Ad[" + VASTLabel.ordinal(layer.origin.ad) + "]/Wrapper/Creatives")
+                    let message = "None of the wrapper's \(candidates.count) tracking companions matches the id or size of the InLine "
+                        + VASTLabel.companion(companion, index: index, withSize: true)
+                        + ", so their creativeView and CompanionClickTracking are not fired when it is shown or clicked."
+                    if reported.insert(path + message).inserted {
+                        report(.warning, "vast.wrapper.companion.unmatched", message, path)
+                    }
+                }
+            }
         }
     }
 

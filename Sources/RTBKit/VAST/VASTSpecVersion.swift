@@ -30,6 +30,17 @@ public enum VASTSpecVersion: String, Sendable, Hashable, Comparable, CaseIterabl
         return .unsupported(closest: closest(major: major, minor: minor))
     }
 
+    /// The version a document is parsed as: the declared one, else its closest known version, else (missing or not a
+    /// version number) the latest, as the decoder does.
+    static func parsingVersion(of declared: String?) -> VASTSpecVersion {
+        guard let declared else { return .v4_2 }
+        switch interpret(declared) {
+        case let .supported(version): return version
+        case let .unsupported(closest): return closest
+        case .invalid: return .v4_2
+        }
+    }
+
     public static func < (lhs: VASTSpecVersion, rhs: VASTSpecVersion) -> Bool {
         let order = allCases
         return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)

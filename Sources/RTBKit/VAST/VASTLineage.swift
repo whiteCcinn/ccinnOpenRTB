@@ -56,9 +56,14 @@ extension VASTAd.Body {
 }
 
 extension VASTInline {
-    /// The Linear a player plays: the first creative that has one (an InLine ad should carry a single Linear).
+    /// The creative a player plays: the first one with a Linear (an InLine ad should carry a single Linear).
+    var playedCreative: VASTCreative? {
+        creatives.first { $0.linear != nil }
+    }
+
+    /// The Linear of `playedCreative`.
     var playedLinear: VASTLinear? {
-        creatives.lazy.compactMap(\.linear).first
+        playedCreative?.linear
     }
 }
 
@@ -91,6 +96,51 @@ struct VASTLayer: Sendable {
         case let .inline(inline):
             return "InLine " + position + (inline.adTitle.map { " '\($0)'" } ?? ad.id.map { " id=\"\($0)\"" } ?? "")
         }
+    }
+}
+
+extension VASTLayer {
+    /// A wrapper layer's tracking-only companions (`Wrapper/Creatives/Creative/CompanionAds`); empty for the InLine layer.
+    var wrapperCompanions: [VASTCompanion] {
+        guard case let .wrapper(wrapper) = ad.body else { return [] }
+        return wrapper.creatives.flatMap(\.companions)
+    }
+}
+
+/// Which of a wrapper layer's companions carry tracking for an InLine companion. VAST says wrapper creatives may carry
+/// companion tracking but not how it maps to the InLine companions, so the simulator matches (decision of the lead):
+/// 1. by `id`;
+/// 2. else by width × height;
+/// 3. else the layer's only companion;
+/// 4. else none (the resolver warns about it).
+enum VASTCompanionMatch {
+    /// Indices into `candidates`, in document order.
+    static func wrapperCompanionIndices(for companion: VASTCompanion, in candidates: [VASTCompanion]) -> [Int] {
+        if let id = companion.id {
+            let byID = candidates.indices.filter { candidates[$0].id == id }
+            if !byID.isEmpty { return byID }
+        }
+        if let width = companion.width, let height = companion.height {
+            let bySize = candidates.indices.filter { candidates[$0].width == width && candidates[$0].height == height }
+            if !bySize.isEmpty { return bySize }
+        }
+        return candidates.count == 1 ? [0] : []
+    }
+}
+
+/// Labels for VAST requests and issues.
+enum VASTLabel {
+    /// The 1-based position of a 0-based index. Total: never overflows, even for an index nobody validated.
+    static func ordinal(_ index: Int) -> String {
+        let (next, overflow) = index.addingReportingOverflow(1)
+        return overflow ? String(index) : String(next)
+    }
+
+    /// `Companion 2 id="c1"`, with ` 300×250` when `withSize` and both dimensions are known.
+    static func companion(_ companion: VASTCompanion, index: Int, withSize: Bool = false) -> String {
+        var label = "Companion " + ordinal(index) + (companion.id.map { " id=\"\($0)\"" } ?? "")
+        if withSize, let width = companion.width, let height = companion.height { label += " \(width)×\(height)" }
+        return label
     }
 }
 
