@@ -248,4 +248,12 @@ struct NativeValidationTests {
         #expect(try #require(ad).assets.count == 1)
         #expect(issues.map(\.code) == ["native.type.mismatch"])
     }
+
+    @Test func trackerURLsMustBeAbsoluteHTTP() {
+        // Trackers are fired by the SDK as HTTP requests (macros allowed); `link.url` may be a deep link, so it is not checked.
+        let json = #"{"ver":"1.2","assets":[{"id":1,"title":{"text":"A"},"link":{"url":"https://a.example","clicktrackers":["//t.example/c"]}}],"link":{"url":"myapp://open","clicktrackers":["https://t.example/c?p=${AUCTION_PRICE}","javascript:alert(1)"]},"imptrackers":["/relative"],"eventtrackers":[{"event":1,"method":1,"url":"ftp://t.example/i"},{"event":2,"method":2,"url":"https://t.example/v.js"}]}"#
+        let invalid = NativeParser.parse(json).issues.filter { $0.code == "native.url.invalid" }
+        #expect(invalid.map(\.path) == ["/imptrackers/0", "/eventtrackers/0/url", "/link/clicktrackers/1", "/assets/0/link/clicktrackers/0"])
+        #expect(invalid.allSatisfy { $0.severity == .warning })
+    }
 }

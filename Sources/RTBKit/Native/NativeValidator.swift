@@ -50,6 +50,13 @@ enum NativeValidator {
             }
         }
 
+        // Trackers are HTTP requests the SDK makes (macros allowed). `link.url` may be a deep link and is not checked.
+        for item in clientSideURLs(decoded) where item.isTracker {
+            if !URLRules.isAbsoluteHTTPURL(item.url.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                log.warning("native.url.invalid", "\"\(item.url.prefix(120))\" is not an absolute http(s) URL.", at: item.pointer)
+            }
+        }
+
         if decoded.dialect == .native { validateVersion(decoded, log: &log) }
     }
 

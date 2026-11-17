@@ -5,6 +5,8 @@ struct OpenRTB2Decoder {
     /// Bid fields first defined by OpenRTB 2.6 / 2.5: their presence proves the version.
     static let fieldsIntroducedIn26 = ["mtype", "slotinpod", "dur", "cattax", "langb", "apis"]
     static let fieldsIntroducedIn25 = ["burl", "lurl"]
+    /// OpenRTB 3.0 Bid fields with no 2.x meaning: a 3.0 response pasted without its `openrtb` envelope.
+    static let fieldsOfOpenRTB3 = ["item", "macro", "media", "purl"]
 
     let request: BidRequestInfo?
     var log = IssueLog()
@@ -60,6 +62,11 @@ struct OpenRTB2Decoder {
 
     private mutating func decodeBid(_ bid: JSONObjectReader, id: String, seat: String?, currency: String) -> AdCandidate {
         let pointer = bid.pointer
+        for field in Self.fieldsOfOpenRTB3 where bid.has(field) {
+            log.warning("openrtb.bid.field.v3",
+                        "`\(field)` is an OpenRTB 3.0 Bid field, ignored here: a 3.0 response is wrapped as {\"openrtb\": {\"ver\": \"3.0\", \"domainspec\": \"adcom\", \"response\": …}}, so this one is read as 2.x.",
+                        at: pointer.appending(field))
+        }
         let bidID = bid.nonBlankString("id", log: &log)
         if bidID == nil { log.error("openrtb.bid.id.missing", "`bid.id` is required.", at: pointer.appending("id")) }
         let impID = bid.nonBlankString("impid", log: &log)

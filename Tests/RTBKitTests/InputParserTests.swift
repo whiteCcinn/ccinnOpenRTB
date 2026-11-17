@@ -291,6 +291,17 @@ struct OpenRTB2Tests {
         #expect(input.issues.filter { $0.code == "openrtb.url.invalid" }.map(\.path) == ["/seatbid/0/bid/0/nurl"])
     }
 
+    @Test func openRTB3BidFieldsWithoutTheEnvelopeAreFlagged() throws {
+        // A 3.0 response pasted without its `openrtb` envelope is read as 2.x; each 3.0-only Bid field says why it is ignored.
+        let json = #"{"id":"r","seatbid":[{"bid":[{"id":"b","item":"1","price":1,"purl":"https://t.example/w","media":{"ad":{"id":"a"}},"macro":[]}]}]}"#
+        let input = InputParser.parse(json)
+        #expect(input.kind == .bidResponse(.v2("2.x")))
+        let flagged = input.issues.filter { $0.code == "openrtb.bid.field.v3" }
+        #expect(flagged.map(\.path) == ["/seatbid/0/bid/0/item", "/seatbid/0/bid/0/macro", "/seatbid/0/bid/0/media", "/seatbid/0/bid/0/purl"])
+        #expect(flagged.allSatisfy { $0.severity == .warning && $0.message.contains("openrtb") })
+        #expect(issue("openrtb.bid.field.v3", in: InputParser.parse(OpenRTBFixtures.response26Video())) == nil)
+    }
+
     @Test func dataURLsAreDecodedLocallyAndReportedAsInfo() throws {
         // A `data:` URL is a valid URL the simulator decodes offline; production exchanges and devices expect http(s).
         let input = InputParser.parse(#"{"id":"r","seatbid":[{"bid":[{"id":"b","impid":"1","price":1,"nurl":"data:text/html;base64,PHA+YWQ8L3A+"}]}]}"#)
