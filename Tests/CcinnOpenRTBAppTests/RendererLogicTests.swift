@@ -66,7 +66,7 @@ struct MRAIDEnvironmentTests {
         #expect(environment.placementType == "inline")
         #expect(environment.screenSize == MRAIDSize(width: 390, height: 844))
         #expect(environment.maxSize == MRAIDSize(width: 390, height: 763))
-        #expect(environment.defaultPosition == MRAIDRect(x: 35, y: 47, width: 320, height: 50))
+        #expect(environment.defaultPosition == MRAIDRect(x: 35, y: 0, width: 320, height: 50), "relative to the max-size area")
         #expect(environment.exposedPercentage == 45.6)
         #expect(environment.disableScroll)
         #expect(environment.supports["inlineVideo"] == true)
@@ -77,7 +77,7 @@ struct MRAIDEnvironmentTests {
         let request = RendererFixtures.request(.html("x"), placement: .rewarded, adSize: CGSize(width: 320, height: 480))
         let environment = MRAIDEnvironment(request: request)
         #expect(environment.placementType == "interstitial")
-        #expect(environment.defaultPosition == MRAIDRect(x: 35, y: 189, width: 320, height: 480))
+        #expect(environment.defaultPosition == MRAIDRect(x: 35, y: 142, width: 320, height: 480))
         #expect(!environment.disableScroll)
     }
 
@@ -125,8 +125,11 @@ struct BridgeMessageTests {
     }
 
     @Test func decodesTheOtherChannels() {
-        #expect(BridgeMessage.decode(["channel": "net", "url": "https://t.example/p", "kind": "fetch"]) == .network(url: "https://t.example/p", kind: "fetch"))
-        #expect(BridgeMessage.decode(["channel": "state", "state": "expanded", "customClose": true]) == .mraidState("expanded", customClose: true))
+        #expect(BridgeMessage.decode(["channel": "net", "phase": "start", "rid": "a:1", "url": "https://t.example/p", "kind": "fetch"])
+            == .network(.start(rid: "a:1", url: "https://t.example/p", kind: "fetch")))
+        #expect(BridgeMessage.decode(["channel": "state", "state": "expanded", "customClose": true]) == .mraidState("expanded", customClose: true, size: nil))
+        #expect(BridgeMessage.decode(["channel": "state", "state": "resized", "width": 300, "height": 250])
+            == .mraidState("resized", customClose: false, size: MRAIDSize(width: 300, height: 250)))
         #expect(BridgeMessage.decode(["channel": "gesture"]) == .gesture)
         #expect(BridgeMessage.decode(["channel": "console", "level": "error", "message": "boom"]) == .console(level: "error", message: "boom"))
     }
@@ -141,7 +144,10 @@ struct BridgeMessageTests {
 
     @Test func capsHugeStrings() {
         let huge = String(repeating: "a", count: BridgeMessage.maxStringLength * 2)
-        guard case let .network(url, _) = BridgeMessage.decode(["channel": "net", "url": huge]) else { Issue.record("not decoded"); return }
+        guard case let .network(.start(_, url, _)) = BridgeMessage.decode(["channel": "net", "phase": "start", "rid": "a:1", "url": huge]) else {
+            Issue.record("not decoded")
+            return
+        }
         #expect(url.count == BridgeMessage.maxStringLength + 1)
     }
 }

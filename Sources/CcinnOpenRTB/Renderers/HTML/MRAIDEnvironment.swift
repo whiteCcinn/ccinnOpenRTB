@@ -21,6 +21,7 @@ struct MRAIDEnvironment: Equatable, Codable, Sendable {
     var placementType: String
     var screenSize: MRAIDSize
     var maxSize: MRAIDSize
+    /// Relative to the max-size area: an inline ad at its top, centred horizontally; an interstitial centred.
     var defaultPosition: MRAIDRect
     /// 0…100.
     var exposedPercentage: Double
@@ -46,8 +47,9 @@ struct MRAIDEnvironment: Equatable, Codable, Sendable {
                                 height: max(0, screen.height - insets.top - insets.bottom))
         let adWidth = Self.clean(request.adSize.width)
         let adHeight = Self.clean(request.adSize.height)
-        let x = insets.leading + max(0, (maxSize.width - adWidth) / 2)
-        let y = interstitial ? insets.top + max(0, (maxSize.height - adHeight) / 2) : insets.top
+        // MRAID positions are offsets from the top-left corner of the getMaxSize() area (the safe area).
+        let x = max(0, (maxSize.width - adWidth) / 2)
+        let y = interstitial ? max(0, (maxSize.height - adHeight) / 2) : 0
         placementType = interstitial ? "interstitial" : "inline"
         screenSize = screen
         self.maxSize = maxSize
