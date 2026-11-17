@@ -14,7 +14,7 @@ import Foundation
 /// | `.videoClick(i)` | ad i's ClickTracking, then a navigation to its ClickThrough (none when the device cannot open click-throughs) |
 /// | `.videoViewability(v, i)` | ad i's `Viewable` / `NotViewable` / `ViewUndetermined` |
 /// | `.companionView(i, c)` | the companion's `creativeView` Tracking |
-/// | `.companionClick(i, c)` | its CompanionClickTracking, then a navigation to CompanionClickThrough only for an image `StaticResource` companion (none on CTV); HTML, iframe and script companions open their own click-through |
+/// | `.companionClick(i, c)` | its CompanionClickTracking, then a navigation to CompanionClickThrough only when its `displayResource` is a `StaticResource` (none on CTV); HTML and iframe companions open their own click-through |
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
@@ -173,9 +173,9 @@ struct VASTPlanner {
         var requests = companion.clickTrackings.map { url in
             make(url, .click, "VAST companion click", adIndex, layer, element + "/CompanionClickTracking", context: adContext)
         }
-        // Exactly one navigation per click (decisions "Renderer contract rulings"): the plan navigates only for a companion
-        // the player draws as an image; HTML, iframe and script companions navigate themselves and the renderer reports it.
-        if canNavigate, companion.staticImageURL != nil, let clickThrough = companion.clickThrough {
+        // Exactly one navigation per click (decisions "Renderer contract rulings"): the plan navigates only when the
+        // companion is displayed from a StaticResource; HTML and iframe companions navigate themselves (the renderer reports it).
+        if canNavigate, case .staticResource = companion.displayResource, let clickThrough = companion.clickThrough {
             requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, layer, element + "/CompanionClickThrough",
                                  context: adContext))
         }

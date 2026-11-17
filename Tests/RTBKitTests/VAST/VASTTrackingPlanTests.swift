@@ -438,40 +438,108 @@ struct VASTTrackingPlanTests {
         }
     }
 
-    @Test func staticImageURLFollowsTheImageRule() {
-        func companion(_ resources: [VASTCompanion.Resource]) -> VASTCompanion { VASTCompanion(resources: resources) }
-        #expect(companion([.staticResource(url: "https://cdn.example/a.png", creativeType: "image/png")]).staticImageURL == "https://cdn.example/a.png")
-        #expect(companion([.staticResource(url: "https://cdn.example/a", creativeType: " IMAGE/JPEG ")]).staticImageURL == "https://cdn.example/a")
-        #expect(companion([.staticResource(url: "https://cdn.example/a.webp#x", creativeType: nil)]).staticImageURL == "https://cdn.example/a.webp#x")
-        #expect(companion([.html("<b/>"), .iframe(url: "https://cdn.example/f"),
-                           .staticResource(url: "https://cdn.example/b.gif", creativeType: "image/gif")]).staticImageURL == "https://cdn.example/b.gif")
-        #expect(companion([.staticResource(url: "https://cdn.example/a.js", creativeType: "application/javascript")]).staticImageURL == nil)
-        #expect(companion([.staticResource(url: "https://cdn.example/a.", creativeType: nil)]).staticImageURL == nil)
-        #expect(companion([.staticResource(url: "  ", creativeType: "image/png")]).staticImageURL == nil)
-        #expect(companion([.html("<b/>"), .iframe(url: "https://cdn.example/f")]).staticImageURL == nil)
-        #expect(companion([]).staticImageURL == nil)
+    @Test func mixedCompanionsFollowTheDisplayPreference() async throws {
+        let vast = await resolved(Self.companionVAST([
+            // HTML first in the document, but an image StaticResource is preferred: navigates.
+            #"<HTMLResource><![CDATA[<b>x</b>]]></HTMLResource><StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
+            // Iframe before HTML: HTML is preferred, no navigation.
+            #"<IFrameResource>https://cdn.example/f.html</IFrameResource><HTMLResource><![CDATA[<b>x</b>]]></HTMLResource>"#,
+            // A script StaticResource does not render; the iframe does: no navigation.
+            #"<StaticResource creativeType="application/x-javascript">https://cdn.example/c.js</StaticResource><IFrameResource>https://cdn.example/f.html</IFrameResource>"#,
+        ]))
+        let companions = try #require(vast.ads.first).inline.creatives.flatMap(\.companions)
+        #expect(companions.map(\.displayResource) == [
+            .staticResource(url: "https://cdn.example/c.png", creativeType: "image/png"),
+            .html("<b>x</b>"),
+            .iframe(url: "https://cdn.example/f.html"),
+        ])
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 0), vast).map(\.category) == [.click, .navigation])
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 1), vast).map(\.category) == [.click])
+        #expect(plan(.companionClick(adIndex: 0, companionIndex: 2), vast).map(\.category) == [.click])
+    }
+
+    @Test func ctvNeverNavigatesFromACompanion() async throws {
+        var tvContext = Self.context
+        tvContext.device = try ctv()
+        let vast = await resolved(Self.companionVAST([
+            #"<StaticResource creativeType="image/png">https://cdn.example/c.png</StaticResource>"#,
+            "<HTMLResource><![CDATA[<b>x</b>]]></HTMLResource>",
+            "<IFrameResource>https://cdn.example/f.html</IFrameResource>",
+        ]))
+        for index in 0..<3 {
+            #expect(plan(.companionClick(adIndex: 0, companionIndex: index), vast, context: tvContext).map(\.template)
+                == ["https://tracker.example/c\(index + 1)/click"])
+        }
+    }
+
+    @Test func displayResourcePreference() {
+        typealias R = VASTCompanion.Resource
+        func display(_ resources: [R]) -> R? { VASTCompanion(resources: resources).displayResource }
+        let png = R.staticResource(url: "https://cdn.example/a.png", creativeType: "image/png")
+        let html = R.html("<b/>")
+        let iframe = R.iframe(url: "https://cdn.example/f")
+        let script = R.staticResource(url: "https://cdn.example/a.js", creativeType: "application/x-javascript")
+        #expect(display([png]) == png)
+        #expect(display([html, iframe, png]) == png)
+        #expect(display([iframe, html]) == html)
+        #expect(display([iframe]) == iframe)
+        #expect(display([script, iframe]) == iframe)
+        #expect(display([script]) == nil)
+        #expect(display([]) == nil)
+        // Image detection: the type wins; without one, the extension decides.
+        let typed = R.staticResource(url: "https://cdn.example/a", creativeType: " IMAGE/JPEG ")
+        #expect(display([typed]) == typed)
+        let untyped = R.staticResource(url: "https://cdn.example/a.webp?x=1#y", creativeType: nil)
+        #expect(display([untyped]) == untyped)
+        #expect(display([.staticResource(url: "https://cdn.example/a.png", creativeType: "text/html")]) == nil)
+        #expect(display([.staticResource(url: "https://cdn.example/a.", creativeType: nil)]) == nil)
+        #expect(display([.staticResource(url: "https://cdn.example/a", creativeType: nil)]) == nil)
+        // Blank resources never render.
+        #expect(display([.staticResource(url: "  ", creativeType: "image/png"), .html(" \n"), .iframe(url: "")]) == nil)
+        #expect(display([.html(" "), html]) == html)
     }
 
     // MARK: Untrusted indices
 
-    /// Renderers send indices the plan does not control: anything outside the resolution plans nothing, and never traps.
+    /// Every event that names an ad, with every case of its payload.
+    private static func perAdEvents(adIndex: Int, companionIndex: Int) -> [AdLifecycleEvent] {
+        let videoEvents: [VASTEvent] = [
+            .creativeView, .start, .firstQuartile, .midpoint, .thirdQuartile, .complete, .mute, .unmute, .pause, .resume, .rewind, .skip,
+            .playerExpand, .playerCollapse, .fullscreen, .exitFullscreen, .closeLinear, .close, .acceptInvitation, .acceptInvitationLinear,
+            .loaded, .notUsed, .otherAdInteraction, .interactiveStart, .timeSpentViewing, .progress(.seconds(5)), .progress(.percent(50)),
+            .other("verificationNotExecuted"),
+        ]
+        let viewability: [VideoViewability] = [.viewable, .notViewable, .undetermined]
+        return videoEvents.map { .video($0, adIndex: adIndex) }
+            + [.videoClick(adIndex: adIndex)]
+            + viewability.map { .videoViewability($0, adIndex: adIndex) }
+            + [.companionView(adIndex: adIndex, companionIndex: companionIndex), .companionClick(adIndex: adIndex, companionIndex: companionIndex)]
+            + VASTErrorCode.allCases.map { .error($0, adIndex: adIndex) }
+    }
+
+    /// Renderers send indices the plan does not control: an `adIndex` or `companionIndex` of -1, `count`, `Int.max` or
+    /// `Int.min` plans nothing for every per-ad event, and never traps.
     @Test func outOfRangeIndicesPlanNothing() async throws {
         let single = await resolved(VASTSamples.inline42Verification)
         let pod = await resolved(VASTSamples.pod41)
+        // The valid indices do plan requests, so the empty results below come from the indices alone.
+        for event: AdLifecycleEvent in [.video(.creativeView, adIndex: 0), .videoClick(adIndex: 0), .videoViewability(.viewable, adIndex: 0),
+                                        .companionView(adIndex: 0, companionIndex: 1), .companionClick(adIndex: 0, companionIndex: 1),
+                                        .error(.fileNotFound, adIndex: 0)] {
+            #expect(!plan(event, single).isEmpty, "\(event)")
+        }
+
+        let companionCount = try #require(single.ads.first).inline.creatives.flatMap(\.companions).count
+        #expect(companionCount == 2)
         for resolution in [single, pod, ResolvedVAST()] {
-            for index in [-1, resolution.ads.count, Int.max, Int.min] {
-                let events: [AdLifecycleEvent] = [
-                    .video(.creativeView, adIndex: index), .video(.start, adIndex: index), .video(.progress(.percent(50)), adIndex: index),
-                    .videoClick(adIndex: index), .videoViewability(.viewable, adIndex: index), .companionView(adIndex: index, companionIndex: 0),
-                    .companionClick(adIndex: index, companionIndex: 0), .error(.fileNotFound, adIndex: index),
-                ]
-                for event in events {
-                    #expect(plan(event, resolution).isEmpty, "\(event)")
+            for adIndex in [-1, resolution.ads.count, Int.max, Int.min] {
+                for companionIndex in [0, -1, companionCount, Int.max, Int.min] {
+                    for event in Self.perAdEvents(adIndex: adIndex, companionIndex: companionIndex) {
+                        #expect(plan(event, resolution).isEmpty, "\(event)")
+                    }
                 }
             }
         }
-        let companionCount = try #require(single.ads.first).inline.creatives.flatMap(\.companions).count
-        #expect(companionCount == 2)
         for companionIndex in [-1, companionCount, Int.max, Int.min] {
             #expect(plan(.companionView(adIndex: 0, companionIndex: companionIndex), single).isEmpty)
             #expect(plan(.companionClick(adIndex: 0, companionIndex: companionIndex), single).isEmpty)
