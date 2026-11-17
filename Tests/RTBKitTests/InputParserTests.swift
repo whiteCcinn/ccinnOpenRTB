@@ -291,6 +291,18 @@ struct OpenRTB2Tests {
         #expect(input.issues.filter { $0.code == "openrtb.url.invalid" }.map(\.path) == ["/seatbid/0/bid/0/nurl"])
     }
 
+    @Test func dataURLsAreDecodedLocallyAndReportedAsInfo() throws {
+        // A `data:` URL is a valid URL the simulator decodes offline; production exchanges and devices expect http(s).
+        let input = InputParser.parse(#"{"id":"r","seatbid":[{"bid":[{"id":"b","impid":"1","price":1,"nurl":"data:text/html;base64,PHA+YWQ8L3A+"}]}]}"#)
+        let found = try #require(issue("openrtb.url.data", in: input))
+        #expect(found.severity == .info)
+        #expect(found.path == "/seatbid/0/bid/0/nurl")
+        #expect(issue("openrtb.url.invalid", in: input) == nil)
+        let curl = InputParser.parse(OpenRTBFixtures.spec30(display: #"{"curl":"data:text/html;base64,PHA+YWQ8L3A+"}"#))
+        #expect(issue("openrtb.url.data", in: curl)?.path == "/openrtb/response/seatbid/0/bid/0/media/ad/display/curl")
+        #expect(!curl.issues.contains { $0.severity != .info })
+    }
+
     @Test func multipleSeatsAndBidsAreAllListed() {
         let json = #"{"id":"r","seatbid":[{"seat":"a","bid":[{"id":"1","impid":"1","price":1,"adm":"<p/>"},{"id":"2","impid":"1","price":2,"adm":"<p/>"}]},{"seat":"b","bid":[{"id":"3","impid":"1","price":3,"adm":"<p/>"}]}]}"#
         let input = InputParser.parse(json)

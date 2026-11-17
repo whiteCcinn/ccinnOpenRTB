@@ -31,9 +31,13 @@ enum ResponseChecks {
         return price
     }
 
-    /// Auction notices must be absolute http(s) URLs (macros allowed).
+    /// Notices and markup URLs must be absolute http(s) URLs (macros allowed). A `data:` URL is decoded locally by the
+    /// simulator (offline samples), which production exchanges and devices do not do: it is reported as info.
     static func trackerURL(_ url: String, at pointer: JSONPointer, log: inout IssueLog) {
-        if !URLRules.isAbsoluteHTTPURL(url.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.prefix(5).lowercased() == "data:" {
+            log.info("openrtb.url.data", "A `data:` URL: the simulator decodes it locally; exchanges and devices expect an http(s) URL.", at: pointer)
+        } else if !URLRules.isAbsoluteHTTPURL(trimmed) {
             log.warning("openrtb.url.invalid", "\"\(url.prefix(120))\" is not an absolute http(s) URL.", at: pointer)
         }
     }
