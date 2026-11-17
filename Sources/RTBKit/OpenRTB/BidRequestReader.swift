@@ -1,44 +1,36 @@
 import Foundation
 
-/// What the simulator takes from the optional bid request: the public summary plus the values request-derived macros need.
-struct BidRequestInfo {
-    var summary: BidRequestSummary
-    /// VAST macro values under bracketed keys (`[DOMAIN]`, `[IFA]`, …).
-    var vastMacros: [String: String]
-    /// Per impression / item id: OpenRTB macro values that come from the impression (`AUCTION_MULTIPLIER`, `OPENRTB_ITEM_QTY`).
-    var impressionMacros: [String: [String: String]]
-}
-
-/// Reads an OpenRTB 2.x `BidRequest` or an OpenRTB 3.0 `{"openrtb": {"request": …}}`. Issue paths start with `request:`.
+/// Reads an OpenRTB 2.x `BidRequest` or an OpenRTB 3.0 `{"openrtb": {"request": …}}` into the facts the simulator uses
+/// (design D3): impressions (formats, size, secure, Native hints, quantity) and the context VAST macros describe. Facts
+/// stay typed here; `MacroContext.simulatorDefaults` maps them to macros. Issue paths start with `request:`.
 enum BidRequestReader {
     static let rootPointer = JSONPointer(prefix: "request:")
 
-    static func read(_ json: String) -> (info: BidRequestInfo?, issues: [ValidationIssue]) {
+    static func read(_ json: String) -> (summary: BidRequestSummary?, issues: [ValidationIssue]) {
         var log = IssueLog()
         guard let value = try? JSONValue.parse(json), case let .object(members) = value else {
             log.warning("request.json.invalid", "The bid request is not a JSON object; it was ignored.", at: rootPointer)
             return (nil, log.issues)
         }
         let root = JSONObjectReader(members, at: rootPointer, domain: "request")
-        let info: BidRequestInfo
+        let summary: BidRequestSummary
         if let envelope = root.object("openrtb", log: &log) {
             guard let request = envelope.object("request", log: &log) else {
                 log.warning("request.openrtb3.request.missing", "An OpenRTB 3.0 envelope without `request`; it was ignored.", at: envelope.pointer)
                 return (nil, log.issues)
             }
-            info = readVersion3(request, log: &log)
+            summary = readVersion3(request, log: &log)
         } else {
-            info = readVersion2(root, log: &log)
+            summary = readVersion2(root, log: &log)
         }
-        return (info, log.issues)
+        return (summary, log.issues)
     }
 
     // MARK: OpenRTB 2.x
 
-    private static func readVersion2(_ request: JSONObjectReader, log: inout IssueLog) -> BidRequestInfo {
+    private static func readVersion2(_ request: JSONObjectReader, log: inout IssueLog) -> BidRequestSummary {
         let id = requiredID(request, log: &log)
         var impressions: [BidRequestSummary.Impression] = []
-        var impressionMacros: [String: [String: String]] = [:]
         let imps = request.objects("imp", log: &log) ?? []
         if imps.isEmpty { log.warning("request.imp.missing", "The bid request has no `imp`.", at: request.pointer.appending("imp")) }
         for (index, imp) in imps {
@@ -59,26 +51,25 @@ enum BidRequestReader {
                 formats.insert(.native)
                 nativeHints = nativeRequestHints(native, log: &log)
             }
-            let secure = imp.flag("secure", log: &log) ?? false
-            impressions.append(BidRequestSummary.Impression(id: impID, formats: formats, size: size, secure: secure, nativeHints: nativeHints))
-            if let multiplier = imp.object("qty", log: &log)?.double("multiplier", log: &log).flatMap(MacroEncoding.decimal) {
-                impressionMacros[impID, default: [:]]["AUCTION_MULTIPLIER"] = multiplier
-            }
+            impressions.append(BidRequestSummary.Impression(id: impID, formats: formats, size: size, secure: imp.flag("secure", log: &log) ?? false,
+                                                            nativeHints: nativeHints,
+                                                            quantityMultiplier: imp.object("qty", log: &log)?.double("multiplier", log: &log)))
         }
         let device = request.object("device", log: &log)
-        let deviceType = device?.int("devicetype", log: &log)
-        var context = RequestContextReader(log: log)
-        context.readPublisher(site: request.object("site", log: &context.log), app: request.object("app", log: &context.log))
-        context.readDevice(device)
-        let user = request.object("user", log: &context.log)
-        context.set("[GDPRCONSENT]", user?.string("consent", log: &context.log) ?? user?.object("ext", log: &context.log)?.string("consent", log: &context.log))
-        // 2.6 `source.tid`; 2.5 exchanges often sent it in `source.ext.tid`.
-        let source = request.object("source", log: &context.log)
-        context.transactionID = source?.string("tid", log: &context.log) ?? source?.object("ext", log: &context.log)?.string("tid", log: &context.log)
-        context.set("[BLOCKEDADCATEGORIES]", joined(request.strings("bcat", log: &context.log)))
-        log = context.log
-        let summary = context.summary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [], deviceType: deviceType)
-        return BidRequestInfo(summary: summary, vastMacros: context.macroValues, impressionMacros: impressionMacros)
+        var facts = RequestFacts(id: id, impressions: impressions, log: log)
+        facts.currencies = request.strings("cur", log: &facts.log) ?? []
+        facts.deviceType = device?.int("devicetype", log: &facts.log)
+        facts.readPublisher(site: request.object("site", log: &facts.log), app: request.object("app", log: &facts.log))
+        facts.readDevice(device)
+        // 2.6 `user.consent`; 2.5-era requests carried it in `user.ext.consent`.
+        let user = request.object("user", log: &facts.log)
+        facts.gdprConsent = nonEmpty(user?.string("consent", log: &facts.log)) ?? nonEmpty(user?.object("ext", log: &facts.log)?.string("consent", log: &facts.log))
+        // 2.6 `source.tid`; 2.5-era requests often carried it in `source.ext.tid`.
+        let source = request.object("source", log: &facts.log)
+        facts.transactionID = nonEmpty(source?.string("tid", log: &facts.log)) ?? nonEmpty(source?.object("ext", log: &facts.log)?.string("tid", log: &facts.log))
+        facts.blockedCategories = request.strings("bcat", log: &facts.log) ?? []
+        log = facts.log
+        return facts.summary
     }
 
     /// `imp.native.request` is a JSON string; an object is accepted with a warning.
@@ -101,10 +92,9 @@ enum BidRequestReader {
 
     // MARK: OpenRTB 3.0
 
-    private static func readVersion3(_ request: JSONObjectReader, log: inout IssueLog) -> BidRequestInfo {
+    private static func readVersion3(_ request: JSONObjectReader, log: inout IssueLog) -> BidRequestSummary {
         let id = requiredID(request, log: &log)
         var impressions: [BidRequestSummary.Impression] = []
-        var impressionMacros: [String: [String: String]] = [:]
         let items = request.objects("item", log: &log) ?? []
         if items.isEmpty { log.warning("request.item.missing", "The bid request has no `item`.", at: request.pointer.appending("item")) }
         for (index, item) in items {
@@ -127,24 +117,22 @@ enum BidRequestReader {
                 size = size ?? adSize(video, log: &log)
             }
             if placement?.has("audio") == true { formats.insert(.audio) }
-            let secure = placement?.flag("secure", log: &log) ?? false
-            impressions.append(BidRequestSummary.Impression(id: itemID, formats: formats, size: size, secure: secure, nativeHints: nativeHints))
-            if let quantity = item.double("qty", log: &log).flatMap(MacroEncoding.decimal) {
-                impressionMacros[itemID, default: [:]]["OPENRTB_ITEM_QTY"] = quantity
-            }
+            impressions.append(BidRequestSummary.Impression(id: itemID, formats: formats, size: size,
+                                                            secure: placement?.flag("secure", log: &log) ?? false, nativeHints: nativeHints,
+                                                            itemQuantity: item.int("qty", log: &log)))
         }
-        let contextObject = request.object("context", log: &log)
-        let device = contextObject?.object("device", log: &log)
-        let deviceType = device?.int("type", log: &log)
-        var context = RequestContextReader(log: log)
-        context.readPublisher(site: contextObject?.object("site", log: &context.log), app: contextObject?.object("app", log: &context.log))
-        context.readDevice(device)
-        context.set("[GDPRCONSENT]", contextObject?.object("user", log: &context.log)?.string("consent", log: &context.log))
-        context.transactionID = request.object("source", log: &context.log)?.string("tid", log: &context.log)
-        context.set("[BLOCKEDADCATEGORIES]", joined(contextObject?.object("restrictions", log: &context.log)?.strings("bcat", log: &context.log)))
-        log = context.log
-        let summary = context.summary(id: id, impressions: impressions, currencies: request.strings("cur", log: &log) ?? [], deviceType: deviceType)
-        return BidRequestInfo(summary: summary, vastMacros: context.macroValues, impressionMacros: impressionMacros)
+        let context = request.object("context", log: &log)
+        let device = context?.object("device", log: &log)
+        var facts = RequestFacts(id: id, impressions: impressions, log: log)
+        facts.currencies = request.strings("cur", log: &facts.log) ?? []
+        facts.deviceType = device?.int("type", log: &facts.log)
+        facts.readPublisher(site: context?.object("site", log: &facts.log), app: context?.object("app", log: &facts.log))
+        facts.readDevice(device)
+        facts.gdprConsent = nonEmpty(context?.object("user", log: &facts.log)?.string("consent", log: &facts.log))
+        facts.transactionID = nonEmpty(request.object("source", log: &facts.log)?.string("tid", log: &facts.log))
+        facts.blockedCategories = context?.object("restrictions", log: &facts.log)?.strings("bcat", log: &facts.log) ?? []
+        log = facts.log
+        return facts.summary
     }
 
     // MARK: Helpers
@@ -168,85 +156,91 @@ enum BidRequestReader {
         return nil
     }
 
-    private static func joined(_ values: [String]?) -> String? {
-        guard let values, !values.isEmpty else { return nil }
-        return values.joined(separator: ",")
+    static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }
 
-/// Reads the publisher, device and source context shared by OpenRTB 2.x and AdCOM (same field names): the
-/// `BidRequestSummary` fields VAST macros need, plus the other request-derived VAST 4.x macro values (VAST 4.1 §6.2 names).
-private struct RequestContextReader {
+/// The publisher, device and source context shared by OpenRTB 2.x and AdCOM (same field names), collected into a
+/// `BidRequestSummary`.
+private struct RequestFacts {
     var log: IssueLog
-    var domain: String?
-    var pageURL: String?
-    var appBundle: String?
-    var ifa: String?
-    var limitAdTracking: Bool?
-    var transactionID: String?
-    /// Other request-derived values under bracketed VAST macro names (`[DEVICEIP]`, `[LATLONG]`, …).
-    private(set) var extraMacros: [String: String] = [:]
+    private var draft: BidRequestSummary
 
-    init(log: IssueLog) {
+    init(id: String, impressions: [BidRequestSummary.Impression], log: IssueLog) {
         self.log = log
+        draft = BidRequestSummary(id: id, impressions: impressions)
     }
 
-    mutating func set(_ key: String, _ value: String?) {
-        guard let value = nonEmpty(value) else { return }
-        extraMacros[key] = value
+    var summary: BidRequestSummary { draft }
+
+    var currencies: [String] {
+        get { draft.currencies }
+        set { draft.currencies = newValue }
     }
 
-    /// `site.domain`, else the host of `site.page` (the top-level page), else `app.domain`.
+    var deviceType: Int? {
+        get { draft.deviceType }
+        set { draft.deviceType = newValue }
+    }
+
+    var gdprConsent: String? {
+        get { draft.gdprConsent }
+        set { draft.gdprConsent = newValue }
+    }
+
+    var transactionID: String? {
+        get { draft.transactionID }
+        set { draft.transactionID = newValue }
+    }
+
+    var blockedCategories: [String] {
+        get { draft.blockedCategories }
+        set { draft.blockedCategories = newValue.filter { !$0.isEmpty } }
+    }
+
+    /// `site.domain`, else the host of `site.page` (the top-level page), else `app.domain`; content from the site, else
+    /// the app.
     mutating func readPublisher(site: JSONObjectReader?, app: JSONObjectReader?) {
         if let site {
-            pageURL = nonEmpty(site.string("page", log: &log))
-            domain = nonEmpty(site.string("domain", log: &log)) ?? pageURL.flatMap { nonEmpty(URLComponents(string: $0)?.host) }
+            draft.pageURL = BidRequestReader.nonEmpty(site.string("page", log: &log))
+            draft.domain = BidRequestReader.nonEmpty(site.string("domain", log: &log))
+                ?? draft.pageURL.flatMap { BidRequestReader.nonEmpty(URLComponents(string: $0)?.host) }
             readContent(site.object("content", log: &log))
         }
         if let app {
-            appBundle = nonEmpty(app.string("bundle", log: &log))
-            let appDomain = nonEmpty(app.string("domain", log: &log))
-            if domain == nil { domain = appDomain }
-            set("[STOREURL]", app.string("storeurl", log: &log))
+            draft.appBundle = BidRequestReader.nonEmpty(app.string("bundle", log: &log))
+            draft.storeURL = BidRequestReader.nonEmpty(app.string("storeurl", log: &log))
+            let appDomain = BidRequestReader.nonEmpty(app.string("domain", log: &log))
+            if draft.domain == nil { draft.domain = appDomain }
             readContent(app.object("content", log: &log))
         }
     }
 
     private mutating func readContent(_ content: JSONObjectReader?) {
         guard let content else { return }
-        set("[CONTENTID]", content.string("id", log: &log))
-        set("[CONTENTURI]", content.string("url", log: &log))
+        if draft.contentID == nil { draft.contentID = BidRequestReader.nonEmpty(content.string("id", log: &log)) }
+        if draft.contentURL == nil { draft.contentURL = BidRequestReader.nonEmpty(content.string("url", log: &log)) }
     }
 
+    /// `ip` wins over `ipv6`; `ifa_type` is the IAB guidelines' `device.ext.ifa_type`.
     mutating func readDevice(_ device: JSONObjectReader?) {
         guard let device else { return }
-        ifa = nonEmpty(device.string("ifa", log: &log))
-        limitAdTracking = device.flag("lmt", log: &log)
-        set("[DEVICEUA]", device.string("ua", log: &log))
-        set("[DEVICEIP]", device.string("ip", log: &log) ?? device.string("ipv6", log: &log))
-        set("[IFATYPE]", device.object("ext", log: &log)?.string("ifa_type", log: &log))
-        if let geo = device.object("geo", log: &log), let latitude = geo.double("lat", log: &log), let longitude = geo.double("lon", log: &log),
-           let lat = MacroEncoding.decimal(latitude), let lon = MacroEncoding.decimal(longitude) {
-            set("[LATLONG]", lat + "," + lon)
+        draft.ifa = BidRequestReader.nonEmpty(device.string("ifa", log: &log))
+        draft.limitAdTracking = device.flag("lmt", log: &log)
+        draft.deviceUserAgent = BidRequestReader.nonEmpty(device.string("ua", log: &log))
+        draft.deviceIP = BidRequestReader.nonEmpty(device.string("ip", log: &log)) ?? BidRequestReader.nonEmpty(device.string("ipv6", log: &log))
+        draft.ifaType = BidRequestReader.nonEmpty(device.object("ext", log: &log)?.string("ifa_type", log: &log))
+        if let geo = device.object("geo", log: &log) {
+            let latitude = geo.double("lat", log: &log)
+            let longitude = geo.double("lon", log: &log)
+            if let latitude, let longitude, (-90...90).contains(latitude), (-180...180).contains(longitude) {
+                draft.latitude = latitude
+                draft.longitude = longitude
+            } else if latitude != nil || longitude != nil {
+                log.warning("request.geo.invalid", "`geo.lat` / `geo.lon` must both be present, within ±90 / ±180.", at: geo.pointer)
+            }
         }
-    }
-
-    func summary(id: String, impressions: [BidRequestSummary.Impression], currencies: [String], deviceType: Int?) -> BidRequestSummary {
-        BidRequestSummary(id: id, impressions: impressions, currencies: currencies, deviceType: deviceType, domain: domain, pageURL: pageURL,
-                          appBundle: appBundle, ifa: ifa, limitAdTracking: limitAdTracking, transactionID: nonEmpty(transactionID))
-    }
-
-    /// Every request-derived VAST macro value under its bracketed name.
-    var macroValues: [String: String] {
-        var values = extraMacros
-        let typed: [(String, String?)] = [("[DOMAIN]", domain), ("[PAGEURL]", pageURL), ("[APPBUNDLE]", appBundle), ("[IFA]", ifa),
-                                          ("[LIMITADTRACKING]", limitAdTracking.map { $0 ? "1" : "0" }), ("[TRANSACTIONID]", nonEmpty(transactionID))]
-        for (key, value) in typed { if let value { values[key] = value } }
-        return values
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        guard let value, !value.isEmpty else { return nil }
-        return value
     }
 }

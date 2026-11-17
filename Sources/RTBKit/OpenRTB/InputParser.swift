@@ -15,18 +15,18 @@ import Foundation
 public enum InputParser {
     /// Detects what `text` is and parses it; `request` is the optional bid request JSON (OpenRTB 2.x or 3.0).
     public static func parse(_ text: String, request: String? = nil) -> ParsedInput {
-        var requestInfo: BidRequestInfo?
+        var summary: BidRequestSummary?
         var requestIssues: [ValidationIssue] = []
         if let request, !request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            (requestInfo, requestIssues) = BidRequestReader.read(request)
+            (summary, requestIssues) = BidRequestReader.read(request)
         }
-        var parsed = parseResponse(text, request: requestInfo)
-        parsed.request = requestInfo?.summary
+        var parsed = parseResponse(text, request: summary)
+        parsed.request = summary
         parsed.issues.append(contentsOf: requestIssues)
         return parsed
     }
 
-    static func parseResponse(_ text: String, request: BidRequestInfo?) -> ParsedInput {
+    static func parseResponse(_ text: String, request: BidRequestSummary?) -> ParsedInput {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return ParsedInput(kind: .empty) }
         if MarkupSniffer.isVASTDocument(trimmed) { return bareVAST(.xml(trimmed), kind: .vastMarkup, xml: trimmed, request: request) }
@@ -47,7 +47,7 @@ public enum InputParser {
         return ParsedInput(kind: .invalid(reason), issues: [ValidationIssue(.error, code: "input.unrecognized", message: reason, path: "")])
     }
 
-    private static func parseJSON(_ value: JSONValue, text: String, request: BidRequestInfo?) -> ParsedInput {
+    private static func parseJSON(_ value: JSONValue, text: String, request: BidRequestSummary?) -> ParsedInput {
         guard case let .object(members) = value else {
             let reason = "The JSON is not an object."
             return ParsedInput(kind: .invalid(reason), issues: [ValidationIssue(.error, code: "input.unrecognized", message: reason, path: "")])
@@ -79,28 +79,28 @@ public enum InputParser {
     // MARK: Bare markup
 
     /// The request impression a bare markup is shown in: the only one, or the first offering `format`.
-    private static func impression(for format: AdFormat, in request: BidRequestInfo?) -> BidRequestSummary.Impression? {
-        guard let impressions = request?.summary.impressions else { return nil }
+    private static func impression(for format: AdFormat, in request: BidRequestSummary?) -> BidRequestSummary.Impression? {
+        guard let impressions = request?.impressions else { return nil }
         return impressions.first { $0.formats.contains(format) } ?? (impressions.count == 1 ? impressions.first : nil)
     }
 
-    private static func bareCandidate(format: AdFormat, markup: AdMarkup, request: BidRequestInfo?) -> AdCandidate {
+    private static func bareCandidate(format: AdFormat, markup: AdMarkup, request: BidRequestSummary?) -> AdCandidate {
         let impression = impression(for: format, in: request)
-        return AdCandidate(id: "0.0", bidID: "", impID: impression?.id, price: 0, currency: request?.summary.currencies.first ?? "USD",
+        return AdCandidate(id: "0.0", bidID: "", impID: impression?.id, price: 0, currency: request?.currencies.first ?? "USD",
                            size: impression?.size, format: format, markup: markup)
     }
 
-    private static func bareVAST(_ source: VASTSource, kind: InputKind, xml: String?, request: BidRequestInfo?) -> ParsedInput {
+    private static func bareVAST(_ source: VASTSource, kind: InputKind, xml: String?, request: BidRequestSummary?) -> ParsedInput {
         let audioOnly = xml.map(MarkupSniffer.vastLooksAudioOnly) ?? false
         let format: AdFormat = audioOnly ? .audio : .video
         return ParsedInput(kind: kind, candidates: [bareCandidate(format: format, markup: .vast(source), request: request)])
     }
 
-    private static func bareHTML(_ html: String, request: BidRequestInfo?) -> ParsedInput {
+    private static func bareHTML(_ html: String, request: BidRequestSummary?) -> ParsedInput {
         ParsedInput(kind: .htmlMarkup, candidates: [bareCandidate(format: .banner, markup: .html(html), request: request)])
     }
 
-    private static func bareNative(_ json: String, request: BidRequestInfo?) -> ParsedInput {
+    private static func bareNative(_ json: String, request: BidRequestSummary?) -> ParsedInput {
         let candidate = bareCandidate(format: .native, markup: .native(json), request: request)
         var log = IssueLog()
         let impression = impression(for: .native, in: request)

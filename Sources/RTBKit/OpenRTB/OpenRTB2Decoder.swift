@@ -8,10 +8,10 @@ struct OpenRTB2Decoder {
     /// OpenRTB 3.0 Bid fields with no 2.x meaning: a 3.0 response pasted without its `openrtb` envelope.
     static let fieldsOfOpenRTB3 = ["item", "macro", "media", "purl"]
 
-    let request: BidRequestInfo?
+    let request: BidRequestSummary?
     var log = IssueLog()
 
-    init(request: BidRequestInfo?) {
+    init(request: BidRequestSummary?) {
         self.request = request
     }
 
@@ -21,9 +21,9 @@ struct OpenRTB2Decoder {
             log.error("openrtb.response.id.missing", "`id` (the bid request id) is required.", at: root.pointer.appending("id"))
         }
         let bidResponseID = root.string("bidid", log: &log)
-        let currency = ResponseChecks.currency(root, request: request?.summary, log: &log)
+        let currency = ResponseChecks.currency(root, request: request, log: &log)
         let noBidReason = root.int("nbr", log: &log)
-        ResponseChecks.responseID(responseID, root: root, request: request?.summary, log: &log)
+        ResponseChecks.responseID(responseID, root: root, request: request, log: &log)
 
         var candidates: [AdCandidate] = []
         var bidReaders: [JSONObjectReader] = []
@@ -55,7 +55,7 @@ struct OpenRTB2Decoder {
 
         let version = inferVersion(root, bids: bidReaders)
         return ParsedInput(kind: .bidResponse(.v2(version)), responseID: responseID, bidResponseID: bidResponseID, currency: currency,
-                           noBidReason: noBidReason, candidates: candidates, issues: log.issues, request: request?.summary)
+                           noBidReason: noBidReason, candidates: candidates, issues: log.issues, request: request)
     }
 
     // MARK: Bid
@@ -80,7 +80,7 @@ struct OpenRTB2Decoder {
             if let url { ResponseChecks.trackerURL(url, at: pointer.appending(key), log: &log) }
         }
 
-        let impression = ResponseChecks.impression(impID, request: request?.summary, at: pointer.appending("impid"), log: &log)
+        let impression = ResponseChecks.impression(impID, request: request, at: pointer.appending("impid"), log: &log)
         let markupType = bid.int("mtype", log: &log)
         var mtypeFormat: AdFormat?
         if let markupType {

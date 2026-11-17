@@ -7,10 +7,10 @@ struct OpenRTB3Decoder {
     /// AdCOM 1.0 "Event Tracking Methods": 1 image pixel, 2 JavaScript.
     static let validEventMethods = 1...2
 
-    let request: BidRequestInfo?
+    let request: BidRequestSummary?
     var log = IssueLog()
 
-    init(request: BidRequestInfo?) {
+    init(request: BidRequestSummary?) {
         self.request = request
     }
 
@@ -21,9 +21,9 @@ struct OpenRTB3Decoder {
         if responseID == nil {
             log.error("openrtb.response.id.missing", "`id` (the bid request id) is required.", at: response.pointer.appending("id"))
         }
-        ResponseChecks.responseID(responseID, root: response, request: request?.summary, log: &log)
+        ResponseChecks.responseID(responseID, root: response, request: request, log: &log)
         let bidResponseID = response.string("bidid", log: &log)
-        let currency = ResponseChecks.currency(response, request: request?.summary, log: &log)
+        let currency = ResponseChecks.currency(response, request: request, log: &log)
         let noBidReason = response.int("nbr", log: &log)
 
         var candidates: [AdCandidate] = []
@@ -52,7 +52,7 @@ struct OpenRTB3Decoder {
         ResponseChecks.noBid(noBidReason, hasBids: !candidates.isEmpty, at: response.pointer.appending("nbr"), log: &log)
         ResponseChecks.duplicateBidIDs(candidates, readers: bidReaders, log: &log)
         return ParsedInput(kind: .bidResponse(.v3(version)), responseID: responseID, bidResponseID: bidResponseID, currency: currency,
-                           noBidReason: noBidReason, candidates: candidates, issues: log.issues, request: request?.summary)
+                           noBidReason: noBidReason, candidates: candidates, issues: log.issues, request: request)
     }
 
     // MARK: Envelope
@@ -93,7 +93,7 @@ struct OpenRTB3Decoder {
         if bid.has("nurl") {
             log.warning("openrtb3.bid.nurl", "`nurl` is an OpenRTB 2.x field; OpenRTB 3.0 uses `purl` (pending/win notice).", at: pointer.appending("nurl"))
         }
-        let impression = ResponseChecks.impression(item, request: request?.summary, at: pointer.appending("item"), log: &log)
+        let impression = ResponseChecks.impression(item, request: request, at: pointer.appending("item"), log: &log)
 
         var macros: [String: String] = [:]
         for (_, macro) in bid.objects("macro", log: &log) ?? [] {

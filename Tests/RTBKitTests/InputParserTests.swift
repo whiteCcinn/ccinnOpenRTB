@@ -496,6 +496,63 @@ struct BidRequestSummaryTests {
         #expect(summary.transactionID == "tx-3")
     }
 
+    @Test func requestFactsForVASTMacrosFromAnOpenRTB2Request() throws {
+        let request = #"""
+        {"id":"r","bcat":["IAB25","IAB26-3"],
+         "imp":[{"id":"1","banner":{"w":300,"h":250},"qty":{"multiplier":2.5,"sourcetype":1}},{"id":"2","video":{"w":640,"h":360}}],
+         "app":{"bundle":"com.pub.app","storeurl":"https://apps.example/pub","content":{"id":"ep-1","url":"https://media.example/ep1.mp4"}},
+         "device":{"ua":"Real UA","ipv6":"2001:db8::1","geo":{"lat":51.004703,"lon":-3.754806},"ext":{"ifa_type":"rida"}},
+         "user":{"ext":{"consent":"CONSENT-25"}}}
+        """#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: request).request)
+        #expect(summary.deviceIP == "2001:db8::1")
+        #expect(summary.deviceUserAgent == "Real UA")
+        #expect(summary.latitude == 51.004703)
+        #expect(summary.longitude == -3.754806)
+        #expect(summary.ifaType == "rida")
+        #expect(summary.gdprConsent == "CONSENT-25")
+        #expect(summary.blockedCategories == ["IAB25", "IAB26-3"])
+        #expect(summary.contentID == "ep-1")
+        #expect(summary.contentURL == "https://media.example/ep1.mp4")
+        #expect(summary.storeURL == "https://apps.example/pub")
+        #expect(summary.impressions.map(\.quantityMultiplier) == [2.5, nil])
+        // `device.ip` wins over `ipv6`; 2.6 `user.consent` wins over the 2.5-era `user.ext.consent`.
+        let both = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"device":{"ip":"192.0.2.1","ipv6":"2001:db8::1"},"user":{"consent":"A","ext":{"consent":"B"}},"site":{"content":{"id":"c"}}}"#
+        let preferred = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: both).request)
+        #expect(preferred.deviceIP == "192.0.2.1")
+        #expect(preferred.gdprConsent == "A")
+        #expect(preferred.contentID == "c")
+        #expect(preferred.blockedCategories.isEmpty)
+    }
+
+    @Test func outOfRangeOrHalfGeoIsReportedAndDropped() throws {
+        for geo in [#"{"lat":91,"lon":0}"#, #"{"lat":10}"#, #"{"lat":0,"lon":-180.5}"#] {
+            let request = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"device":{"geo":"# + geo + "}}"
+            let input = InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: request)
+            #expect(input.request?.latitude == nil, "\(geo)")
+            #expect(input.issues.first { $0.code == "request.geo.invalid" }?.path == "request:/device/geo", "\(geo)")
+        }
+    }
+
+    @Test func requestFactsForVASTMacrosFromAnOpenRTB3Request() throws {
+        let request = #"""
+        {"openrtb":{"ver":"3.0","domainver":"1.0","request":{"id":"r3","item":[{"id":"1","qty":3,"spec":{"placement":{"display":{"w":320,"h":50}}}}],
+          "context":{"site":{"domain":"news.example","content":{"id":"art-9","url":"https://news.example/a"}},
+                     "device":{"ua":"UA3","ip":"198.51.100.7","geo":{"lat":3.139,"lon":101.6869}},"user":{"consent":"C3"},
+                     "restrictions":{"bcat":["IAB7-39"]}}}}}
+        """#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec30Banner, request: request).request)
+        #expect(summary.deviceUserAgent == "UA3")
+        #expect(summary.deviceIP == "198.51.100.7")
+        #expect(summary.latitude == 3.139)
+        #expect(summary.longitude == 101.6869)
+        #expect(summary.gdprConsent == "C3")
+        #expect(summary.blockedCategories == ["IAB7-39"])
+        #expect(summary.contentID == "art-9")
+        #expect(summary.contentURL == "https://news.example/a")
+        #expect(summary.impressions.first?.itemQuantity == 3)
+    }
+
     @Test func invalidRequestIsAWarningAndIgnored() {
         let input = InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: "{not json")
         #expect(input.request == nil)
