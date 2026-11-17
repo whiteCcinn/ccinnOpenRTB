@@ -4,13 +4,13 @@
 #   scripts/build-app.sh                 # build dist/CcinnOpenRTB.app for this Mac's architecture
 #   scripts/build-app.sh --universal     # Apple silicon + Intel
 #   scripts/build-app.sh --open          # build and launch
-#   CCINNSTARROCKS_VERSION=1.2.3 scripts/build-app.sh
+#   CCINNOPENRTB_VERSION=1.2.3 scripts/build-app.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="CcinnOpenRTB"
 BUNDLE_ID="io.github.whiteccinn.ccinnopenrtb"
-VERSION="${CCINNSTARROCKS_VERSION:-1.2.0}"
+VERSION="${CCINNOPENRTB_VERSION:-1.0.0}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 ICON="$ROOT/Resources/AppIcon.icns"
@@ -58,7 +58,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
-  <key>NSHumanReadableCopyright</key><string>CcinnOpenRTB — a native StarRocks client</string>
+  <key>NSHumanReadableCopyright</key><string>CcinnOpenRTB — a native OpenRTB ad rendering and tracking simulator. © 2026 whiteCcinn, MIT License.</string>
 </dict>
 </plist>
 PLIST
