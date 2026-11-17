@@ -3,20 +3,6 @@ import Foundation
 import RTBKit
 import SwiftUI
 
-/// A Real-mode script tracker the shell dispatched (`TrackerRequest.isScript`; Native `jstracker`, Native `eventtrackers`
-/// and AdCOM events with method 2) and the renderer injects. `entryID` is the monitor entry waiting for
-/// `finishRendererLoad`.
-struct InjectableScriptTracker: Equatable, Sendable {
-    var entryID: UUID
-    var request: TrackerRequest
-}
-
-/// Implemented by a host that hands script trackers to the renderer (renderer-side seam until the contract carries them).
-@MainActor
-protocol ScriptTrackerSource: AnyObject {
-    var injectableScriptTrackers: [InjectableScriptTracker] { get }
-}
-
 enum ScriptTrackerDocument {
     /// A JavaScript URL (`<script src>`), or else markup (`jstracker` is HTML with its own `<script>` tags).
     static func isScriptURL(_ text: String) -> Bool {
@@ -34,7 +20,7 @@ enum ScriptTrackerDocument {
     }
 }
 
-/// Injects each script tracker once, in its own hidden web view (non-persistent store, device User-Agent, the network
+/// Injects each Real-mode script tracker the host lists (`AdRenderingHost.scriptTrackers`) once, in its own hidden web view (non-persistent store, device User-Agent, the network
 /// instrumentation recording its loads as children of the tracker's entry), and reports the injection's outcome with
 /// `finishRendererLoad`: completed when the document (with its scripts) finished loading, failed on error, timeout,
 /// teardown, or when the session is no longer in Real mode (nothing is injected then).
@@ -59,7 +45,7 @@ final class ScriptTrackerInjector {
 
     var runningCount: Int { running.count }
 
-    func inject(_ trackers: [InjectableScriptTracker]) {
+    func inject(_ trackers: [ScriptTracker]) {
         guard !tornDown, let host else { return }
         for tracker in trackers where seen.insert(tracker.entryID).inserted {
             let monitor = host.monitor
@@ -89,7 +75,7 @@ final class ScriptTrackerInjector {
         timeouts.removeAll()
     }
 
-    private func start(_ tracker: InjectableScriptTracker, host: any AdRenderingHost) {
+    private func start(_ tracker: ScriptTracker, host: any AdRenderingHost) {
         let entryID = tracker.entryID
         let controller = CreativeWebController(host: host)
         running[entryID] = controller
@@ -131,7 +117,8 @@ private struct ScriptTrackerRunner: ViewModifier {
     @State private var injector: ScriptTrackerInjector?
 
     func body(content: Content) -> some View {
-        let trackers = (host as? any ScriptTrackerSource)?.injectableScriptTrackers ?? []
+        // Observable on the session: a tracker listed after `.rendered` updates this view.
+        let trackers = host.scriptTrackers
         content
             .onChange(of: trackers, initial: true) { _, current in
                 guard !current.isEmpty else { return }

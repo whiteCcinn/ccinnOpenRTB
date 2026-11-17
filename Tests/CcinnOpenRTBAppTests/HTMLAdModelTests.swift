@@ -95,10 +95,10 @@ struct HTMLAdModelTests {
 @MainActor
 @Suite("Script tracker injection (WebKit)", .serialized)
 struct ScriptTrackerInjectorTests {
-    private func tracker(_ url: String, monitor: NetworkMonitor) -> InjectableScriptTracker {
+    private func tracker(_ url: String, monitor: NetworkMonitor) -> ScriptTracker {
         let request = TrackerRequest(category: .impression, trigger: "impression (jstracker)", source: "bid 0.0 › native › jstracker",
                                      template: url, url: url, isScript: true)
-        return InjectableScriptTracker(entryID: monitor.dispatch(request, userAgent: "TestUA/1.0"), request: request)
+        return ScriptTracker(entryID: monitor.dispatch(request, userAgent: "TestUA/1.0"), request: request)
     }
 
     @Test func realModeInjectsURLAndMarkupTrackersOnce() async throws {

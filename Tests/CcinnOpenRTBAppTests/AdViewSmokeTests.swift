@@ -82,3 +82,27 @@ struct AdViewSmokeTests {
         #expect(host.events.isEmpty)
     }
 }
+
+@MainActor
+@Suite("AdView script trackers (SwiftUI + WebKit)", .serialized)
+struct AdViewScriptTrackerTests {
+    @Test func trackersTheHostListsAreRunOnceThroughTheContract() async throws {
+        let server = try LoopbackServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let host = RecordingHost()
+        host.monitor.mode = .real
+        let request = TrackerRequest(category: .impression, trigger: "impression (jstracker)", source: "bid 0.0 › native › jstracker",
+                                     template: "", url: "<script>new Image().src = 'http://127.0.0.1:\(port)/js.gif';</script>", isScript: true)
+        let tracker = ScriptTracker(entryID: host.monitor.dispatch(request, userAgent: "TestUA/1.0"), request: request)
+        host.scriptTrackers = [tracker]
+        let ad = NativeAd(assets: [NativeAsset(id: 1, content: .title(text: "Hello"))], link: AdLink(url: "https://adv.example/"))
+        let renderRequest = RendererFixtures.request(.native("{}"), format: .native, native: ad, placement: .inFeed,
+                                                     adSize: CGSize(width: 358, height: 200))
+        let harness = WindowHarness(AdView(request: renderRequest, host: host), size: renderRequest.adSize)
+        defer { harness.close() }
+        let ran = await Wait.until(timeout: .seconds(20)) { host.monitor.entry(id: tracker.entryID)?.state == .completed(status: 200) }
+        #expect(ran, "\(String(describing: host.monitor.entry(id: tracker.entryID)?.state))")
+        #expect(await Wait.until { server.connectionCount == 1 })
+    }
+}

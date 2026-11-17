@@ -1,7 +1,7 @@
 import RTBKit
 import SwiftUI
 
-/// Picks the renderer for a request (`RendererKind`) and runs the Real-mode script trackers of the render.
+/// Picks the renderer for a request (`RendererKind`) and runs the Real-mode script trackers the host lists.
 struct RendererRoot: View {
     let request: RenderRequest
     let host: any AdRenderingHost

@@ -56,6 +56,9 @@ final class RecordingHost: AdRenderingHost {
 
     func rendererLog(_ entry: RendererLogEntry) { logs.append(entry) }
 
+    /// What the session would list after dispatching Real-mode script trackers.
+    var scriptTrackers: [ScriptTracker] = []
+
     /// What `resolveVAST` answers (the default resolver is a kit placeholder until kit-vast merges).
     var vastResolution = ResolvedVAST()
     private(set) var resolvedSources: [VASTSource] = []
