@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 APP_NAME="CcinnOpenRTB"
 
-CCINNSTARROCKS_VERSION="$VERSION" "$ROOT/scripts/build-app.sh" --universal
+CCINNOPENRTB_VERSION="$VERSION" "$ROOT/scripts/build-app.sh" --universal
 
 cd "$DIST"
 rm -f "$APP_NAME-$VERSION.dmg" "$APP_NAME-$VERSION-macOS.zip" SHA256SUMS.txt

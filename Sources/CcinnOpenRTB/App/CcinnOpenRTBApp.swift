@@ -11,9 +11,17 @@ struct CcinnOpenRTBApp: App {
         WindowGroup("CcinnOpenRTB", id: "main") {
             MainView()
                 .frame(minWidth: 1100, minHeight: 720)
+                .appAppearance()
+                .presentsSoftwareUpdates()
+                .networkLaunchSupport()
         }
         .defaultSize(width: 1500, height: 940)
         .windowToolbarStyle(.unified(showsTitle: false))
+        .commands { UpdateCommands() }
+
+        NetworkWindowScene()
+        SettingsScene()
+        SoftwareUpdateScene()
     }
 }
 
@@ -26,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSWindow.allowsAutomaticWindowTabbing = false
+        UpdateController.shared.scheduleAutomaticCheck()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

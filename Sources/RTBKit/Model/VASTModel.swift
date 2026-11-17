@@ -276,17 +276,50 @@ public enum VASTErrorCode: Int, Sendable, Hashable, CaseIterable {
     case nonLinearError = 500, companionError = 600, undefinedError = 900, vpaidError = 901
 }
 
+/// Where an ad came from: `hop` indexes `ResolvedVAST.chain`, `ad` indexes that hop's `document.ads`.
+public struct VASTAdOrigin: Sendable, Hashable {
+    public var hop: Int
+    public var ad: Int
+
+    public init(hop: Int, ad: Int) {
+        self.hop = hop
+        self.ad = ad
+    }
+}
+
 /// One hop of a wrapper chain.
 public struct VASTHop: Sendable, Hashable {
     /// `nil` for the document the bid carried inline.
     public var url: String?
     public var document: VASTDocument?
     public var error: VASTErrorCode?
+    /// The fetcher's request id (network monitor entry); `nil` for markup carried in the bid.
+    public var requestID: UUID?
+    /// The wrapper ad whose `VASTAdTagURI` produced this hop; `nil` for the first hop.
+    public var parent: VASTAdOrigin?
 
-    public init(url: String? = nil, document: VASTDocument? = nil, error: VASTErrorCode? = nil) {
+    public init(url: String? = nil, document: VASTDocument? = nil, error: VASTErrorCode? = nil, requestID: UUID? = nil,
+                parent: VASTAdOrigin? = nil) {
         self.url = url
         self.document = document
         self.error = error
+        self.requestID = requestID
+        self.parent = parent
+    }
+}
+
+/// A failure that did not stop playback (a pod slot or buffet ad that could not be resolved). Its Error URLs are fired
+/// once after resolution (`VASTTrackingPlan.resolutionRequests`).
+public struct VASTAdFailure: Sendable, Hashable {
+    public var code: VASTErrorCode
+    public var errorURLs: [String]
+    /// Outermost wrapper first.
+    public var origin: [VASTAdOrigin]
+
+    public init(code: VASTErrorCode, errorURLs: [String] = [], origin: [VASTAdOrigin] = []) {
+        self.code = code
+        self.errorURLs = errorURLs
+        self.origin = origin
     }
 }
 
@@ -304,10 +337,12 @@ public struct ResolvedVASTAd: Sendable, Hashable {
     public var clickTrackings: [String]
     public var viewableImpression: VASTViewableImpression
     public var verifications: [VASTVerification]
+    /// The documents this ad passed through: outermost wrapper first, the inline ad last.
+    public var origin: [VASTAdOrigin]
 
     public init(inline: VASTInline, sequence: Int? = nil, impressions: [String] = [], errors: [String] = [], trackingEvents: [VASTTracking] = [],
                 clickTrackings: [String] = [], viewableImpression: VASTViewableImpression = VASTViewableImpression(),
-                verifications: [VASTVerification] = []) {
+                verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = []) {
         self.inline = inline
         self.sequence = sequence
         self.impressions = impressions
@@ -316,6 +351,7 @@ public struct ResolvedVASTAd: Sendable, Hashable {
         self.clickTrackings = clickTrackings
         self.viewableImpression = viewableImpression
         self.verifications = verifications
+        self.origin = origin
     }
 }
 
@@ -328,14 +364,17 @@ public struct ResolvedVAST: Sendable, Hashable {
     public var failure: VASTErrorCode?
     /// Error URLs to fire for `failure`.
     public var failureErrorURLs: [String]
+    /// Failures that did not stop playback (pod slots / buffet ads that could not be resolved).
+    public var adFailures: [VASTAdFailure]
     public var issues: [ValidationIssue]
 
     public init(chain: [VASTHop] = [], ads: [ResolvedVASTAd] = [], failure: VASTErrorCode? = nil, failureErrorURLs: [String] = [],
-                issues: [ValidationIssue] = []) {
+                adFailures: [VASTAdFailure] = [], issues: [ValidationIssue] = []) {
         self.chain = chain
         self.ads = ads
         self.failure = failure
         self.failureErrorURLs = failureErrorURLs
+        self.adFailures = adFailures
         self.issues = issues
     }
 }

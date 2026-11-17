@@ -15,10 +15,10 @@ body:
     validations:
       required: true
   - type: input
-    id: starrocks-versions
+    id: spec-versions
     attributes:
-      label: StarRocks versions where you need it
-      placeholder: "e.g. 3.4 and 6.0"
+      label: Specifications, versions or devices where you need it
+      placeholder: "e.g. VAST 4.2 SIMID, OpenRTB 2.6 multi-format, Pixel Fold"
   - type: textarea
     id: alternatives
     attributes:
