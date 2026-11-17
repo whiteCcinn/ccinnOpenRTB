@@ -17,7 +17,10 @@ struct CcinnOpenRTBApp: App {
         }
         .defaultSize(width: 1500, height: 940)
         .windowToolbarStyle(.unified(showsTitle: false))
-        .commands { UpdateCommands() }
+        .commands {
+            AppCommands()
+            UpdateCommands()
+        }
 
         NetworkWindowScene()
         SettingsScene()

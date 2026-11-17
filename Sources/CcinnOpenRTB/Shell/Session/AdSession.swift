@@ -61,6 +61,8 @@ final class AdSession: AdRenderingHost {
     var placement: Placement = .inlineBanner { didSet { placementChanged(from: oldValue) } }
     var bannerPosition: BannerPosition = .bottom
     var zoom: ZoomSetting = .fit
+    /// The magnification the canvas applies (Fit resolves to a number); the zoom commands step from it.
+    var canvasMagnification = 1.0
     /// The viewability slider for every placement except in-feed (where the feed's scroll position decides).
     var visibility: Double = 1 { didSet { visibilityInputsChanged() } }
     /// The in-feed app's scroll position in points.

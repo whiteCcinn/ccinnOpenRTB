@@ -5,15 +5,14 @@ import SwiftUI
 /// The left half of the main window: device header, zoomable device canvas, and the lifecycle controls.
 struct SimulatorPane: View {
     @Bindable var session: AdSession
-    @State private var magnification = 1.0
 
     var body: some View {
         VStack(spacing: 0) {
-            SimulatorHeader(session: session, magnification: magnification)
+            SimulatorHeader(session: session, magnification: session.canvasMagnification)
             Divider()
             ZStack(alignment: .top) {
                 let style = DeviceFrameStyle(layout: session.layout)
-                ZoomableCanvas(contentSize: style.outerSize, zoom: $session.zoom, onMagnification: { magnification = $0 }) {
+                ZoomableCanvas(contentSize: style.outerSize, zoom: $session.zoom, onMagnification: { session.canvasMagnification = $0 }) {
                     DeviceView(session: session)
                 }
                 if session.mode == .real { RealModeRibbon() }

@@ -109,7 +109,7 @@ private struct ArticleBody: View {
                 Text(paragraph)
                     .font(.system(size: 15, design: .serif))
                     .lineSpacing(3)
-                    .foregroundStyle(.primary.opacity(0.85))
+                    .foregroundStyle(Color.primary.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
