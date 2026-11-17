@@ -566,13 +566,20 @@ struct VASTDecoder {
             report(.warning, "vast.companion.resource.missing", "<Companion> needs a StaticResource, IFrameResource or HTMLResource.", path)
         }
 
-        return VASTCompanion(id: nonEmpty(element.attribute("id")), width: width, height: height, resources: resources,
-                             clickThrough: element.firstChild(named: "CompanionClickThrough").flatMap {
-                                 url($0, at: path + "/CompanionClickThrough", role: .clickThrough)
-                             },
-                             clickTrackings: urls(element.children(named: "CompanionClickTracking"), at: path + "/CompanionClickTracking",
-                                                  role: .tracker),
-                             trackingEvents: decodeTrackingEvents(element.firstChild(named: "TrackingEvents"), at: path + "/TrackingEvents"))
+        let companion = VASTCompanion(id: nonEmpty(element.attribute("id")), width: width, height: height, resources: resources,
+                                      clickThrough: element.firstChild(named: "CompanionClickThrough").flatMap {
+                                          url($0, at: path + "/CompanionClickThrough", role: .clickThrough)
+                                      },
+                                      clickTrackings: urls(element.children(named: "CompanionClickTracking"),
+                                                           at: path + "/CompanionClickTracking", role: .tracker),
+                                      trackingEvents: decodeTrackingEvents(element.firstChild(named: "TrackingEvents"),
+                                                                           at: path + "/TrackingEvents"))
+        if context == .inline, !resources.isEmpty, companion.displayResource == nil {
+            report(.warning, "vast.companion.resource.unsupported",
+                   "None of the companion's resources can be shown: a StaticResource must be an image or a script (VAST error 604, no Companion resource with a supported type).",
+                   path)
+        }
+        return companion
     }
 
     // MARK: - ViewableImpression

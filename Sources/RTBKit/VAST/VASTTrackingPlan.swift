@@ -14,7 +14,8 @@ import Foundation
 /// | `.videoClick(i)` | ad i's ClickTracking, then a navigation to its ClickThrough (none when the device cannot open click-throughs) |
 /// | `.videoViewability(v, i)` | ad i's `Viewable` / `NotViewable` / `ViewUndetermined` |
 /// | `.companionView(i, c)` | the companion's `creativeView` Tracking |
-/// | `.companionClick(i, c)` | its CompanionClickTracking, then a navigation to CompanionClickThrough only when its `displayResource` is a `StaticResource` (none on CTV); HTML and iframe companions open their own click-through |
+/// | `.companionView(i, c)` (wrappers) | the matching tracking companions of every wrapper above, outermost first, before the companion's own |
+/// | `.companionClick(i, c)` | wrapper and own CompanionClickTracking, then a navigation to CompanionClickThrough only when `playerOpensClickThrough` (an image StaticResource; none on CTV); script, HTML and iframe companions open their own click-through |
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
@@ -65,7 +66,7 @@ struct VASTPlanner {
         /// §6.7 `[ADSERVINGID]`: "The value of the <AdServingId> for the currently playing ad".
         static let adServingID = "[ADSERVINGID]"
         /// §6.3 `[UNIVERSALADID]`: "registryID idvalue - with a space separating registryID and value"; 4.2: "Multiple
-        /// UniversalAdIDs can be supported with a comma separating them".
+        /// UniversalAdIDs can be supported with a comma separating them". A list: set in `customLists`.
         static let universalAdID = "[UNIVERSALADID]"
         /// §6.3 `[ADTYPE]`: "video, audio, or hybrid, as defined in the adType attribute of the VAST <Ad> element".
         static let adType = "[ADTYPE]"
@@ -177,16 +178,17 @@ struct VASTPlanner {
     }
 
     /// The CompanionClickTracking of the matching wrapper companions (outermost first) and of the companion, then the
-    /// navigation to its CompanionClickThrough, only when it is displayed from a StaticResource and the device can open it.
+    /// navigation to its CompanionClickThrough, only when `playerOpensClickThrough` (an image StaticResource) and the device
+    /// can open it.
     func companionClick(adIndex: Int, companionIndex: Int) -> [TrackerRequest] {
         guard let target = companionTarget(adIndex: adIndex, companionIndex: companionIndex) else { return [] }
         var requests = target.layered(\.clickTrackings).map { url, layer, element in
             make(url, .click, "VAST companion click", adIndex, layer, element + "/CompanionClickTracking", context: target.context)
         }
-        // Exactly one navigation per click (decisions "Renderer contract rulings"): HTML and iframe companions navigate
-        // themselves, and the renderer reports it.
+        // Exactly one navigation per click (decisions "Renderer contract rulings"): script, HTML and iframe companions
+        // navigate themselves, and the renderer reports it.
         let companion = target.companion
-        if canNavigate, case .staticResource = companion.displayResource, let clickThrough = companion.clickThrough {
+        if canNavigate, companion.playerOpensClickThrough, let clickThrough = companion.clickThrough {
             requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, target.lineage?.inlineLayer,
                                  target.element + "/CompanionClickThrough", context: target.context))
         }
@@ -286,26 +288,23 @@ struct VASTPlanner {
         return adContext(ad, lineage: VASTLineage(origin: ad.origin, chain: vast.chain))
     }
 
-    /// The host's context with what the plan knows about the ad that is playing (`Macro`). Values the document does not
-    /// provide are left out, so the expander reports them as unknown (`-1`). `creative` is the creative a request is about
-    /// (a companion's); by default, the played Linear's.
+    /// The host's context with what the plan knows about the ad that is playing (`Macro`; decisions "VAST macro rulings").
+    /// Values the document does not provide are left out, so the expander fills VAST's "unknown" (`-1`, §6.1). `creative`
+    /// is the creative a request is about (a companion's); by default, the played Linear's.
     private func adContext(_ ad: ResolvedVASTAd, lineage: VASTLineage?, creative: VASTCreative? = nil) -> MacroContext {
         var adContext = Self.withPodSequence(ad.sequence, context)
-        let values: [(key: String, value: String?)] = [
-            (Macro.adServingID, ad.inline.adServingID),
-            (Macro.universalAdID, Self.universalAdID(of: creative ?? ad.inline.playedCreative)),
-            (Macro.adType, Self.adType(of: lineage)),
-        ]
-        for (key, value) in values {
-            if let value { adContext.custom[key] = value }
-        }
+        if let adServingID = ad.inline.adServingID { adContext.custom[Macro.adServingID] = adServingID }
+        if let adType = Self.adType(of: lineage) { adContext.custom[Macro.adType] = adType }
+        if let ids = Self.universalAdIDs(of: creative ?? ad.inline.playedCreative) { adContext.customLists[Macro.universalAdID] = ids }
         return adContext
     }
 
-    /// `registryID idvalue` per `UniversalAdId`, comma-separated (VAST 4.2 §6.3).
-    private static func universalAdID(of creative: VASTCreative?) -> String? {
+    /// `registryID idvalue` per `UniversalAdId` (VAST 4.1 §6.3, "with a space separating registryID and value"), one list
+    /// item each: VAST 4.2 §6.3 separates several with commas, and §6.1 encodes each value on its own, so they go to
+    /// `MacroContext.customLists` (decisions "VAST macro rulings"). `nil` when the creative has none.
+    private static func universalAdIDs(of creative: VASTCreative?) -> [String]? {
         guard let ids = creative?.universalAdIDs, !ids.isEmpty else { return nil }
-        return ids.map { $0.registry + " " + $0.value }.joined(separator: ",")
+        return ids.map { $0.registry + " " + $0.value }
     }
 
     /// The InLine `<Ad>`'s `adType`; when absent, `video` for documents of VAST 4.1 and later (§3.3.2: "assumed to be video
