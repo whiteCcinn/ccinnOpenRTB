@@ -302,6 +302,21 @@ struct AdSessionTests {
         #expect(harness.session.realModeConfirmation != nil)
     }
 
+    /// The confirmation must not under-report: asked for right after a paste, it completes its host list when the bid's
+    /// markup has been inspected (and stays the same confirmation).
+    @Test func theConfirmationCompletesItsHostListWhenTheInspectionFinishes() async throws {
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        harness.session.requestRealMode()
+        let shown = try #require(harness.session.realModeConfirmation)
+        for _ in 0..<500 where harness.session.inspectedVAST == nil { try await Task.sleep(for: .milliseconds(1)) }
+        let completed = try #require(harness.session.realModeConfirmation)
+        #expect(completed.id == shown.id)
+        #expect(completed.summary.hosts.map(\.name).contains("imp.vast.example"))
+        harness.session.confirmRealMode(shown)
+        #expect(harness.session.mode == .real)
+    }
+
     @Test func realModeSendsTrackersWithTheDeviceUserAgent() async throws {
         let harness = SessionHarness(Fixtures.input([display]))
         let tablet = try #require(DeviceCatalog.device(id: "ipad-10"))

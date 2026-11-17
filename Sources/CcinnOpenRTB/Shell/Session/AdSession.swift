@@ -290,6 +290,8 @@ final class AdSession: AdRenderingHost {
             guard let self, !Task.isCancelled, revision == self.inputRevision, candidate?.id == self.selectedCandidateID else { return }
             self.inspectedNative = native
             self.inspectedVAST = vast
+            // A confirmation shown before the markup was inspected completes its host list (same confirmation).
+            if self.realModeConfirmation != nil { self.realModeConfirmation?.summary = self.realModeSummary().summary }
         }
     }
 
@@ -774,12 +776,17 @@ final class AdSession: AdRenderingHost {
     /// change until `confirmRealMode(_:)`.
     func requestRealMode() {
         guard monitor.mode != .real else { return }
+        let (bidLabel, summary) = realModeSummary()
+        realModeConfirmation = RealModeConfirmation(bidLabel: bidLabel, summary: summary)
+    }
+
+    /// The tracker hosts of the bid on the device, else of the selected bid (its inspected Native / VAST markup).
+    private func realModeSummary() -> (bidLabel: String?, summary: TrackerHosts.Summary) {
         let candidate = prepared?.candidate ?? selectedCandidate
         let native = prepared?.native ?? (candidate?.id == selectedCandidateID ? inspectedNative : nil)
         let documents = (prepared?.vast == nil && candidate?.id == selectedCandidateID) ? [inspectedVAST].compactMap { $0 } : []
         let summary = TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: documents, resolved: prepared?.vast)
-        realModeConfirmation = RealModeConfirmation(bidLabel: candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") },
-                                                    summary: summary)
+        return (candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") }, summary)
     }
 
     /// Enters Real mode, only with the confirmation currently shown.
