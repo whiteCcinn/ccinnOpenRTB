@@ -497,6 +497,10 @@ struct VASTTrackingPlanTests {
         // Blank resources never render.
         #expect(display([.staticResource(url: "  ", creativeType: "image/png"), .html(" \n"), .iframe(url: "")]) == nil)
         #expect(display([.html(" "), html]) == html)
+        // `staticImageURL` is a view of the same rule.
+        #expect(VASTCompanion(resources: [html, png]).staticImageURL == "https://cdn.example/a.png")
+        #expect(VASTCompanion(resources: [html, iframe]).staticImageURL == nil)
+        #expect(VASTCompanion(resources: [script]).staticImageURL == nil)
     }
 
     // MARK: Untrusted indices
