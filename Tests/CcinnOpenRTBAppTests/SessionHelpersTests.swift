@@ -132,7 +132,9 @@ struct MacroSettingsTests {
         #expect(context.marketBidRatio == nil)
         #expect(context.auctionID == "override")
         #expect(context.seatID == "seat-x")
-        #expect(context.playerWidth == nil && context.playerHeight == nil)
+        // A zero / infinite player size is not passed on: the kit's default for a missing size applies.
+        let kitDefault = MacroContext.simulatorDefaults(candidate: candidate, request: input.request, device: DeviceCatalog.defaultDevice)
+        #expect(context.playerWidth == kitDefault.playerWidth && context.playerHeight == kitDefault.playerHeight)
         #expect(context.adPlayhead == 3.5)
         #expect(context.timestamp == nil && context.cacheBuster == nil)
 
