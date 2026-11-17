@@ -67,7 +67,8 @@ public enum AdMarkup: Sendable, Hashable {
 
 /// OpenRTB 3.0 / AdCOM `Event` (display event trackers).
 public struct AdcomEvent: Sendable, Hashable {
-    /// AdCOM event type: 1 impression, 2 viewable-mrc50, 3 viewable-mrc100, 4 viewable-video50, 500+ exchange-specific.
+    /// AdCOM 1.0 event type: 1 loaded (markup delivered, before rendering), 2 impression, 3 viewable-mrc50, 4 viewable-mrc100,
+    /// 5 viewable-video50, 500+ vendor-specific. (Native 1.2 eventtrackers use a different numbering: 1–4.)
     public var type: Int
     /// AdCOM event tracking method: 1 image pixel, 2 JavaScript.
     public var method: Int
