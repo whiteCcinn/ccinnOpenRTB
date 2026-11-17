@@ -224,11 +224,20 @@ final class AdSession: AdRenderingHost {
         }
     }
 
-    /// Parses now (launch arguments, samples, tests), skipping the typing debounce.
+    /// Parses now (launch arguments, samples, tests), skipping the typing debounce, and returns once the parse of the
+    /// current text is applied. An edit while it runs (an editor echoing the change back, a keystroke) supersedes it, so
+    /// the newest text is parsed again rather than leaving the input unparsed (bounded: a text that keeps changing is
+    /// left to the debounced parse).
     func parseNow() async {
-        parseTask?.cancel()
-        await parse(revision: inputRevision)
+        for _ in 0..<Self.parseNowAttempts {
+            parseTask?.cancel()
+            let revision = inputRevision
+            await parse(revision: revision)
+            if revision == inputRevision { return }
+        }
     }
+
+    static let parseNowAttempts = 4
 
     private func parse(revision: Int) async {
         let text = responseText

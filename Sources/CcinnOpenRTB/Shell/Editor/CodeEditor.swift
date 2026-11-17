@@ -46,12 +46,16 @@ struct CodeEditor: NSViewRepresentable {
         // Programmatic changes (samples, Format, Clear): replace the text, keep it undoable.
         guard textView.string != text else { return }
         let range = NSRange(location: 0, length: (textView.string as NSString).length)
+        // The change comes from the binding: it must not be echoed back into it (that would supersede work the owner is
+        // doing with this very text, such as parsing a sample).
+        context.coordinator.isApplyingBinding = true
         if textView.shouldChangeText(in: range, replacementString: text) {
             textView.replaceCharacters(in: range, with: text)
             textView.didChangeText()
         } else {
             textView.string = text
         }
+        context.coordinator.isApplyingBinding = false
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         context.coordinator.scheduleHighlight(immediately: true)
@@ -65,6 +69,8 @@ struct CodeEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         /// Set while a user edit is pushed into the binding, so `updateNSView` does not echo it back.
         private(set) var isEditing = false
+        /// Set while the binding's value is applied to the view, so `textDidChange` does not echo it back.
+        var isApplyingBinding = false
         private var revision = 0
         private var highlightTask: Task<Void, Never>?
 
@@ -73,7 +79,7 @@ struct CodeEditor: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView else { return }
+            guard let textView, !isApplyingBinding else { return }
             isEditing = true
             text.wrappedValue = textView.string
             isEditing = false

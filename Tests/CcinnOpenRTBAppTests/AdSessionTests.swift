@@ -40,6 +40,30 @@ struct AdSessionTests {
         #expect(session.selectedCandidateID == "0.0")
     }
 
+    /// The editor (or anything else) touching the text while a sample parses must not leave the sample unparsed: `load`
+    /// renders what it loaded.
+    @Test func loadingASampleSurvivesAnEditDuringItsParse() async {
+        let recorder = KitRecorder()
+        var services = Fixtures.services(Fixtures.input([display]), recorder: recorder)
+        let parse = services.parseInput
+        services.parseInput = { text, request in
+            Thread.sleep(forTimeInterval: 0.03)
+            return parse(text, request)
+        }
+        let session = AdSession(services: services, monitor: NetworkMonitor(transport: CountingTransport(), publishInterval: .zero),
+                                clock: ManualSessionClock(), browser: RecordingBrowser(), opensClickThroughs: { false }, parseDebounce: .zero)
+        let sample = Sample(id: "s", title: "S", group: "G", response: "{\"id\":\"a\"}")
+        let echo = Task { @MainActor in
+            await Task.yield()
+            session.responseText = session.responseText
+        }
+        await session.load(sample)
+        await echo.value
+        for _ in 0..<500 where session.phase != .ready { try? await Task.sleep(for: .milliseconds(1)) }
+        #expect(session.selectedCandidateID == display.id)
+        #expect(session.phase == .ready)
+    }
+
     @Test func noBidResponseRendersTheReason() async {
         let harness = SessionHarness(ParsedInput(kind: .bidResponse(.v2("2.x")), responseID: "a", noBidReason: 2))
         await harness.paste()
