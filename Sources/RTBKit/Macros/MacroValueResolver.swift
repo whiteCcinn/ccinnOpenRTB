@@ -177,8 +177,10 @@ enum VASTMacro: String, CaseIterable {
     static let playableVASTVersions = ["2", "3", "5", "6", "7", "8", "11", "12", "13", "14"]
 }
 
-/// A macro value before encoding: VAST 4.1/4.2 §6.1 `Array<T>` items are percent-encoded one by one and joined with
-/// literal commas; scalars are percent-encoded whole.
+/// A macro value before encoding: VAST 4.1–4.3 §6.1 "Macro Value URI Encoding" — `Array<T>` items are percent-encoded one
+/// by one and joined with literal commas, no spacing; scalars are percent-encoded whole. The spec's -1 / -2 mark values
+/// that are not provided; an empty list is a provided, empty set and renders as the empty string (producers that do not
+/// know a list leave its key out, so it stays -1).
 enum MacroValue {
     case scalar(String)
     case list([String])

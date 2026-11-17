@@ -254,6 +254,15 @@ struct VASTMacroTests {
         #expect(result.unknown.isEmpty)
     }
 
+    /// VAST 4.3 §6.1 example shape: "abc/def" and "y=z" become `abc%2Fdef,y%3Dz`. A single item has no comma. The spec's -1
+    /// is for values not provided; a list that is present but empty is a known, empty set and renders empty.
+    @Test func listItemEncodingSingleItemsAndEmptyLists() {
+        let context = MacroContext(customLists: ["[VERIFICATIONVENDORS]": ["abc/def", "y=z"], "[REGULATIONS]": ["gdpr"],
+                                                 "[PLAYERCAPABILITIES]": []])
+        #expect(MacroExpander.expand("v=[VERIFICATIONVENDORS]&r=[REGULATIONS]&p=[PLAYERCAPABILITIES]&c=[ADCATEGORIES]", context: context).url
+            == "v=abc%2Fdef,y%3Dz&r=gdpr&p=&c=-1")
+    }
+
     @Test func latLongIsATwoItemList() {
         let context = MacroContext(customLists: ["[LATLONG]": ["51.004703", "-3.754806"]])
         #expect(MacroExpander.expand("[LATLONG]", context: context).url == "51.004703,-3.754806")
