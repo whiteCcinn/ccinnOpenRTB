@@ -58,7 +58,10 @@ final class AdSession: AdRenderingHost {
     var folded = false { didSet { geometryChanged() } }
     /// Dual-screen: the app (and the ad) spans both screens.
     var spanned = false { didSet { geometryChanged() } }
-    var placement: Placement = .inlineBanner { didSet { placementChanged(from: oldValue) } }
+    var placement: Placement = .inlineBanner {
+        willSet { placementWillChange(to: newValue) }
+        didSet { placementChanged(from: oldValue) }
+    }
     var bannerPosition: BannerPosition = .bottom
     var zoom: ZoomSetting = .fit
     /// The magnification the canvas applies (Fit resolves to a number); the zoom commands step from it.
@@ -96,7 +99,8 @@ final class AdSession: AdRenderingHost {
     /// What renderers of the current generation report through (see `RendererHostProxy`).
     private(set) var rendererHost: RendererHostProxy
 
-    @ObservationIgnored private var gate = LifecycleGate()
+    /// Observed: the Fire menu and the timer chips disable what already fired.
+    private var gate = LifecycleGate()
     @ObservationIgnored private var viewability = ViewabilityController(kind: .none)
     @ObservationIgnored private var lastReportedFraction: Double?
     /// The input as it was when the current render started (auction id, request) — edits do not change its macros.
@@ -307,12 +311,18 @@ final class AdSession: AdRenderingHost {
         impressionContextChanged()
     }
 
+    /// The in-view share carries over between the feed (a scroll position) and the other placements (the slider).
+    private func placementWillChange(to newValue: Placement) {
+        if placement == .inFeed, newValue != .inFeed { visibility = feedGeometry.visibleFraction(offset: feedOffset) }
+    }
+
     private func placementChanged(from oldValue: Placement) {
         guard placement != oldValue else { return }
         if !Placement.available(on: device).contains(placement) {
             placement = placement.compatible(with: device, format: selectedCandidate?.format, size: selectedCandidate?.size)
             return
         }
+        if placement == .inFeed { feedOffset = feedGeometry.offset(forVisibleFraction: visibility) }
         geometryChanged()
         if !isAdjustingContext { impressionContextChanged() }
     }
@@ -407,6 +417,9 @@ final class AdSession: AdRenderingHost {
     }
 
     private func prepare(_ original: AdCandidate, input: ParsedInput, token: Int) async {
+        // Cancelling a task that has not started yet does not stop its body: a render superseded within the same turn
+        // must not install its ad or fire its win into the next generation.
+        guard token == generation, !Task.isCancelled else { return }
         var candidate = original
         var markupEntryID: UUID?
         var fromWinNotice = false
@@ -547,6 +560,10 @@ final class AdSession: AdRenderingHost {
             log(event.label, origin: origin, outcome: .ignored("no ad on the device"))
             return
         }
+        if let problem = invalidIndex(in: event) {
+            log(event.label, origin: origin, outcome: .ignored(problem))
+            return
+        }
         guard deliver([event], origin: origin) else { return }
         let now = clock.now()
         var follow: [AdLifecycleEvent] = []
@@ -563,6 +580,23 @@ final class AdSession: AdRenderingHost {
         }
         deliver(follow, origin: "viewability")
         scheduleViewabilityTimer()
+    }
+
+    /// Renderer-reported indices are untrusted: an ad or companion index outside the resolved VAST is refused here, so
+    /// it never reaches the tracking plan (or a gate key that blocks the real event).
+    private func invalidIndex(in event: AdLifecycleEvent) -> String? {
+        guard let adIndex = Self.adIndex(of: event) else { return nil }
+        guard adIndex >= 0 else { return "negative ad index" }
+        guard let vast = vast(for: event) else { return nil }
+        guard let ad = vast.ads[safe: adIndex] else { return "no ad \(adIndex + 1) in the VAST (\(vast.ads.count))" }
+        switch event {
+        case let .companionView(_, companionIndex), let .companionClick(_, companionIndex):
+            let companions = ad.inline.creatives.reduce(0) { $0 + $1.companions.count }
+            guard companionIndex >= 0, companionIndex < companions else { return "no companion \(companionIndex + 1) in ad \(adIndex + 1)" }
+            return nil
+        default:
+            return nil
+        }
     }
 
     /// Admits each event through the gate and dispatches its trackers. Returns whether the first event fired.

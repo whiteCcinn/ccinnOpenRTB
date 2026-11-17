@@ -501,6 +501,27 @@ struct AdSessionTests {
         #expect(harness.recorder.events == [.won, .won, .rendered])
     }
 
+    @Test func indicesOutsideTheResolvedVASTNeverReachTheTrackingPlan() async {
+        var pod = Fixtures.vast(ads: 2)
+        pod.ads[0].inline.creatives = [VASTCreative(companions: [VASTCompanion(width: 300, height: 250)])]
+        let harness = SessionHarness(Fixtures.input([video]), resolved: pod)
+        await harness.paste()
+        await harness.renderAndWait()
+        let before = harness.recorder.events
+        for event: AdLifecycleEvent in [.video(.start, adIndex: -1), .video(.start, adIndex: 2), .videoClick(adIndex: 7),
+                                        .videoViewability(.viewable, adIndex: -3), .companionView(adIndex: 0, companionIndex: 1),
+                                        .companionClick(adIndex: 1, companionIndex: 0), .error(.fileNotFound, adIndex: 2)] {
+            harness.session.report(event)
+        }
+        #expect(harness.recorder.events == before)
+        #expect(harness.session.lifecycleLog.suffix(7).allSatisfy {
+            if case .ignored = $0.outcome { true } else { false }
+        })
+        harness.session.report(.companionView(adIndex: 0, companionIndex: 0))
+        harness.session.report(.video(.start, adIndex: 1))
+        #expect(harness.recorder.events.suffix(2) == [.companionView(adIndex: 0, companionIndex: 0), .video(.start, adIndex: 1)])
+    }
+
     @Test func rendererLogIsKeptInOrderAndCapped() async {
         let harness = SessionHarness(Fixtures.input([display]))
         for index in 0..<(AdSession.consoleCapacity + 5) {
@@ -578,6 +599,34 @@ struct AdSessionTests {
         // Orientation and posture keep the ad (the creative is told its new size).
         harness.session.landscape = true
         #expect(harness.session.generation == first + 2)
+    }
+
+    @Test func twoRendersInOneTurnOnlyRenderTheLatestBid() async throws {
+        let first = Fixtures.candidate(.html("<p>1</p>"), id: "0.0")
+        let second = Fixtures.candidate(.html("<p>2</p>"), id: "0.1")
+        let harness = SessionHarness(Fixtures.input([first, second]))
+        await harness.paste()
+        harness.session.render()
+        harness.session.selectedCandidateID = second.id
+        harness.session.render()
+        await harness.waitUntilSettled()
+        #expect(harness.session.prepared?.candidate.id == second.id)
+        #expect(harness.recorder.events == [.won])
+        #expect(harness.recorder.contexts.map(\.bidID) == [second.bidID])
+    }
+
+    @Test func theInViewShareCarriesOverBetweenTheFeedAndTheSlider() {
+        let harness = SessionHarness(Fixtures.input([display]))
+        let session = harness.session
+        #expect(session.visibleFraction == 1)
+        session.placement = .inFeed
+        // The feed opens scrolled so that the ad is as much in view as the slider said.
+        #expect(session.visibleFraction > 0.99)
+        session.setVisibleFraction(0.3)
+        #expect(abs(session.visibleFraction - 0.3) < 0.01)
+        session.placement = .interstitial
+        #expect(abs(session.visibility - 0.3) < 0.01)
+        #expect(abs(session.visibleFraction - 0.3) < 0.01)
     }
 
     @Test func anotherDeviceInRealModeRemovesTheAdWithoutSendingAnything() async throws {

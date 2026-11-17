@@ -53,17 +53,19 @@ struct NewsArticleApp<Banner: View>: View {
     var body: some View {
         let insets = layout.safeArea
         VStack(spacing: 0) {
-            MockAppBar(title: "The Daily Brief", accent: MockPalette.newsAccent, symbol: "newspaper.fill", topInset: CGFloat(insets.top))
+            MockAppBar(title: "The Daily Brief", accent: MockPalette.newsAccent, symbol: "newspaper.fill", topInset: CGFloat(insets.top),
+                       leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
             if banner == .top { bannerSlot(edge: .top) }
             ArticleBody(width: size.width - CGFloat(insets.leading + insets.trailing))
                 .padding(.leading, CGFloat(insets.leading))
                 .padding(.trailing, CGFloat(insets.trailing))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // minHeight 0: the article yields to the bars and the banner (it is clipped, never pushes them out).
+                .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
                 .clipped()
             if banner == .bottom { bannerSlot(edge: .bottom) }
             MockTabBar(accent: MockPalette.newsAccent, items: [("house.fill", "Home"), ("magnifyingglass", "Search"),
                                                                ("bookmark", "Saved"), ("person", "Profile")],
-                       bottomInset: CGFloat(insets.bottom))
+                       bottomInset: CGFloat(insets.bottom), leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
         }
         .frame(width: size.width, height: size.height)
         .background(MockPalette.background)
@@ -139,7 +141,8 @@ struct FeedApp<Ad: View>: View {
         let insets = layout.safeArea
         let viewport = geometry.viewport
         VStack(spacing: 0) {
-            MockAppBar(title: "Pulse", accent: MockPalette.feedAccent, symbol: "bolt.heart.fill", topInset: CGFloat(insets.top))
+            MockAppBar(title: "Pulse", accent: MockPalette.feedAccent, symbol: "bolt.heart.fill", topInset: CGFloat(insets.top),
+                       leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
             ZStack(alignment: .topLeading) {
                 ForEach(Array(geometry.items.enumerated()), id: \.offset) { _, item in
                     // The ad stays mounted while scrolled away (its renderer keeps running); posts are culled.
@@ -158,7 +161,7 @@ struct FeedApp<Ad: View>: View {
             .background(MockPalette.groupedBackground)
             MockTabBar(accent: MockPalette.feedAccent, items: [("house.fill", "Feed"), ("safari", "Explore"),
                                                                ("bell", "Activity"), ("person.crop.circle", "Me")],
-                       bottomInset: CGFloat(insets.bottom))
+                       bottomInset: CGFloat(insets.bottom), leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
         }
         .frame(width: size.width, height: size.height)
         .background(MockPalette.background)
@@ -244,6 +247,9 @@ struct MockAppBar: View {
     let accent: Color
     let symbol: String
     let topInset: CGFloat
+    /// Horizontal safe area (landscape iPhones: the island / notch side and the opposite side).
+    var leadingInset: CGFloat = 0
+    var trailingInset: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -258,7 +264,8 @@ struct MockAppBar: View {
                 Spacer()
                 Image(systemName: "person.crop.circle").font(.system(size: 19))
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16 + leadingInset)
+            .padding(.trailing, 16 + trailingInset)
             .frame(height: MockMetrics.appBarHeight)
         }
         .background(MockPalette.bar)
@@ -270,6 +277,8 @@ struct MockTabBar: View {
     let accent: Color
     let items: [(symbol: String, title: String)]
     let bottomInset: CGFloat
+    var leadingInset: CGFloat = 0
+    var trailingInset: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -284,6 +293,8 @@ struct MockTabBar: View {
                 }
             }
             .frame(height: MockMetrics.tabBarHeight)
+            .padding(.leading, leadingInset)
+            .padding(.trailing, trailingInset)
             Color.clear.frame(height: bottomInset)
         }
         .background(MockPalette.bar)
@@ -316,7 +327,7 @@ struct StoryListPane: View {
                     .overlay(alignment: .bottom) { MockPalette.separator.frame(height: 0.5).padding(.leading, 92) }
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
             .clipped()
         }
         .frame(width: size.width, height: size.height)
