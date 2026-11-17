@@ -84,7 +84,7 @@ enum TrackerHosts {
         if let url = candidate.billingURL { result.append(Template(kind: "billing", url: url)) }
         if let url = candidate.lossURL { result.append(Template(kind: "loss", url: url)) }
         for event in candidate.adcomEvents {
-            if let url = event.url { result.append(Template(kind: adcomKind(event.type), url: url)) }
+            if let url = event.url { result.append(Template(kind: event.method == 2 ? "script" : adcomKind(event.type), url: url)) }
             if let script = event.script { result += scriptSources(script).map { Template(kind: "script", url: $0) } }
         }
         return result
@@ -93,7 +93,7 @@ enum TrackerHosts {
     static func nativeTemplates(_ native: NativeAd) -> [Template] {
         var result = native.impressionTrackers.map { Template(kind: "impression", url: $0) }
         for tracker in native.eventTrackers {
-            result.append(Template(kind: tracker.method == 2 ? "script" : adcomKind(tracker.event), url: tracker.url))
+            result.append(Template(kind: tracker.method == 2 ? "script" : nativeKind(tracker.event), url: tracker.url))
         }
         result += native.link.clickTrackers.map { Template(kind: "click", url: $0) }
         for asset in native.assets {
@@ -159,7 +159,17 @@ enum TrackerHosts {
         document.ads.contains { if case .wrapper = $0.body { true } else { false } }
     }
 
+    /// AdCOM 1.0 event types: 1 loaded and 2 impression (both fire with `.rendered`), 3–5 viewable, 500+ vendor-specific.
     private static func adcomKind(_ type: Int) -> String {
+        switch type {
+        case 1, 2: "impression"
+        case 3, 4, 5: "viewability"
+        default: "event"
+        }
+    }
+
+    /// Native 1.2 event types: 1 impression, 2–4 viewable, 500+ exchange-specific.
+    private static func nativeKind(_ type: Int) -> String {
         switch type {
         case 1: "impression"
         case 2, 3, 4: "viewability"

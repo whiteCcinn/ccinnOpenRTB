@@ -22,11 +22,3 @@ protocol BrowserOpening: AnyObject {
 final class WorkspaceBrowser: BrowserOpening {
     func open(_ url: URL) { NSWorkspace.shared.open(url) }
 }
-
-/// Bridges to `VASTTrackingPlan.resolutionRequests(vast:context:source:)` (kit-vast). Until that lands on main the
-/// placeholder plan has no resolution requests, so this returns none.
-enum VASTResolutionPlan {
-    static func requests(vast: ResolvedVAST, context: MacroContext, source: String) -> [TrackerRequest] {
-        []
-    }
-}

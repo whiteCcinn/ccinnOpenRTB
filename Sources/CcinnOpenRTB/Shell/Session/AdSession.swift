@@ -14,6 +14,10 @@ import RTBKit
 /// - Each fire-once event fires at most once per render (`LifecycleGate`); win and loss exclude each other.
 /// - `render()`, `reset()` and `lose(reason:)` start a new generation: work and timers of the previous one never record.
 /// - The shell never synthesises `.rendered` for VAST: the player reports it at the first frame of ad 0.
+/// - Renderers talk to `rendererHost`, a per-generation proxy: a renderer of an earlier render can never report into a
+///   later one.
+/// - A different device or placement is a different impression: Simulated mode renders again, Real mode removes the ad
+///   (nothing is sent without an explicit Render).
 @MainActor
 @Observable
 final class AdSession: AdRenderingHost {
@@ -79,7 +83,7 @@ final class AdSession: AdRenderingHost {
     private(set) var lifecycleLog: [LifecycleLogEntry] = []
     private(set) var console: [ConsoleLine] = []
     /// Latest playback state per pod ad (`[ADPLAYHEAD]`, manual controls).
-    private(set) var playback: [Int: PlaybackSnapshot] = [:]
+    private(set) var playback: [Int: PlaybackStatus] = [:]
     /// The pod ad playing most recently.
     private(set) var currentAdIndex = 0
     /// Real-mode script trackers (Native `jstracker`, method 2) the renderer injects and reports with
@@ -87,6 +91,8 @@ final class AdSession: AdRenderingHost {
     private(set) var scriptTrackers: [ScriptTracker] = []
     /// The Native video asset's VAST, resolved through `resolveVAST(_:)`.
     private(set) var nativeVideoVAST: ResolvedVAST?
+    /// What renderers of the current generation report through (see `RendererHostProxy`).
+    private(set) var rendererHost: RendererHostProxy
 
     @ObservationIgnored private var gate = LifecycleGate()
     @ObservationIgnored private var viewability = ViewabilityController(kind: .none)
@@ -100,19 +106,26 @@ final class AdSession: AdRenderingHost {
     @ObservationIgnored private var viewabilityTimer: Task<Void, Never>?
     @ObservationIgnored private var transactionID = UUID().uuidString
     @ObservationIgnored private var lastClickEntryID: UUID?
-    @ObservationIgnored private var nativeVideoResolved = false
+    /// The Native video VAST resolution of the current generation, shared by every caller asking for the same source.
+    @ObservationIgnored private var nativeVideoResolution: (source: VASTSource, task: Task<ResolvedVAST, Never>)?
     @ObservationIgnored private var logSequence = 0
+    @ObservationIgnored private var consoleSequence = 0
+    /// Set while a device change adjusts the placement (one context change, not two).
+    @ObservationIgnored private var isAdjustingContext = false
 
     init(services: AdKitServices = .live, monitor: NetworkMonitor? = nil, clock: any SessionClock = SystemSessionClock(),
          browser: (any BrowserOpening)? = nil, opensClickThroughs: (@MainActor () -> Bool)? = nil,
          parseDebounce: Duration = AdSession.defaultParseDebounce) {
         self.services = services
-        self.monitor = monitor ?? NetworkMonitor()
+        let monitor = monitor ?? NetworkMonitor()
+        self.monitor = monitor
+        rendererHost = RendererHostProxy(generation: 0, monitor: monitor, device: DeviceCatalog.defaultDevice)
         self.clock = clock
         self.browser = browser ?? WorkspaceBrowser()
         self.opensClickThroughs = opensClickThroughs ?? { NetworkPreferences.opensClickThroughs(in: .standard) }
         self.parseDebounce = parseDebounce
-        self.monitor.mode = .simulated
+        monitor.mode = .simulated
+        rendererHost.session = self
     }
 
     // MARK: Derived
@@ -281,12 +294,15 @@ final class AdSession: AdRenderingHost {
     // MARK: Device and placement
 
     private func deviceChanged() {
+        isAdjustingContext = true
         if device.family != .foldable { folded = false }
         if device.family != .dualScreen { spanned = false }
         let candidate = selectedCandidate
         let compatible = placement.compatible(with: device, format: candidate?.format, size: candidate?.size)
         if compatible != placement { placement = compatible }
+        isAdjustingContext = false
         geometryChanged()
+        impressionContextChanged()
     }
 
     private func placementChanged(from oldValue: Placement) {
@@ -296,6 +312,23 @@ final class AdSession: AdRenderingHost {
             return
         }
         geometryChanged()
+        if !isAdjustingContext { impressionContextChanged() }
+    }
+
+    /// The ad on the device belongs to the device and placement it was rendered for. Simulated mode renders the bid again
+    /// (nothing leaves the machine); Real mode removes it, so real trackers only follow an explicit Render.
+    private func impressionContextChanged() {
+        switch phase {
+        case .ready, .preparing, .needsRealMode:
+            break
+        case .idle, .noBid, .failed, .lost:
+            return
+        }
+        if monitor.mode == .simulated, let rendered = prepared?.candidate.id ?? selectedCandidateID, rendered == selectedCandidateID {
+            render()
+        } else {
+            reset()
+        }
     }
 
     private func geometryChanged() {
@@ -361,8 +394,10 @@ final class AdSession: AdRenderingHost {
         currentAdIndex = 0
         scriptTrackers = []
         nativeVideoVAST = nil
-        nativeVideoResolved = false
+        nativeVideoResolution = nil
         lastClickEntryID = nil
+        rendererHost = RendererHostProxy(generation: generation, monitor: monitor, device: device)
+        rendererHost.session = self
         gate = LifecycleGate()
         viewability = ViewabilityController(kind: .none)
         lastReportedFraction = nil
@@ -452,12 +487,17 @@ final class AdSession: AdRenderingHost {
         lastReportedFraction = visibleFraction
         _ = viewability.visibility(visibleFraction, at: clock.now())
         phase = .ready
-        if let vast {
-            let context = macroContext(for: candidate, input: input, adIndex: nil)
-            let requests = services.resolutionRequests(vast, context, "bid \(candidate.id) › VAST")
-            if !requests.isEmpty { log("VAST resolution errors", origin: "VAST", outcome: .fired(requests: dispatch(requests))) }
-            if let failure = vast.failure { deliver([.error(failure, adIndex: nil)], origin: "VAST", input: input) }
-        }
+        if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: "bid \(candidate.id) › VAST") }
+    }
+
+    /// Right after a VAST resolution (decisions.md): the Error URLs of `adFailures` once, then — when no ad could be
+    /// produced — `.error(failure, adIndex: nil)` once. Renderers never report the chain failure themselves.
+    private func resolutionFollowUps(_ vast: ResolvedVAST, candidate: AdCandidate, input: ParsedInput, source: String) {
+        let context = macroContext(for: candidate, input: input, adIndex: nil)
+        let requests = services.resolutionRequests(vast, context, source)
+        log("VAST resolved: \(vast.ads.count) ad(s)" + (vast.failure.map { ", error \($0.rawValue)" } ?? ""), origin: "VAST",
+            outcome: .fired(requests: dispatch(requests)))
+        if let failure = vast.failure { deliver([.error(failure, adIndex: nil)], origin: "VAST", input: input) }
     }
 
     private func fireWonIfExchangeSendsIt(input: ParsedInput) {
@@ -630,12 +670,13 @@ final class AdSession: AdRenderingHost {
 
     // MARK: Playback (renderer)
 
-    /// The player's state (`PlaybackStatus`), about 4 Hz and on every play/pause.
-    func updatePlayback(_ snapshot: PlaybackSnapshot) {
-        guard phase == .ready else { return }
-        playback[snapshot.adIndex] = snapshot
-        currentAdIndex = snapshot.adIndex
-        deliver(viewability.playback(adIndex: snapshot.adIndex, isPlaying: snapshot.isPlaying, at: clock.now()), origin: "viewability")
+    /// The player's state, about 4 Hz and on every play / pause / seek / end: `[ADPLAYHEAD]` and the video viewability
+    /// timers. Reports with a negative ad index or a non-finite playhead are ignored.
+    func playbackChanged(_ status: PlaybackStatus) {
+        guard phase == .ready, status.adIndex >= 0, status.playhead.isFinite, status.playhead >= 0 else { return }
+        playback[status.adIndex] = status
+        currentAdIndex = status.adIndex
+        deliver(viewability.playback(adIndex: status.adIndex, isPlaying: status.isPlaying, at: clock.now()), origin: "viewability")
         scheduleViewabilityTimer()
     }
 
@@ -651,26 +692,31 @@ final class AdSession: AdRenderingHost {
                                        userAgent: device.userAgent).data
     }
 
-    /// Resolves a Native video asset's VAST tag through the monitor and remembers it for the asset's `.video` events.
-    func resolveNativeVideo(_ source: VASTSource) async -> ResolvedVAST {
+    /// A Native video asset's VAST (the host requirement): resolved through the monitor (`MonitorVASTFetcher`), so every
+    /// wrapper hop is a content entry under the markup's entry, and remembered for the asset's `.video(e, adIndex:)`
+    /// events. Concurrent and repeated calls for the same source share one resolution and its follow-ups.
+    func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
+        guard phase == .ready, let prepared else { return ResolvedVAST() }
+        if let pending = nativeVideoResolution, pending.source == source { return await pending.task.value }
         let token = generation
-        let parent = prepared?.markupEntryID
-        let label = "bid \(prepared?.candidate.id ?? "?") › native video"
+        let parent = prepared.markupEntryID
+        let label = "bid \(prepared.candidate.id) › native video"
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent)
-        let resolved = await services.resolveVAST(source, fetcher, parent)
-        guard token == generation, phase == .ready, let prepared else { return resolved }
+        let resolve = services.resolveVAST
+        let task = Task { await resolve(source, fetcher, parent) }
+        nativeVideoResolution = (source, task)
+        let resolved = await task.value
+        guard token == generation, phase == .ready else { return resolved }
         nativeVideoVAST = resolved
-        if !nativeVideoResolved {
-            nativeVideoResolved = true
-            let context = macroContext(for: prepared.candidate, input: renderInput, adIndex: nil)
-            let requests = services.resolutionRequests(resolved, context, label)
-            if !requests.isEmpty { log("Native video VAST resolution errors", origin: "VAST", outcome: .fired(requests: dispatch(requests))) }
-        }
+        renderIssues += resolved.issues
+        resolutionFollowUps(resolved, candidate: prepared.candidate, input: renderInput, source: label)
         return resolved
     }
 
-    func appendConsole(_ line: ConsoleLine) {
-        console.append(line)
+    /// The renderer console (MRAID bridge, VAST player, Native, HTML); the oldest lines go beyond `consoleCapacity`.
+    func rendererLog(_ entry: RendererLogEntry) {
+        consoleSequence &+= 1
+        console.append(ConsoleLine(id: consoleSequence, entry: entry))
         if console.count > Self.consoleCapacity { console.removeFirst(console.count - Self.consoleCapacity) }
     }
 
@@ -696,6 +742,8 @@ final class AdSession: AdRenderingHost {
         realModeConfirmation = nil
         monitor.mode = .real
         log("Real mode on: trackers are sent", origin: "mode", outcome: .fired(requests: 0))
+        // The user switched to fetch the markup the win notice delivers: do it now.
+        if case .needsRealMode = phase { render() }
     }
 
     func cancelRealMode() {
@@ -734,15 +782,6 @@ struct RealModeConfirmation: Identifiable, Equatable, Sendable {
     var summary: TrackerHosts.Summary
 }
 
-/// Playback state reported by the player (mirrors the renderer contract's `PlaybackStatus`).
-struct PlaybackSnapshot: Equatable, Sendable {
-    var adIndex: Int
-    var playhead: Double
-    var duration: Double?
-    var isPlaying: Bool
-    var isMuted: Bool
-}
-
 /// A Real-mode script tracker for the renderer to inject.
 struct ScriptTracker: Identifiable, Equatable, Sendable {
     var entryID: UUID
@@ -750,12 +789,8 @@ struct ScriptTracker: Identifiable, Equatable, Sendable {
     var id: UUID { entryID }
 }
 
-/// One line of the renderer console (MRAID bridge, VAST player, Native).
+/// One line of the renderer console, numbered in arrival order.
 struct ConsoleLine: Identifiable, Equatable, Sendable {
-    enum Level: String, Sendable { case info, warning, error }
-    let id = UUID()
-    var time: Date
-    var origin: String
-    var level: Level
-    var message: String
+    let id: Int
+    let entry: RendererLogEntry
 }

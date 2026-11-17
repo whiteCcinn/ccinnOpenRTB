@@ -54,51 +54,50 @@ struct MacroSettings: Equatable, Sendable {
         return value
     }
 
-    /// The macro context for one tracker batch.
+    /// The macro context for one tracker batch: `MacroContext.simulatorDefaults` (the bid, the pasted request, the
+    /// response ids, the device and the player size), then the panel.
+    ///
+    /// Precedence for request-derived VAST values (`[DOMAIN]`, `[IFA]`, …): the pasted request, else the panel's fallback.
+    /// `[TRANSACTIONID]` is the request's `source.tid`, else one per render (fixed in deterministic mode). Explicit
+    /// `${KEY}` macros override the bid's own `bid.macro` values. Empty panel fields are unset.
     /// - Parameters:
-    ///   - transactionID: `[TRANSACTIONID]` of the current render (ignored in deterministic mode).
+    ///   - transactionID: `[TRANSACTIONID]` of the current render when the request has none.
     ///   - playhead: `[ADPLAYHEAD]` of the ad the event belongs to.
     func context(candidate: AdCandidate, input: ParsedInput, device: DeviceProfile, playerSize: CGSize, transactionID: String,
                  playhead: Double? = nil) -> MacroContext {
-        var custom = candidate.customMacros
+        var context = MacroContext.simulatorDefaults(candidate: candidate, request: input.request, device: device,
+                                                     playerWidth: Self.points(playerSize.width), playerHeight: Self.points(playerSize.height),
+                                                     responseID: input.responseID, responseBidID: input.bidResponseID)
+        for entry in requestValues {
+            let key = entry.key.trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, !entry.value.isEmpty else { continue }
+            let bracketed = Self.bracketedKey(key)
+            if context.custom[bracketed]?.isEmpty ?? true { context.custom[bracketed] = entry.value }
+        }
+        if context.custom["[TRANSACTIONID]"]?.isEmpty ?? true {
+            context.custom["[TRANSACTIONID]"] = deterministic ? Self.deterministicTransactionID : transactionID
+        }
         for entry in customMacros {
             let key = entry.key.trimmingCharacters(in: .whitespaces)
             guard !key.isEmpty else { continue }
-            custom[Self.plainKey(key)] = entry.value
+            context.custom[Self.plainKey(key)] = entry.value
         }
-        for entry in requestValues {
-            let key = entry.key.trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty else { continue }
-            custom[Self.bracketedKey(key)] = entry.value
-        }
-        custom["[TRANSACTIONID]"] = deterministic ? Self.deterministicTransactionID : transactionID
 
         let clearing = Self.price(clearingPrice)
-        let price = clearing ?? candidate.price
         let encrypted = encryptedPrice.trimmingCharacters(in: .whitespaces)
         let auction = auctionID.trimmingCharacters(in: .whitespaces)
         let seat = seatID.trimmingCharacters(in: .whitespaces)
-        let ratio: Double? = clearing.flatMap { clearing in candidate.price > 0 ? clearing / candidate.price : nil }
-        return MacroContext(
-            auctionID: auction.isEmpty ? (input.request?.id ?? input.responseID) : auction,
-            bidID: candidate.bidID,
-            impID: candidate.impID,
-            seatID: seat.isEmpty ? candidate.seat : seat,
-            adID: candidate.adID,
-            price: price,
-            encryptedPrice: encrypted.isEmpty ? nil : encrypted,
-            currency: candidate.currency,
-            marketBidRatio: ratio,
-            lossReason: lossReason.code,
-            minimumToWin: Self.price(minimumToWin),
-            custom: custom,
-            adPlayhead: playhead,
-            playerWidth: Self.points(playerSize.width),
-            playerHeight: Self.points(playerSize.height),
-            timestamp: deterministic ? Self.deterministicTimestamp : nil,
-            cacheBuster: deterministic ? Self.deterministicCacheBuster : nil,
-            device: device
-        )
+        if !auction.isEmpty { context.auctionID = auction }
+        if !seat.isEmpty { context.seatID = seat }
+        if let clearing { context.price = clearing }
+        context.encryptedPrice = encrypted.isEmpty ? nil : encrypted
+        context.marketBidRatio = clearing.flatMap { clearing in candidate.price > 0 ? clearing / candidate.price : nil }
+        context.lossReason = lossReason.code
+        context.minimumToWin = Self.price(minimumToWin)
+        context.adPlayhead = playhead
+        context.timestamp = deterministic ? Self.deterministicTimestamp : nil
+        context.cacheBuster = deterministic ? Self.deterministicCacheBuster : nil
+        return context
     }
 
     /// `${KEY}` / `KEY` → `KEY`.

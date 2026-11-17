@@ -21,7 +21,7 @@ struct TrackerHostsTests {
                                               "js.native.example", "loss.dsp.example", "view.adcom.example", "view.native.example",
                                               "win.dsp.example"])
         #expect(summary.hosts.first { $0.name == "click.example" }?.count == 2)
-        #expect(summary.hosts.first { $0.name == "view.adcom.example" }?.kinds == ["viewability"])
+        #expect(summary.hosts.first { $0.name == "view.adcom.example" }?.kinds == ["impression"])
         #expect(summary.notes.isEmpty)
     }
 
@@ -51,6 +51,28 @@ struct TrackerHostsTests {
         let afterRender = TrackerHosts.summary(candidate: candidate, native: nil, vastDocuments: [document], resolved: resolved)
         #expect(afterRender.hosts.map(\.name) == ["bill.dsp.example", "imp.inline.example", "loss.dsp.example", "mrc.example", "pod.example"])
         #expect(afterRender.notes.isEmpty)
+    }
+
+    @Test func adcomAndNativeEventNumberingsAreNotConfused() {
+        var candidate = Fixtures.candidate(.native("{}"), format: .native, winURL: nil)
+        candidate.billingURL = nil
+        candidate.lossURL = nil
+        // AdCOM 1.0: 1 loaded, 2 impression, 3–5 viewable. Native 1.2: 1 impression, 2–4 viewable.
+        candidate.adcomEvents = [AdcomEvent(type: 1, method: 1, url: "https://loaded.adcom.example/"),
+                                 AdcomEvent(type: 2, method: 1, url: "https://imp.adcom.example/"),
+                                 AdcomEvent(type: 5, method: 1, url: "https://v50.adcom.example/"),
+                                 AdcomEvent(type: 501, method: 1, url: "https://vendor.adcom.example/")]
+        let native = NativeAd(link: AdLink(url: "https://landing.example"),
+                              eventTrackers: [NativeEventTracker(event: 1, method: 1, url: "https://imp.native.example/"),
+                                              NativeEventTracker(event: 4, method: 1, url: "https://v50.native.example/")])
+        let kinds = Dictionary(uniqueKeysWithValues: TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: [], resolved: nil)
+            .hosts.map { ($0.name, $0.kinds) })
+        #expect(kinds["loaded.adcom.example"] == ["impression"])
+        #expect(kinds["imp.adcom.example"] == ["impression"])
+        #expect(kinds["v50.adcom.example"] == ["viewability"])
+        #expect(kinds["vendor.adcom.example"] == ["event"])
+        #expect(kinds["imp.native.example"] == ["impression"])
+        #expect(kinds["v50.native.example"] == ["viewability"])
     }
 
     @Test func hostsOfTemplates() {
@@ -117,6 +139,31 @@ struct MacroSettingsTests {
         settings.auctionID = ""
         #expect(settings.context(candidate: candidate, input: input, device: DeviceCatalog.defaultDevice, playerSize: .zero,
                                  transactionID: "tx").auctionID == "request-id")
+    }
+
+    @Test func thePastedRequestBeatsThePanelFallbacksAndExplicitMacrosBeatEverything() {
+        let candidate = Fixtures.candidate(.html(""))
+        var settings = MacroSettings()
+        settings.requestValues = [MacroEntry(key: "[DOMAIN]", value: "fallback.example"), MacroEntry(key: "PAGEURL", value: "https://fallback/")]
+        let request = BidRequestSummary(id: "req", impressions: [], domain: "real.example", ifa: "IFA-1", transactionID: "tid-9")
+        let input = ParsedInput(kind: .bidResponse(.v2("2.6")), responseID: "resp", bidResponseID: "bidid-1", request: request)
+        let context = settings.context(candidate: candidate, input: input, device: DeviceCatalog.defaultDevice, playerSize: .zero,
+                                       transactionID: "per-render")
+        #expect(context.custom["[DOMAIN]"] == "real.example")
+        #expect(context.custom["[PAGEURL]"] == "https://fallback/")
+        #expect(context.custom["[IFA]"] == "IFA-1")
+        #expect(context.custom["[TRANSACTIONID]"] == "tid-9")
+        #expect(context.bidID == "bidid-1")
+        #expect(context.auctionID == "req")
+
+        // Without a request: the panel's fallbacks and the per-render transaction id; the response id is the auction id.
+        let bare = ParsedInput(kind: .bidResponse(.v2("2.6")), responseID: "resp")
+        let fallback = settings.context(candidate: candidate, input: bare, device: DeviceCatalog.defaultDevice, playerSize: .zero,
+                                        transactionID: "per-render")
+        #expect(fallback.custom["[DOMAIN]"] == "fallback.example")
+        #expect(fallback.custom["[TRANSACTIONID]"] == "per-render")
+        #expect(fallback.auctionID == "resp")
+        #expect(fallback.bidID == candidate.bidID)
     }
 
     @Test func lossReasonsAreKnownOrExchangeSpecific() {

@@ -8,7 +8,7 @@ struct AdSlotView: View {
 
     var body: some View {
         if let request = session.renderRequest {
-            AdView(request: request, host: session)
+            AdView(request: request, host: session.rendererHost)
                 .frame(width: size.width, height: size.height)
                 .clipped()
                 .id(request.generation)

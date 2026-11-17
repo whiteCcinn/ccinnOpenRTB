@@ -34,7 +34,7 @@ extension AdKitServices {
         trackingRequests: { event, candidate, native, vast, context, options in
             TrackingPlan.requests(for: event, candidate: candidate, native: native, vast: vast, context: context, options: options)
         },
-        resolutionRequests: { vast, context, source in VASTResolutionPlan.requests(vast: vast, context: context, source: source) },
+        resolutionRequests: { vast, context, source in VASTTrackingPlan.resolutionRequests(vast: vast, context: context, source: source) },
         expand: { template, context in MacroExpander.expand(template, context: context) },
         samples: { SampleLibrary.all }
     )

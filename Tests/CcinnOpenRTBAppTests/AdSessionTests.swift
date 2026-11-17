@@ -371,7 +371,7 @@ struct AdSessionTests {
         await harness.paste()
         await harness.renderAndWait()
         harness.session.report(.video(.creativeView, adIndex: 0))
-        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
         harness.clock.set(1.9)
         harness.session.settleViewability()
         #expect(!harness.recorder.events.contains(.videoViewability(.viewable, adIndex: 0)))
@@ -383,7 +383,7 @@ struct AdSessionTests {
         // Ad 2 is skipped after one second of playback: not viewable, decided at the skip.
         harness.clock.set(3)
         harness.session.report(.video(.creativeView, adIndex: 1))
-        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 1, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 1, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
         harness.clock.set(4)
         harness.session.report(.video(.skip, adIndex: 1))
         harness.clock.set(10)
@@ -401,7 +401,7 @@ struct AdSessionTests {
         await harness.renderAndWait()
         harness.session.setVisibleFraction(0.3)
         harness.session.report(.video(.creativeView, adIndex: 0))
-        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: false))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: false))
         harness.clock.set(5)
         harness.session.settleViewability()
         harness.session.report(.video(.complete, adIndex: 0))
@@ -417,7 +417,7 @@ struct AdSessionTests {
         harness.session.setVisibleFraction(1)
         harness.session.report(.rendered)
         harness.session.report(.video(.creativeView, adIndex: 0))
-        harness.session.updatePlayback(PlaybackSnapshot(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true))
         harness.clock.set(2)
         harness.session.settleViewability()
         #expect(harness.recorder.events.filter {
@@ -426,16 +426,104 @@ struct AdSessionTests {
         #expect(!harness.recorder.events.contains { if case .videoViewability = $0 { true } else { false } })
     }
 
-    @Test func nativeVideoVASTIsResolvedThroughTheMonitorAndRemembered() async {
+    @Test func nativeVideoVASTIsResolvedThroughTheHostOnceAndRemembered() async {
         let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
         let harness = SessionHarness(Fixtures.input([native]), resolved: Fixtures.vast(ads: 1))
         await harness.paste()
         await harness.renderAndWait()
-        let resolved = await harness.session.resolveNativeVideo(.url("https://vast.example/tag"))
-        _ = await harness.session.resolveNativeVideo(.url("https://vast.example/tag"))
-        #expect(resolved == Fixtures.vast(ads: 1))
+        // Through the protocol, as a renderer calls it: the session's implementation must be the one dispatched.
+        let host: any AdRenderingHost = harness.session.rendererHost
+        let first = Task { @MainActor in await host.resolveVAST(.url("https://vast.example/tag")) }
+        let second = Task { @MainActor in await host.resolveVAST(.url("https://vast.example/tag")) }
+        let (resolved, again) = await (first.value, second.value)
+        #expect(resolved == Fixtures.vast(ads: 1) && again == resolved)
+        #expect(harness.recorder.resolutions == [.url("https://vast.example/tag")])
         #expect(harness.session.nativeVideoVAST == resolved)
         #expect(harness.recorder.resolutionRequestCalls == 1)
+        #expect(harness.session.issues.map(\.code) == ["vast.test"])
+
+        // Its `.video` events map to that VAST.
+        harness.session.report(.video(.start, adIndex: 0))
+        #expect(harness.recorder.events.last == .video(.start, adIndex: 0))
+    }
+
+    @Test func aFailedNativeVideoChainFiresItsErrorOnceAfterResolution() async {
+        let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
+        let harness = SessionHarness(Fixtures.input([native]), resolved: Fixtures.vast(ads: 0, failure: .wrapperLimit))
+        await harness.paste()
+        await harness.renderAndWait()
+        _ = await harness.session.resolveVAST(.url("https://vast.example/tag"))
+        _ = await harness.session.resolveVAST(.url("https://vast.example/tag"))
+        #expect(harness.recorder.events == [.won, .error(.wrapperLimit, adIndex: nil)])
+        #expect(harness.recorder.resolutionRequestCalls == 1)
+    }
+
+    @Test func aNativeVideoResolutionFromAnEarlierRenderIsDiscarded() async throws {
+        let gate = ResolutionGate()
+        let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
+        let harness = SessionHarness(Fixtures.input([native]), gate: gate)
+        await harness.paste()
+        gate.open()
+        await harness.renderAndWait()
+        let staleHost = harness.session.rendererHost
+        await harness.renderAndWait()
+        let resolved = await staleHost.resolveVAST(.url("https://vast.example/tag"))
+        #expect(resolved == ResolvedVAST())
+        #expect(harness.session.nativeVideoVAST == nil)
+        #expect(harness.recorder.resolutionRequestCalls == 0)
+    }
+
+    // MARK: Renderer host
+
+    @Test func aRendererFromAnEarlierRenderCannotReportIntoTheNextOne() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        let staleHost = harness.session.rendererHost
+        await harness.renderAndWait()
+        #expect(staleHost !== harness.session.rendererHost)
+        staleHost.report(.rendered)
+        staleHost.navigate(to: "https://landing.example/", trigger: "click", source: "creative")
+        staleHost.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 1, duration: 15, isPlaying: true, isMuted: false))
+        staleHost.rendererLog(RendererLogEntry(date: Date(), origin: "HTML", level: .info, message: "stale"))
+        await #expect(throws: CancellationError.self) {
+            _ = try await staleHost.fetchContent("https://cdn.example/x.png", trigger: "image", source: "creative")
+        }
+        #expect(harness.recorder.events == [.won, .won])
+        #expect(!harness.categories.contains(.navigation))
+        #expect(harness.session.console.isEmpty)
+        #expect(harness.session.playback.isEmpty)
+
+        let liveHost = harness.session.rendererHost
+        #expect(liveHost.device == harness.session.device)
+        #expect(liveHost.monitor === harness.monitor)
+        liveHost.report(.rendered)
+        #expect(harness.recorder.events == [.won, .won, .rendered])
+    }
+
+    @Test func rendererLogIsKeptInOrderAndCapped() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        for index in 0..<(AdSession.consoleCapacity + 5) {
+            harness.session.rendererLog(RendererLogEntry(date: Date(), origin: "MRAID", level: .info, message: "line \(index)"))
+        }
+        #expect(harness.session.console.count == AdSession.consoleCapacity)
+        #expect(harness.session.console.first?.entry.message == "line 5")
+        #expect(Set(harness.session.console.map(\.id)).count == AdSession.consoleCapacity)
+        harness.session.clearConsole()
+        #expect(harness.session.console.isEmpty)
+    }
+
+    @Test func playbackStatusFeedsThePlayheadMacroAndIgnoresNonsense() async throws {
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 7.25, duration: 15, isPlaying: true, isMuted: false))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: .nan, duration: 15, isPlaying: true, isMuted: false))
+        harness.session.playbackChanged(PlaybackStatus(adIndex: -1, playhead: 1, duration: 15, isPlaying: true, isMuted: false))
+        harness.session.report(.video(.midpoint, adIndex: 0))
+        let context = try #require(harness.recorder.contexts.last)
+        #expect(context.adPlayhead == 7.25)
+        #expect(harness.session.playback.keys.sorted() == [0])
     }
 
     // MARK: Macros
@@ -460,5 +548,59 @@ struct AdSessionTests {
         #expect(context.device == DeviceCatalog.defaultDevice)
         #expect(context.playerWidth == 320 && context.playerHeight == 50)
         #expect(abs((context.marketBidRatio ?? 0) - 1.23 / 2.5) < 1e-9)
+    }
+
+    @Test func theResponseLevelBidIDIsTheAuctionBidID() async throws {
+        var input = Fixtures.input([display])
+        input.bidResponseID = "resp-bidid"
+        let harness = SessionHarness(input)
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(try #require(harness.recorder.contexts.first).bidID == "resp-bidid")
+    }
+
+    // MARK: Context changes
+
+    @Test func anotherDeviceOrPlacementReRendersInSimulatedMode() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        let first = harness.session.generation
+        harness.session.device = try #require(DeviceCatalog.device(id: "pixel-8"))
+        await harness.waitUntilSettled()
+        #expect(harness.session.generation == first + 1)
+        #expect(harness.session.phase == .ready)
+        #expect(harness.session.rendererHost.device.id == "pixel-8")
+        harness.session.placement = .interstitial
+        await harness.waitUntilSettled()
+        #expect(harness.session.generation == first + 2)
+        #expect(harness.recorder.events == [.won, .won, .won])
+        // Orientation and posture keep the ad (the creative is told its new size).
+        harness.session.landscape = true
+        #expect(harness.session.generation == first + 2)
+    }
+
+    @Test func anotherDeviceInRealModeRemovesTheAdWithoutSendingAnything() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        let sent = harness.transport.requests.count
+        harness.session.device = try #require(DeviceCatalog.device(id: "pixel-8"))
+        await harness.monitor.waitUntilIdle()
+        #expect(harness.session.phase == .idle)
+        #expect(harness.transport.requests.count == sent)
+    }
+
+    @Test func confirmingRealModeFetchesWinNoticeMarkupThatWasWaitingForIt() async throws {
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.none, format: .video)]))
+        harness.transport.respond("https://win.dsp.example/w?p=2.5", body: "<VAST version=\"3.0\"><Ad/></VAST>")
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.phase == .needsRealMode("The markup is delivered by the win notice — switch to Real to fetch it."))
+        harness.enterRealMode()
+        await harness.waitUntilSettled()
+        #expect(harness.session.phase == .ready)
+        #expect(harness.transport.requests.filter { $0.url.host == "win.dsp.example" }.count == 1)
     }
 }
