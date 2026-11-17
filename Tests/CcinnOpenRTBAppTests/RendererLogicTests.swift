@@ -258,3 +258,14 @@ struct CTVRemoteTests {
         #expect(CTVRemote.handle(.select, focus: &focus) == .togglePlayback)
     }
 }
+
+@Suite("Hostile durations")
+struct HostileDurationTests {
+    @Test func hugeOffsetsAndDurationsNeverTrap() {
+        #expect(PlayerClock.format(1e300) == "16666666:40", "clamped to 10^9 s")
+        #expect(PlayerClock.format(.greatestFiniteMagnitude) == "16666666:40")
+        #expect(SkipButtonState.make(skipOffset: .seconds(3.6e23), playhead: 0, duration: nil) == .countdown(1_000_000_000))
+        #expect(SkipButtonState.make(skipOffset: .seconds(3.6e23), playhead: 0, duration: 15) == .hidden)
+        #expect(SkipButtonState.make(skipOffset: .percent(50), playhead: 0, duration: 1e300) == .countdown(1_000_000_000))
+    }
+}

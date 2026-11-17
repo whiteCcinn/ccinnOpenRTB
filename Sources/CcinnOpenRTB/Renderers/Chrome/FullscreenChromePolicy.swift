@@ -32,6 +32,6 @@ enum FullscreenChromePolicy {
     }
 
     private static func remaining(_ seconds: TimeInterval) -> Int {
-        max(1, Int(seconds.rounded(.up)))
+        max(1, PlayerClock.wholeSeconds(seconds))
     }
 }
