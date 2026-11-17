@@ -19,11 +19,11 @@ public enum TrackerCategory: String, Sendable, Hashable, Codable, CaseIterable {
 
 /// Viewability thresholds (MRC).
 public enum ViewabilityLevel: String, Sendable, Hashable, Codable {
-    /// 50% of pixels for 1 s (display) – Native event 2, AdCOM 2.
+    /// 50% of pixels for 1 s (display) – Native event 2, AdCOM 3.
     case mrc50
-    /// 100% of pixels for 1 s – Native event 3, AdCOM 3.
+    /// 100% of pixels for 1 s – Native event 3, AdCOM 4.
     case mrc100
-    /// 50% for 2 s of playback – Native event 4, AdCOM 4, VAST ViewableImpression.
+    /// 50% for 2 s of playback – Native event 4, AdCOM 5 (VAST uses `.videoViewability`).
     case video50
 }
 
@@ -31,10 +31,10 @@ public enum ViewabilityLevel: String, Sendable, Hashable, Codable {
 public enum AdLifecycleEvent: Sendable, Hashable {
     /// The auction was won (exchange sends the win notice).
     case won
-    /// The ad was rendered: billing notice (`burl`) and the display impression trackers (AdCOM, Native).
+    /// The ad was rendered: billing notice (`burl`), AdCOM events 1 (loaded) and 2 (impression), Native impression trackers.
     /// VAST impressions are NOT part of this event: they fire per pod ad with `.video(.creativeView, adIndex:)`.
     case rendered
-    /// Display / Native viewability (Native eventtrackers 2–4, AdCOM events 2–4).
+    /// Display / Native viewability (Native eventtrackers 2–4, AdCOM events 3–5).
     case viewable(ViewabilityLevel)
     /// VAST `ViewableImpression` outcome for pod ad `adIndex`.
     case videoViewability(VideoViewability, adIndex: Int)
