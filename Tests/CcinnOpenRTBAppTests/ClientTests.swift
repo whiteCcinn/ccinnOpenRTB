@@ -581,3 +581,49 @@ struct ClientEndToEndTests {
         #expect(monitor.liveEntries.first?.category == .bidRequest)
     }
 }
+
+// MARK: - Presentation
+
+@MainActor
+@Suite("Client: presentation")
+struct ClientPresentationTests {
+    @Test func statusLinesNameTheReason() {
+        #expect(ClientPresentation.statusText(200) == "200 OK")
+        #expect(ClientPresentation.statusText(204) == "204 No Content")
+        #expect(ClientPresentation.statusText(299) == "299")
+        #expect(ClientPresentation.statusTone(204) == .success)
+        #expect(ClientPresentation.statusTone(307) == .redirect)
+        #expect(ClientPresentation.statusTone(400) == .clientError)
+        #expect(ClientPresentation.statusTone(503) == .serverError)
+    }
+
+    /// Copy as curl repeats what Send would put on the wire: the device's User-Agent unless the user set one, the
+    /// monitor's Accept and Accept-Language, the user's headers and the body.
+    @Test func theDraftCopiesAsTheCurlThatSendWouldBe() throws {
+        let command = try ClientPresentation.curl(for: request(), userAgent: "UA/1", acceptLanguage: "en-US,en;q=0.9")
+        #expect(command.contains("-H 'User-Agent: UA/1'"))
+        #expect(command.contains("-H 'Accept: */*'"))
+        #expect(command.contains("-H 'Accept-Language: en-US,en;q=0.9'"))
+        #expect(command.contains("-H 'x-openrtb-version: 2.6'"))
+        #expect(command.contains("--data-binary '" + rewardedVideoRequest + "'"))
+        #expect(command.hasSuffix("--url '\(endpoint)'"))
+        var custom = request()
+        custom.headers.append(ClientHeader(name: "user-agent", value: "Exchange/2"))
+        let overridden = try ClientPresentation.curl(for: custom, userAgent: "UA/1", acceptLanguage: "en")
+        #expect(overridden.contains("-H 'user-agent: Exchange/2'"))
+        #expect(!overridden.contains("UA/1"))
+        #expect(throws: ClientRequest.Invalid.self) { try ClientPresentation.curl(for: ClientRequest(), userAgent: "UA", acceptLanguage: "en") }
+    }
+
+    @Test func savedRequestsAreFoundByNameURLAndMethod() {
+        let date = Date(timeIntervalSince1970: 0)
+        let saved = [SavedRequest(id: UUID(), name: "Rewarded video", createdAt: date, updatedAt: date, request: request(), exchange: nil),
+                     SavedRequest(id: UUID(), name: "Banner", createdAt: date, updatedAt: date,
+                                  request: request("https://dsp.example/bid", method: .get), exchange: nil)]
+        #expect(ClientPresentation.filter(saved, by: "").count == 2)
+        #expect(ClientPresentation.filter(saved, by: "reward").map(\.name) == ["Rewarded video"])
+        #expect(ClientPresentation.filter(saved, by: "DSP.example").map(\.name) == ["Banner"])
+        #expect(ClientPresentation.filter(saved, by: "get banner").map(\.name) == ["Banner"])
+        #expect(ClientPresentation.filter(saved, by: "nothing").isEmpty)
+    }
+}

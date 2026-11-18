@@ -792,7 +792,8 @@ public final class NetworkMonitor {
         Self.requestHeaders(userAgent: userAgent, language: acceptLanguage)
     }
 
-    nonisolated static func requestHeaders(userAgent: String, language: String) -> [String: String] {
+    /// The headers the monitor sets on every request it sends (`Accept`, `User-Agent`, `Accept-Language`).
+    public nonisolated static func requestHeaders(userAgent: String, language: String) -> [String: String] {
         var headers = ["Accept": "*/*"]
         if let agent = headerValue(userAgent) { headers["User-Agent"] = agent }
         headers["Accept-Language"] = headerValue(language) ?? defaultAcceptLanguage

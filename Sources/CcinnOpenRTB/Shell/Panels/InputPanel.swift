@@ -1,10 +1,11 @@
 import RTBKit
 import SwiftUI
 
-/// The right half of the main window: the response and request editors, the Inspector, the Macros and the event log,
-/// with the bid picker and the status line.
+/// The right half of the main window: the Client (send a bid request), the response and request editors, the Inspector,
+/// the Macros and the event log, with the bid picker and the status line.
 struct InputPanel: View {
     enum Tab: String, CaseIterable, Identifiable {
+        case client = "Client"
         case response = "Response"
         case request = "Request"
         case inspector = "Inspector"
@@ -15,6 +16,7 @@ struct InputPanel: View {
     }
 
     @Bindable var session: AdSession
+    let client: ClientModel
     @SceneStorage("inputPanel.tab") private var tab: Tab = .response
 
     var body: some View {
@@ -38,6 +40,7 @@ struct InputPanel: View {
             Divider()
             Group {
                 switch tab {
+                case .client: ClientPane(client: client, session: session)
                 case .response: ResponsePane(session: session)
                 case .request: RequestPane(session: session)
                 case .inspector: InspectorPane(session: session)

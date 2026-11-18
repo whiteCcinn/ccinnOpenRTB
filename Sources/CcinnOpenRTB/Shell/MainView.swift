@@ -7,16 +7,24 @@ import SwiftUI
 /// Main window: simulator on the left, response editor and inspector on the right. Owner: app-shell. Each window has its
 /// own session (and so its own network monitor and tracking mode).
 struct MainView: View {
-    @State private var session = AdSession()
+    @State private var session: AdSession
+    /// The window's Client tab: it sends through this session's monitor and shows responses on its device.
+    @State private var client: ClientModel
     @Environment(\.openWindow) private var openWindow
     /// Offline is remembered per window (Real never is: every session starts Simulated unless it was Offline).
     @SceneStorage("ccinn.session.offline") private var remembersOffline = false
+
+    init() {
+        let session = AdSession()
+        _session = State(initialValue: session)
+        _client = State(initialValue: ClientModel(target: session))
+    }
 
     var body: some View {
         HSplitView {
             SimulatorPane(session: session)
                 .frame(minWidth: 520, idealWidth: 880, maxWidth: .infinity, maxHeight: .infinity)
-            InputPanel(session: session)
+            InputPanel(session: session, client: client)
                 .frame(minWidth: 420, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { MainToolbar(session: session) }

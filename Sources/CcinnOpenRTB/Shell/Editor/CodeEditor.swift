@@ -6,6 +6,8 @@ import SwiftUI
 struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
     var accessibilityLabel: String
+    /// `false` for a viewer (a response): selectable and searchable, not editable.
+    var isEditable = true
 
     func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
@@ -16,7 +18,8 @@ struct CodeEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = true
+        textView.isEditable = isEditable
+        textView.allowsUndo = isEditable
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.font = CodeEditor.font
@@ -43,6 +46,10 @@ struct CodeEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.text = $text
         guard let textView = scrollView.documentView as? NSTextView, !context.coordinator.isEditing else { return }
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+            textView.allowsUndo = isEditable
+        }
         // Programmatic changes (samples, Format, Clear): replace the text, keep it undoable.
         guard textView.string != text else { return }
         let range = NSRange(location: 0, length: (textView.string as NSString).length)
