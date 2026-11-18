@@ -128,8 +128,9 @@ struct SampleAcceptanceTests {
         }
     }
 
-    /// VPAID-only VAST is never executed: error 901 for the ad, no billing and no impression.
-    @Test func vpaidOnlyReports901AndNeverRenders() async throws {
+    /// VPAID-only VAST is never executed: error 403 for the ad (VAST 4.1 §2.3.6.3: no supported MediaFile; 901 is a VPAID
+    /// runtime error), no billing and no impression.
+    @Test func vpaidOnlyReports403AndNeverRenders() async throws {
         let harness = AcceptanceSession(transport: CountingTransport())
         try await harness.render(try #require(SampleLibrary.sample(id: "ortb26-vast30-vpaid-only")))
         let driver = LifecycleDriver(harness)
@@ -137,7 +138,7 @@ struct SampleAcceptanceTests {
         _ = try await driver.run()
         let entries = harness.monitor.liveEntries
         let errors = entries.filter { $0.category == .error }
-        #expect(errors.count == 1 && errors.allSatisfy { $0.url.contains("code=901") }, "\(entries.map(\.dumpLine))")
+        #expect(errors.count == 1 && errors.allSatisfy { $0.url.contains("code=403") }, "\(entries.map(\.dumpLine))")
         #expect(!entries.contains { $0.category == .billing || $0.category == .impression })
     }
 }
