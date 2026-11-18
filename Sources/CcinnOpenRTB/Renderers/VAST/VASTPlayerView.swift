@@ -381,7 +381,8 @@ private struct AudioAdCard: View {
             }
         }
         .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The player's own card: on one screen of a spanned dual-screen device, never under the hinge.
+        .simulatorStatusPlacement()
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
