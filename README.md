@@ -261,7 +261,7 @@ git clone https://github.com/whiteCcinn/ccinnopenrtb.git && cd ccinnopenrtb
 swift build                          # debug build
 swift test                           # unit, renderer and end-to-end acceptance tests
 scripts/build-app.sh --open          # build dist/CcinnOpenRTB.app and launch it
-scripts/package-release.sh 1.0.0     # universal .app, .zip, .dmg and checksums in dist/
+scripts/package-release.sh 1.1.0     # universal .app, .zip, .dmg and checksums in dist/
 ```
 
 ### Launch arguments for checks

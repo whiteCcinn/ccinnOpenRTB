@@ -5,13 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-19
+
 ### Added
 
 - **Client tab:** a Postman-like request composer in every window. Enter a method (POST or GET), an endpoint URL, headers (`Content-Type: application/json` and `x-openrtb-version: 2.6` by default) and the bid request body, and press **Send** (⌘↩). The response shows its status, time, size, headers and body (pretty-printed JSON). A 2xx response with a body goes into the Response editor and the request into the Request editor, so the simulator renders the bid with the format and placement the request and response imply; in Real mode the device waits for an explicit Render. **Copy as curl** copies exactly what Send would send.
 - **Saved requests:** **Save** (⌘S) keeps a request with its last response and device; open it in any window to send it again, or render the saved response without sending anything. Duplicate, delete and search. Stored as one JSON file each in `~/Library/Application Support/CcinnOpenRTB/Requests/` (0700 folder, 0600 files); unreadable files are skipped and reported.
 - **Move saved requests to another Mac:** **Export All…** writes every saved request and its last response to one JSON file (created `0600`); **Import…** on the other Mac reads it in one go, merging by id (a newer copy wins, so importing twice changes nothing). Damaged entries are skipped and counted; a file of another kind, a newer format or over 256 MiB is refused with a reason.
 - **The request picks the ad unit:** `imp.rwdd` (or `imp.ext.is_rewarded_inventory`, `imp.ext.prebid.is_rewarded_inventory`; AdCOM `placement.reward`) suggests the Rewarded placement and `imp.instl` or `video.plcmt` 3 (AdCOM `display.instl`) Interstitial, before the format and size rules.
-- **Network window:** a **Bid request** category with the request's method, headers and body in the details; Copy as curl repeats the body (`--data-raw`, so a body starting with `@` is never read as a file) and is disabled when the body was too large to keep and HAR exports it as `postData`.
+- **Network window:** a **Bid request** category with the request's method, headers and body in the details; Copy as curl repeats the body (`--data-raw`, so a body starting with `@` is never read as a file) and is disabled when the body was too large to keep; HAR exports the body as `postData`.
 
 ### Changed
 
@@ -55,5 +57,6 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/whiteCcinn/ccinnopenrtb/releases/tag/v1.0.0
