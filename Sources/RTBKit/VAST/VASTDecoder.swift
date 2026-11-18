@@ -392,13 +392,104 @@ struct VASTDecoder {
             customClicks = urls(videoClicks.children(named: "CustomClick"), at: clicksPath + "/CustomClick", role: .tracker)
         }
 
-        if element.firstChild(named: "Icons") != nil {
-            report(.info, "vast.icons.notRendered", "Icons (e.g. AdChoices) are parsed but not rendered by the simulator.", path + "/Icons")
+        let iconsElement = element.firstChild(named: "Icons")
+        if iconsElement != nil {
+            report(.info, "vast.icons.notRendered", "Icons (e.g. AdChoices) are parsed and their view and click tracking planned, but the simulator does not draw them yet.",
+                   path + "/Icons")
         }
 
         return VASTLinear(duration: duration, skipOffset: skipOffset, mediaFiles: mediaFiles, trackingEvents: trackingEvents,
                           clickThrough: clickThrough, clickTrackings: clickTrackings, customClicks: customClicks,
-                          adParameters: nonEmpty(element.firstChild(named: "AdParameters")?.trimmedText))
+                          adParameters: nonEmpty(element.firstChild(named: "AdParameters")?.trimmedText),
+                          icons: decodeIcons(iconsElement, at: path + "/Icons"))
+    }
+
+    // MARK: - Icons
+
+    private mutating func decodeIcons(_ element: VASTXMLElement?, at path: String) -> [VASTIcon] {
+        guard let element else { return [] }
+        checkChildren(of: element, at: path)
+        return element.children(named: "Icon").enumerated().map { index, icon in
+            decodeIcon(icon, at: path + "/Icon[\(index + 1)]")
+        }
+    }
+
+    /// VAST 3.0+ `Icon` (VAST 4.1 Industry Icon Support): attributes `program`, `width`, `height`, `xPosition`, `yPosition`,
+    /// `duration`, `offset`, `apiFramework`, 4.1 `pxratio`; a resource; `IconClicks`; `IconViewTracking`.
+    private mutating func decodeIcon(_ element: VASTXMLElement, at path: String) -> VASTIcon {
+        checkChildren(of: element, at: path)
+        let width = integerAttribute("width", of: element, at: path)
+        let height = integerAttribute("height", of: element, at: path)
+        for (name, value) in [("width", width), ("height", height)] where value == nil && element.attribute(name) == nil {
+            report(.warning, "vast.icon.\(name).missing", "<Icon> should have a \(name) attribute (pixels).", path + "@" + name)
+        }
+        if element.attribute("pxratio") != nil { checkIntroduced("Icon@pxratio", at: path + "@pxratio") }
+        let resources = decodeResources(of: element, at: path, kind: "icon")
+        if resources.isEmpty {
+            report(.warning, "vast.icon.resource.missing", "<Icon> needs a StaticResource, IFrameResource or HTMLResource.", path)
+        }
+        var clickThrough: String?
+        var clickTrackings: [String] = []
+        if let clicks = element.firstChild(named: "IconClicks") {
+            let clicksPath = path + "/IconClicks"
+            checkChildren(of: clicks, at: clicksPath)
+            checkIntroducedChildren(of: clicks, at: clicksPath)
+            clickThrough = clicks.firstChild(named: "IconClickThrough").flatMap { url($0, at: clicksPath + "/IconClickThrough", role: .clickThrough) }
+            clickTrackings = urls(clicks.children(named: "IconClickTracking"), at: clicksPath + "/IconClickTracking", role: .tracker)
+        }
+        return VASTIcon(program: nonEmpty(element.attribute("program")), width: width, height: height,
+                        xPosition: iconHorizontalPosition(of: element, at: path), yPosition: iconVerticalPosition(of: element, at: path),
+                        duration: iconTime("duration", of: element, at: path), offset: iconTime("offset", of: element, at: path),
+                        apiFramework: nonEmpty(element.attribute("apiFramework")), pixelRatio: iconPixelRatio(of: element, at: path),
+                        resources: resources, clickThrough: clickThrough, clickTrackings: clickTrackings,
+                        viewTrackings: urls(element.children(named: "IconViewTracking"), at: path + "/IconViewTracking", role: .tracker))
+    }
+
+    /// `xPosition`: `left`, `right`, or a non-negative number of pixels.
+    private mutating func iconHorizontalPosition(of element: VASTXMLElement, at path: String) -> VASTIcon.HorizontalPosition? {
+        guard let raw = element.attribute("xPosition") else { return nil }
+        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "left": return .left
+        case "right": return .right
+        default:
+            if let pixels = integer(raw), pixels >= 0 { return .pixels(pixels) }
+            report(.warning, "vast.icon.position.invalid", "xPosition=\"\(raw)\" must be left, right or a number of pixels; it is ignored.",
+                   path + "@xPosition")
+            return nil
+        }
+    }
+
+    /// `yPosition`: `top`, `bottom`, or a non-negative number of pixels.
+    private mutating func iconVerticalPosition(of element: VASTXMLElement, at path: String) -> VASTIcon.VerticalPosition? {
+        guard let raw = element.attribute("yPosition") else { return nil }
+        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "top": return .top
+        case "bottom": return .bottom
+        default:
+            if let pixels = integer(raw), pixels >= 0 { return .pixels(pixels) }
+            report(.warning, "vast.icon.position.invalid", "yPosition=\"\(raw)\" must be top, bottom or a number of pixels; it is ignored.",
+                   path + "@yPosition")
+            return nil
+        }
+    }
+
+    /// `duration` / `offset`: HH:MM:SS(.mmm), in seconds.
+    private mutating func iconTime(_ name: String, of element: VASTXMLElement, at path: String) -> Double? {
+        guard let raw = element.attribute(name) else { return nil }
+        guard let seconds = VASTTimeFormat.seconds(from: raw) else {
+            report(.warning, "vast.icon.time.invalid", "\(name)=\"\(raw)\" is not HH:MM:SS or HH:MM:SS.mmm; it is ignored.", path + "@" + name)
+            return nil
+        }
+        return seconds
+    }
+
+    private mutating func iconPixelRatio(of element: VASTXMLElement, at path: String) -> Double? {
+        guard let raw = element.attribute("pxratio") else { return nil }
+        guard let ratio = Double(raw.trimmingCharacters(in: .whitespaces)), ratio.isFinite, ratio > 0 else {
+            report(.warning, "vast.icon.pxratio.invalid", "pxratio=\"\(raw)\" is not a positive number; it is ignored.", path + "@pxratio")
+            return nil
+        }
+        return ratio
     }
 
     private mutating func decodeDuration(_ element: VASTXMLElement?, at path: String, context: Context) -> Double? {
@@ -584,27 +675,7 @@ struct VASTDecoder {
             report(.warning, "vast.companion.\(name).missing", "<Companion> must have a \(name) attribute.", path + "@" + name)
         }
 
-        var resources: [VASTCompanion.Resource] = []
-        var resourceIndex: [String: Int] = [:]
-        for child in element.children where ["StaticResource", "IFrameResource", "HTMLResource"].contains(child.name) {
-            resourceIndex[child.name, default: 0] += 1
-            let childPath = path + "/\(child.name)[\(resourceIndex[child.name] ?? 1)]"
-            switch child.name {
-            case "StaticResource":
-                if let url = url(child, at: childPath, role: .resource) {
-                    resources.append(.staticResource(url: url, creativeType: nonEmpty(child.attribute("creativeType"))))
-                }
-            case "IFrameResource":
-                if let url = url(child, at: childPath, role: .resource) { resources.append(.iframe(url: url)) }
-            default:
-                if let html = nonEmpty(child.trimmedText) {
-                    recordOpenRTBMacros(in: html, isMarkup: true, at: childPath)
-                    resources.append(.html(html))
-                } else {
-                    report(.warning, "vast.companion.html.empty", "<HTMLResource> is empty.", childPath)
-                }
-            }
-        }
+        let resources = decodeResources(of: element, at: path, kind: "companion")
         if resources.isEmpty, context == .inline {
             report(.warning, "vast.companion.resource.missing", "<Companion> needs a StaticResource, IFrameResource or HTMLResource.", path)
         }
@@ -623,6 +694,33 @@ struct VASTDecoder {
                    path)
         }
         return companion
+    }
+
+    /// The `StaticResource` / `IFrameResource` / `HTMLResource` children of a companion or an icon, in document order.
+    /// `kind` names the parent in issue codes (`vast.<kind>.html.empty`).
+    private mutating func decodeResources(of element: VASTXMLElement, at path: String, kind: String) -> [VASTCompanion.Resource] {
+        var resources: [VASTCompanion.Resource] = []
+        var resourceIndex: [String: Int] = [:]
+        for child in element.children where ["StaticResource", "IFrameResource", "HTMLResource"].contains(child.name) {
+            resourceIndex[child.name, default: 0] += 1
+            let childPath = path + "/\(child.name)[\(resourceIndex[child.name] ?? 1)]"
+            switch child.name {
+            case "StaticResource":
+                if let url = url(child, at: childPath, role: .resource) {
+                    resources.append(.staticResource(url: url, creativeType: nonEmpty(child.attribute("creativeType"))))
+                }
+            case "IFrameResource":
+                if let url = url(child, at: childPath, role: .resource) { resources.append(.iframe(url: url)) }
+            default:
+                if let html = nonEmpty(child.trimmedText) {
+                    recordOpenRTBMacros(in: html, isMarkup: true, at: childPath)
+                    resources.append(.html(html))
+                } else {
+                    report(.warning, "vast.\(kind).html.empty", "<HTMLResource> is empty.", childPath)
+                }
+            }
+        }
+        return resources
     }
 
     // MARK: - ViewableImpression

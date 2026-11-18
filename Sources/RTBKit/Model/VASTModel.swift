@@ -94,9 +94,13 @@ public struct VASTLinear: Sendable, Hashable {
     public var clickTrackings: [String]
     public var customClicks: [String]
     public var adParameters: String?
+    /// VAST 3.0+ `Icons/Icon` (industry icons such as AdChoices), in document order.
+    public var icons: [VASTIcon]
 
     public init(duration: Double? = nil, skipOffset: VASTOffset? = nil, mediaFiles: [VASTMediaFile] = [], trackingEvents: [VASTTracking] = [],
-                clickThrough: String? = nil, clickTrackings: [String] = [], customClicks: [String] = [], adParameters: String? = nil) {
+                clickThrough: String? = nil, clickTrackings: [String] = [], customClicks: [String] = [], adParameters: String? = nil,
+                icons: [VASTIcon] = []) {
+        self.icons = icons
         self.duration = duration
         self.skipOffset = skipOffset
         self.mediaFiles = mediaFiles
@@ -105,6 +109,64 @@ public struct VASTLinear: Sendable, Hashable {
         self.clickTrackings = clickTrackings
         self.customClicks = customClicks
         self.adParameters = adParameters
+    }
+}
+
+/// VAST 3.0+ industry icon (VAST 4.1 `Linear/Icons/Icon`, e.g. AdChoices): an overlay the player draws on the linear ad,
+/// with its own view and click tracking.
+public struct VASTIcon: Sendable, Hashable {
+    /// `xPosition`: `left`, `right`, or pixels from the left edge.
+    public enum HorizontalPosition: Sendable, Hashable {
+        case left, right
+        case pixels(Int)
+    }
+
+    /// `yPosition`: `top`, `bottom`, or pixels from the top edge.
+    public enum VerticalPosition: Sendable, Hashable {
+        case top, bottom
+        case pixels(Int)
+    }
+
+    /// The industry initiative the icon represents (`AdChoices`, …).
+    public var program: String?
+    /// Pixels.
+    public var width: Int?
+    public var height: Int?
+    public var xPosition: HorizontalPosition?
+    public var yPosition: VerticalPosition?
+    /// Seconds the icon stays on screen; `nil`: as long as the ad.
+    public var duration: Double?
+    /// Seconds after the ad starts before the icon shows; `nil`: from the start.
+    public var offset: Double?
+    public var apiFramework: String?
+    /// VAST 4.1 `pxratio`: the pixel ratio the icon was designed for.
+    public var pixelRatio: Double?
+    /// `StaticResource` / `IFrameResource` / `HTMLResource`, in document order.
+    public var resources: [VASTCompanion.Resource]
+    /// `IconClicks/IconClickThrough`.
+    public var clickThrough: String?
+    /// `IconClicks/IconClickTracking`.
+    public var clickTrackings: [String]
+    /// `IconViewTracking`: fired when the icon is shown.
+    public var viewTrackings: [String]
+
+    public init(program: String? = nil, width: Int? = nil, height: Int? = nil, xPosition: HorizontalPosition? = nil,
+                yPosition: VerticalPosition? = nil, duration: Double? = nil, offset: Double? = nil, apiFramework: String? = nil,
+                pixelRatio: Double? = nil, resources: [VASTCompanion.Resource] = [], clickThrough: String? = nil, clickTrackings: [String] = [],
+                viewTrackings: [String] = []) {
+        self.program = program
+        self.width = width
+        self.height = height
+        self.xPosition = xPosition
+        self.yPosition = yPosition
+        self.duration = duration
+        self.offset = offset
+        self.apiFramework = apiFramework
+        self.pixelRatio = pixelRatio
+        self.resources = resources
+        self.clickThrough = clickThrough
+        self.clickTrackings = clickTrackings
+        self.viewTrackings = viewTrackings
     }
 }
 
@@ -460,15 +522,21 @@ public struct ResolvedVASTAd: Sendable, Hashable {
         set { trackers.modify { $0.verifications = newValue } }
     }
 
+    /// The icons of the played Linear of all wrappers and the inline ad (`.iconView` / `.iconClick` index this list).
+    public var icons: [VASTIcon] {
+        get { trackers.collect(\.icons) }
+        set { trackers.modify { $0.icons = newValue } }
+    }
+
     public init(inline: VASTInline, sequence: Int? = nil, impressions: [String] = [], errors: [String] = [], trackingEvents: [VASTTracking] = [],
                 clickTrackings: [String] = [], viewableImpression: VASTViewableImpression = VASTViewableImpression(),
-                verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = []) {
+                verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = [], icons: [VASTIcon] = []) {
         self.inline = inline
         self.sequence = sequence
         self.origin = origin
         trackers = VASTMergedTrackers(lists: VASTTrackerLists(impressions: impressions, errors: errors, trackingEvents: trackingEvents,
                                                              clickTrackings: clickTrackings, viewableImpression: viewableImpression,
-                                                             verifications: verifications))
+                                                             verifications: verifications, icons: icons))
     }
 
     /// The resolver's ad: `layer` is the inline ad's layer, linked to the wrappers above it.

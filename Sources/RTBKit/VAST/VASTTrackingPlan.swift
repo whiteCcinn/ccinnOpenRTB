@@ -16,6 +16,8 @@ import Foundation
 /// | `.companionView(i, c)` | the companion's `creativeView` Tracking |
 /// | `.companionView(i, c)` (wrappers) | the matching tracking companions of every wrapper above, outermost first, before the companion's own |
 /// | `.companionClick(i, c)` | wrapper and own CompanionClickTracking, then a navigation to CompanionClickThrough only when `playerOpensClickThrough` (an image StaticResource; none on CTV); script, HTML and iframe companions open their own click-through |
+/// | `.iconView(i, k)` | icon k's IconViewTracking (`k` indexes `ads[i].icons`: wrapper icons first, then the inline ad's) |
+/// | `.iconClick(i, k)` | icon k's IconClickTracking, then a navigation to its IconClickThrough (none when the device cannot open click-throughs) |
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
@@ -25,7 +27,7 @@ import Foundation
 /// element path in `source` tells which tracker it is. A chain-wide `.error(code, adIndex: nil)` is one action across the
 /// pod, so it has no ad position.
 ///
-/// Indices come from renderers and are never trusted: an `adIndex` or `companionIndex` outside the resolution (negative,
+/// Indices come from renderers and are never trusted: an `adIndex`, `companionIndex` or `iconIndex` outside the resolution (negative,
 /// `count`, `Int.max`, …) plans nothing.
 ///
 /// Resolution-time failures (`ResolvedVAST.adFailures`) are planned by `resolutionRequests` (VASTResolutionPlan.swift).
@@ -54,6 +56,10 @@ public enum VASTTrackingPlan {
             return planner.companionView(adIndex: adIndex, companionIndex: companionIndex)
         case let .companionClick(adIndex, companionIndex):
             return planner.companionClick(adIndex: adIndex, companionIndex: companionIndex)
+        case let .iconView(adIndex, iconIndex):
+            return planner.iconView(adIndex: adIndex, iconIndex: iconIndex)
+        case let .iconClick(adIndex, iconIndex):
+            return planner.iconClick(adIndex: adIndex, iconIndex: iconIndex)
         case let .error(code, adIndex):
             return planner.error(code, adIndex: adIndex)
         case .won, .rendered, .viewable, .click, .closed, .loss:
@@ -260,6 +266,39 @@ struct VASTPlanner {
             remaining -= creative.companions.count
         }
         return nil
+    }
+
+    // MARK: Icons
+
+    /// The icon's IconViewTracking, attributed to the document the icon came from.
+    func iconView(adIndex: Int, iconIndex: Int) -> [TrackerRequest] {
+        guard let target = iconTarget(adIndex: adIndex, iconIndex: iconIndex) else { return [] }
+        return target.icon.viewTrackings.map { url in
+            make(url, .event, "VAST icon view", adIndex, target.layer, target.element + "/IconViewTracking", context: target.context)
+        }
+    }
+
+    /// The icon's IconClickTracking, then one navigation to its IconClickThrough when the device can open it.
+    func iconClick(adIndex: Int, iconIndex: Int) -> [TrackerRequest] {
+        guard let target = iconTarget(adIndex: adIndex, iconIndex: iconIndex) else { return [] }
+        var requests = target.icon.clickTrackings.map { url in
+            make(url, .click, "VAST icon click", adIndex, target.layer, target.element + "/IconClicks/IconClickTracking", context: target.context)
+        }
+        if canNavigate, let clickThrough = target.icon.clickThrough {
+            requests.append(make(clickThrough, .navigation, "VAST icon click", adIndex, target.layer, target.element + "/IconClicks/IconClickThrough",
+                                 context: target.context))
+        }
+        return requests
+    }
+
+    /// The icon at `iconIndex` of `ads[adIndex].icons`, with its layer and label; `nil` outside them.
+    private func iconTarget(adIndex: Int, iconIndex: Int) -> (icon: VASTIcon, layer: VASTLayer?, element: String, context: MacroContext)? {
+        guard let ad = ad(at: adIndex) else { return nil }
+        let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
+        let icons = Self.attributed(ad.icons, lineage, \.linearIcons)
+        guard icons.indices.contains(iconIndex) else { return nil }
+        let (icon, layer) = icons[iconIndex]
+        return (icon, layer, VASTLabel.icon(icon, index: iconIndex), adContext(ad, lineage: lineage))
     }
 
     // MARK: Errors

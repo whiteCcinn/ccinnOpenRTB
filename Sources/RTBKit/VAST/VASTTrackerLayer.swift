@@ -12,9 +12,11 @@ struct VASTTrackerLists: Sendable, Hashable {
     var clickTrackings: [String] = []
     var viewableImpression = VASTViewableImpression()
     var verifications: [VASTVerification] = []
+    var icons: [VASTIcon] = []
 
     init(impressions: [String] = [], errors: [String] = [], trackingEvents: [VASTTracking] = [], clickTrackings: [String] = [],
-         viewableImpression: VASTViewableImpression = VASTViewableImpression(), verifications: [VASTVerification] = []) {
+         viewableImpression: VASTViewableImpression = VASTViewableImpression(), verifications: [VASTVerification] = [], icons: [VASTIcon] = []) {
+        self.icons = icons
         self.impressions = impressions
         self.errors = errors
         self.trackingEvents = trackingEvents
@@ -27,14 +29,21 @@ struct VASTTrackerLists: Sendable, Hashable {
     init(_ body: VASTAd.Body) {
         self.init(impressions: body.impressions, errors: body.errors, trackingEvents: body.linearTrackings,
                   clickTrackings: body.linearClickTrackings, viewableImpression: body.viewableImpression ?? VASTViewableImpression(),
-                  verifications: body.verifications)
+                  verifications: body.verifications, icons: body.linearIcons)
     }
 
     /// The number of entries, the unit of the resolver's tracker budget.
     var count: Int {
         [impressions.count, errors.count, trackingEvents.count, clickTrackings.count, viewableImpression.viewable.count,
-         viewableImpression.notViewable.count, viewableImpression.viewUndetermined.count, verifications.count]
+         viewableImpression.notViewable.count, viewableImpression.viewUndetermined.count, verifications.count, iconEntryCount]
             .reduce(0, VASTTrackerLayer.saturatingSum)
+    }
+
+    /// Each icon, with its view and click trackers.
+    private var iconEntryCount: Int {
+        icons.reduce(0) { total, icon in
+            [total, 1, icon.viewTrackings.count, icon.clickTrackings.count].reduce(0, VASTTrackerLayer.saturatingSum)
+        }
     }
 }
 
@@ -97,7 +106,7 @@ final class VASTTrackerLayer: Sendable {
         return VASTTrackerLists(impressions: layers.flatMap(\.own.impressions), errors: layers.flatMap(\.own.errors),
                                 trackingEvents: layers.flatMap(\.own.trackingEvents), clickTrackings: layers.flatMap(\.own.clickTrackings),
                                 viewableImpression: layers.reduce(VASTViewableImpression()) { $0.merged(with: $1.own.viewableImpression) },
-                                verifications: layers.flatMap(\.own.verifications))
+                                verifications: layers.flatMap(\.own.verifications), icons: layers.flatMap(\.own.icons))
     }
 
     /// The first of `categories` (an InLine ad's) that this layer or one above blocks (VAST 4.1 §3.19.2), outermost

@@ -27,6 +27,14 @@ extension VASTAd.Body {
         }
     }
 
+    /// `Icons/Icon`, chosen like `linearTrackings`.
+    var linearIcons: [VASTIcon] {
+        switch self {
+        case let .inline(inline): inline.playedLinear?.icons ?? []
+        case let .wrapper(wrapper): wrapper.creatives.compactMap(\.linear).flatMap(\.icons)
+        }
+    }
+
     /// `VideoClicks/ClickTracking`, chosen like `linearTrackings`.
     var linearClickTrackings: [String] {
         switch self {
@@ -134,6 +142,11 @@ enum VASTLabel {
     static func ordinal(_ index: Int) -> String {
         let (next, overflow) = index.addingReportingOverflow(1)
         return overflow ? String(index) : String(next)
+    }
+
+    /// `Icon 1 program="AdChoices"`.
+    static func icon(_ icon: VASTIcon, index: Int) -> String {
+        "Icon " + ordinal(index) + (icon.program.map { " program=\"\($0)\"" } ?? "")
     }
 
     /// `Companion 2 id="c1"`, with ` 300×250` when `withSize` and both dimensions are known.

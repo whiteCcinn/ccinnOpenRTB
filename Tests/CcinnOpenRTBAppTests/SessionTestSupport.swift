@@ -132,11 +132,11 @@ enum Fixtures {
         case .rendered: return [request(.billing, candidate.billingURL ?? "https://bill.example/"), request(.impression, "https://imp.example/i")]
         case .viewable, .videoViewability: return [request(.viewability, "https://view.example/v")]
         case .video: return [request(.event, "https://event.vast.example/e")]
-        case .click, .videoClick, .companionClick:
+        case .click, .videoClick, .companionClick, .iconClick:
             return [request(.click, "https://click.example/c"), request(.navigation, "https://landing.example/")]
         case .loss: return [request(.loss, candidate.lossURL ?? "https://loss.example/")]
         case .error: return [request(.error, "https://err.vast.example/e")]
-        case .closed, .companionView: return [request(.event, "https://event.example/close")]
+        case .closed, .companionView, .iconView: return [request(.event, "https://event.example/close")]
         }
     }
 }

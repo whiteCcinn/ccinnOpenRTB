@@ -12,7 +12,7 @@ import Foundation
 /// | `.click(assetID)` | Native: the clicked asset's own link, else the ad's main link (Native 1.2 §5.4) — its `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
 /// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` (every other event is a won bid: `${AUCTION_LOSS}` = 0, "Bid Won") |
 /// | `.closed` | nothing |
-/// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
+/// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.iconView`, `.iconClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
 ///
 /// Macros by document origin (decisions.md "Macros"): the bid response's own URLs substitute OpenRTB `${…}` only, as the
 /// exchange does; Native URLs fire as written (an inline `adm` was substituted before parsing, delivered markup never
@@ -68,7 +68,7 @@ public enum TrackingPlan {
             return []
         case let .loss(reason):
             return AuctionTracking.loss(candidate, reason: reason, factory: response)
-        case .video, .videoViewability, .videoClick, .companionView, .companionClick, .error:
+        case .video, .videoViewability, .videoClick, .companionView, .companionClick, .iconView, .iconClick, .error:
             guard let vast else { return [] }
             return VASTTrackingPlan.requests(for: event, vast: vast, candidate: candidate, context: context,
                                              source: vastSource(native: native, factory: response))

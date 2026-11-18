@@ -45,6 +45,11 @@ public enum AdLifecycleEvent: Sendable, Hashable {
     case companionView(adIndex: Int, companionIndex: Int)
     /// A VAST companion was clicked (its CompanionClickTracking, then navigation to CompanionClickThrough).
     case companionClick(adIndex: Int, companionIndex: Int)
+    /// A VAST industry icon (e.g. AdChoices) was shown: its IconViewTracking. `iconIndex` indexes `ads[adIndex].icons`
+    /// (wrapper icons first, then the inline ad's).
+    case iconView(adIndex: Int, iconIndex: Int)
+    /// A VAST icon was clicked: its IconClickTracking, then a navigation to IconClickThrough (none on CTV).
+    case iconClick(adIndex: Int, iconIndex: Int)
     /// A click on a display / Native ad: on a Native asset (`assetID`) or on the ad (`nil`).
     case click(assetID: Int?)
     /// A click on VAST pod ad `adIndex` (ClickTracking, then navigation to ClickThrough).

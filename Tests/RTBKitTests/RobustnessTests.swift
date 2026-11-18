@@ -26,7 +26,8 @@ struct RobustnessTests {
     static let events: [AdLifecycleEvent] = [
         .won, .rendered, .viewable(.mrc50), .viewable(.mrc100), .viewable(.video50), .click(assetID: nil), .click(assetID: 1),
         .click(assetID: -1), .closed, .loss(reason: 102), .video(.start, adIndex: 0), .videoClick(adIndex: 3),
-        .error(.noSupportedMedia, adIndex: nil),
+        .error(.noSupportedMedia, adIndex: nil), .iconView(adIndex: 0, iconIndex: Int.max), .iconClick(adIndex: Int.min, iconIndex: 0),
+        .companionClick(adIndex: Int.max, companionIndex: Int.max),
     ]
 
     /// Values that stress type coercion, numbers, macros and encodings.
