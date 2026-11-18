@@ -59,38 +59,53 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 | **Markup delivered by the win notice** (a bid with `nurl` and no `adm`) | Not fetched | Not fetched: the win notice is a tracker. The ad slot says so; switching to Real fetches it | The `nurl` response body is the markup, and the URLs inside it hang under that request |
 | **`data:` URLs and built-in sample media** (`ccinn-sample://`) | Decoded or generated on the Mac | Decoded or generated on the Mac | Decoded or generated on the Mac |
 | **Click-throughs** | Recorded as navigation, never opened | Recorded as navigation, never opened | Recorded. Opened only when **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** is on (off by default), in the default web browser — the app that opens web links, never an app that claims the link. |
+| **A bid request you send from the [Client](#the-client-tab) tab** | Recorded as `offline`, **not sent** | Sent to the URL you entered, exactly as you typed it | Sent to the URL you entered, exactly as you typed it |
 
 - Switching to Real asks for confirmation. The sheet lists the tracker hosts of the selected bid, says which requests cannot be listed in advance (script trackers, a creative's own scripts), lists the content hosts the render already contacted, and warns when win, billing or loss notices of the same auction were already sent in this session: sending again may double-count at the DSP. Cancelling keeps the current mode.
 - The confirmation lasts for the current session only, and describes exactly one bid, device and placement: if any of them changes while it is shown, it asks again.
 - Leaving Real, rendering again, **Reset** and **Lose** take effect at once: trackers in flight are cancelled (a hop on the wire is finished as cancelled, one not sent yet is recorded as not sent), every Real-mode web view (script trackers, an HTML or iframe companion) stops, and a render still being prepared in Real mode is stopped, so no later wrapper hop goes out with Real-mode values.
 - Rendering the same bid again replays its auction: every play after the first is numbered **replay N** in the lifecycle log and in the source of every Network entry it causes (`bid 1.1 · replay 2 › nurl`). In Real mode a replay sends the auction's notices again.
-- **The pasted request's personal data stays on the Mac until you confirm Real mode.** In Simulated and Offline mode, nothing derived from it leaves the Mac: when the player fetches a VAST tag or wrapper, `[IFA]`, `[IFATYPE]`, `[DEVICEIP]`, `[LATLONG]`, `[GDPRCONSENT]`, `[GPPSTRING]` and `[GPPSECTIONID]` are sent as `-1`, and `[DEVICEUA]` as the simulated device's User-Agent. Publisher-context macros (`[LIMITADTRACKING]`, `[DOMAIN]`, `[PAGEURL]`, `[APPBUNDLE]`, `[TRANSACTIONID]`) are still filled from the request: they describe the placement, not the user. Real mode fills every macro with the pasted request's values, device identifiers, location and consent strings included, as a device would; use it with test requests or with consent.
+- **The pasted request's personal data stays on the Mac until you confirm Real mode.** In Simulated and Offline mode, nothing derived from it leaves the Mac (a bid request you send yourself from the Client tab goes, as you typed it, to the URL you entered; Offline sends nothing): when the player fetches a VAST tag or wrapper, `[IFA]`, `[IFATYPE]`, `[DEVICEIP]`, `[LATLONG]`, `[GDPRCONSENT]`, `[GPPSTRING]` and `[GPPSECTIONID]` are sent as `-1`, and `[DEVICEUA]` as the simulated device's User-Agent. Publisher-context macros (`[LIMITADTRACKING]`, `[DOMAIN]`, `[PAGEURL]`, `[APPBUNDLE]`, `[TRANSACTIONID]`) are still filled from the request: they describe the placement, not the user. Real mode fills every macro with the pasted request's values, device identifiers, location and consent strings included, as a device would; use it with test requests or with consent.
 - Every tracker and content request carries the simulated device's User-Agent and an explicit `Accept-Language`, and no cookies or credentials; authentication challenges are refused. Video and audio are fetched by the app, never by the media player's own networking.
 - The mode is shown in the toolbar and on every entry in the Network window.
 - CTV devices never navigate, in any mode.
 - Native 1.2 `dcourl` (dynamic creative, beta in the spec) is logged as unsupported and never fetched.
 - Apart from the requests above, the only thing that leaves your Mac is the once-a-day update check against GitHub, which you can turn off.
+- A bid request from the Client tab is not a tracker: leaving Real, rendering again, Reset and Lose do not cancel it; going Offline and **Clear** in the Network window do.
 
 > [!WARNING]
 > Real mode sends real trackers. To the receiving server they look like traffic from the simulated device, so they can inflate the numbers of a live campaign. Use Real mode with your own test endpoints, or with the agreement of whoever owns the trackers.
 
 ## Features
 
+- **Send a bid request, Postman-style.** The [Client](#the-client-tab) tab sends the request you type to an endpoint, shows the response, and renders it on the device with the format and placement the request and response imply. Save requests with their responses and open them again later.
 - **Paste what an exchange returns.** An OpenRTB 2.x or 3.0 bid response, a bare `adm` (HTML, Native JSON or VAST XML) or a VAST tag URL. The input type and version are detected automatically. Parsing is lenient: wrong types become validation issues and unknown fields are kept. A no-bid response shows "No bid" with the `nbr` reason named.
 - **The exchange's part, too.** Like an exchange (OpenRTB 2.6 §4.4), the simulator substitutes its `${AUCTION_*}` / `${OPENRTB_*}` macros in the bid's inline `adm` — HTML, Native JSON or VAST XML — before the device sees it; VAST `[MACROS]` stay for the player and are filled when each tracker fires. Markup the DSP returns after the win (`nurl` response, `display.curl`) is used as delivered.
-- **Pick the bid.** Every bid across all seats is listed with its format. Optionally paste the bid request too: it resolves Native asset types, the impression size and placement, and request-side macros.
+- **Pick the bid.** Every bid across all seats is listed with its format. Optionally paste the bid request too: it resolves Native asset types, the impression size and placement, and request-side macros. The bid's impression names its ad unit: `imp.rwdd` (or `imp.ext.is_rewarded_inventory`, `imp.ext.prebid.is_rewarded_inventory`; AdCOM `placement.reward`) makes it rewarded, `imp.instl` or `video.plcmt` 3 (AdCOM `display.instl`) interstitial.
 - **Render it as a device would**
   - HTML and rich media in a sandboxed web view with an MRAID 3.0 bridge. Bridge calls are logged. Clicks and navigations are recorded instead of leaving the simulator.
   - Image banners (OpenRTB 3.0 `display.banner`).
   - Native 1.0, 1.1 and 1.2 in in-feed, content-stream and app-install layouts, with the privacy link and per-asset clicks.
   - VAST video and audio: skip (from `skipoffset`), mute, pause, countdown, click-through, progress bar, companions (shown from the ad's first frame) or an end card, industry icons such as AdChoices, ad pods in `sequence` order, and wrapper chains up to 5 levels. An ad whose required companions (`CompanionAds@required`) cannot be shown — on CTV, none can — is not played (error 602), and a wrapper's `BlockedAdCategories` reject a matching ad (error 205).
-  - Placements: inline banner, in-feed, interstitial, rewarded and CTV instream. The bid picks a sensible one (a 320×480 bid is an interstitial, a CTV device plays instream); you can change it. Full-screen ads have a close control with a 44 pt (Apple) or 50 pt (Android) hit area; a non-skippable video offers it when it ends.
+  - Placements: inline banner, in-feed, interstitial, rewarded and CTV instream. The bid picks a sensible one (a rewarded or interstitial impression in the request first, then a 320×480 bid is an interstitial, Native is in-feed, video full screen; a CTV device plays instream); you can change it. Full-screen ads have a close control with a 44 pt (Apple) or 50 pt (Android) hit area; a non-skippable video offers it when it ends.
   - CTV: full-screen pod playback ("Ad 1 of 2"), remote-style focus with the arrow keys, Return, Escape and Space, and no click-through.
-- **Devices.** 28 devices: iPhones from SE to 18 Pro Max, Android phones, foldables including the iPhone Duo (folded or unfolded), the Surface Duo (one screen or spanned across the hinge), iPads and four CTV platforms, in portrait or landscape, each with its own system chrome and mock app. See [Devices](#devices).
+- **Devices.** 28 devices (the iPhone 18 Pro by default): iPhones from SE to 18 Pro Max, Android phones, foldables including the iPhone Duo (folded or unfolded), the Surface Duo (one screen or spanned across the hinge), iPads and four CTV platforms, in portrait or landscape, each with its own system chrome and mock app. See [Devices](#devices).
 - **Tracking at the right moment.** Trackers fire when a real SDK or player would fire them, with OpenRTB, AdCOM and VAST macros expanded and unknown macros reported. A **Viewability** slider scrolls the ad in and out of view and drives the MRC rules: 50% for 1 s for display, 50% for 2 s for video. **Fire** buttons trigger events by hand. See [Tracking and macros](#tracking-and-macros).
 - **Network window.** Every request in real time as a table, a relationship tree and a waterfall, with details, filters, HAR export and copy as curl. See [The Network window](#the-network-window).
 - **Validation.** The inspector checks the response against the detected OpenRTB, Native and VAST versions: required fields, wrong types, invalid URLs, non-HTTPS trackers when the request requires secure creatives, missing playable media, wrapper depth, and fields that belong to another version. Each issue has a severity, a code, a message and a location (a JSON pointer or a VAST element path).
 - **Samples that work offline.** Built-in samples cover every supported format and version: HTML and MRAID, Native 1.0–1.2, VAST 2.0–4.2 (a wrapper chain, a CTV pod and an audio ad included), OpenRTB 3.0 and a no-bid. Sample media is generated on the Mac on first use and cached under `~/Library/Caches`: a 15 s 1280×720 H.264 MP4 with a timecode, a 15 s AAC tone, and PNG images.
+
+## The Client tab
+
+A request composer in the right panel of every window, for sending a bid request to an exchange, SSP or DSP endpoint and seeing what comes back on the device.
+
+- **Compose.** Method (**POST**, or **GET** for an endpoint that takes its query in the URL), the endpoint URL, headers and the body you type. New requests carry `Content-Type: application/json` and `x-openrtb-version: 2.6`; turn headers off, edit them or add your own. **Format** (⇧⌘F) pretty-prints the body without reordering it.
+- **Send** (⌘↩) through the window's network gate, with the simulated device's User-Agent (the iPhone 18 Pro unless you pick another device) and an explicit `Accept-Language`, unless you set those headers yourself. **Cancel** (⌘.) stops it. A request that cannot be sent says why: a URL that is not http(s), a header name that is not a token, a value with a line break, a header set twice. A body that is not JSON is sent as typed, with a warning.
+- **The response**: status, time, size, headers, and the body, pretty-printed when it is JSON. Any status is shown, error bodies included.
+- **On the device.** A 2xx response with a body goes into the **Response** editor and the request into **Request**, so the simulator takes the bid's format from both (`mtype`, the impression's media types, the markup) and its placement from the request (rewarded, interstitial, in-feed …). Simulated and Offline windows render it at once; in Real mode the editors are filled and the device waits for **Render**, since rendering sends the bid's trackers. A 204 or an empty body is no bid and leaves the simulator alone. The tab says what the simulator made of it: "OpenRTB 2.6 · 1 bid · Video · Rewarded · iPhone 18 Pro".
+- **Saved requests.** **Save** (⌘S) keeps the request with its last response and the device it was sent as; **Saved** lists them (newest first, searchable) in every window. Open one to send it again, or **Render** its saved response on its device without sending anything. Duplicate and delete from the list. Each is a JSON file in `~/Library/Application Support/CcinnOpenRTB/Requests/`, readable only by your account; it holds your headers (credentials included) and the request's personal data.
+- **Copy as curl** (in the ⋯ menu) copies exactly what Send would put on the wire.
+- The request is a **Bid request** entry in the Network window, with its body. Redirects are followed by hand: 307 and 308 repeat the POST and its body, 303 (and 301 or 302 after a POST) continue as a GET without the body, and a hop to another host never carries `Authorization`, `Proxy-Authorization` or `Cookie`.
 
 ## The Network window
 
@@ -102,8 +117,8 @@ Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; 
 - **Details**: the URL template next to the expanded URL with macros highlighted, replaced and unknown macros, query parameters, request and response headers, the redirect chain, and a response preview for content.
 - **Filters** by category, mode and text. **Follow tail** keeps the newest entry in view. **Clear** empties the session's list.
 - **Content** entries carry a CONTENT badge, so what the app loads to render the ad never looks like a tracker. A VAST tag or wrapper URL shows the URI as written next to the URL actually requested (the player expands VAST macros in it). The request headers are the ones actually sent.
-- **Export HAR 1.2.** Entries carry custom `_ccinn` fields: `sequence`, `category`, `trigger`, `source`, `mode`, `delivery`, `parent`, `template` and `macros`.
-- **Copy URL** and **Copy as curl**. The curl command is shell-quoted and uses `--globoff`, so VAST `[MACROS]` are not read as curl globs.
+- **Export HAR 1.2.** Entries carry custom `_ccinn` fields: `sequence`, `category`, `trigger`, `source`, `mode`, `delivery`, `parent`, `template` and `macros`. A bid request's body is its `postData`.
+- **Copy URL** and **Copy as curl**. The curl command is shell-quoted and uses `--globoff`, so VAST `[MACROS]` are not read as curl globs. A bid request's body goes in `--data-binary`, with its line breaks; other control characters are written as JSON `\u00XX` escapes.
 - A session keeps at most 10,000 entries. The oldest are dropped first.
 
 | Category | What it is |
@@ -120,6 +135,7 @@ Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; 
 | `verification` | VAST `AdVerifications` tracking, such as `verificationNotExecuted` |
 | `content` | What the app fetches to render the ad: VAST wrappers and tags, images, media, Native `assetsurl`, `display.curl` markup |
 | `creative` | Whatever the HTML creative loads, or tries to load |
+| `bidRequest` | A bid request you sent from the Client tab, with its method, headers and body |
 
 In HAR exports the mode is `_ccinn.delivery`: `simulated`, `network` (Sent), `blocked`, `offline`, `local`, `renderer` or `browser`; `_ccinn.mode` is the session's tracking mode.
 
@@ -183,7 +199,7 @@ CcinnOpenRTB runs on **macOS 14 Sonoma or later** (Apple silicon and Intel).
 | Tablet | iPad (10th gen), iPad Pro 11" (4th gen), iPad Pro 11" (M5) |
 | CTV | Apple TV 4K, Google TV (4K TV), Fire TV Stick 4K Max (2nd gen), Roku Express (1080p): 1920×1080 pt, a remote, no click-through |
 
-Each device carries its OpenRTB `devicetype`, OS and version (iOS / iPadOS / tvOS 27.2, Android 17 — the Surface Duo stays on 12 — Android TV 14, Fire OS 8.1.8.5, Roku OS 15.3), the User-Agent of its in-app web view (an iPad's is the desktop-class one its web view sends) and screen geometry (size, scale, corner radius, safe area, cutout, hinge or folded screen). These are used for rendering, for choosing a VAST media file, for macros such as `[DEVICEUA]`, and as the User-Agent of trackers sent in Real mode. CTV is landscape only.
+Each device carries its OpenRTB `devicetype`, OS and version (iOS / iPadOS / tvOS 27.2, Android 17 — the Surface Duo stays on 12 — Android TV 14, Fire OS 8.1.8.5, Roku OS 15.3), the User-Agent of its in-app web view (an iPad's is the desktop-class one its web view sends) and screen geometry (size, scale, corner radius, safe area, cutout, hinge or folded screen). These are used for rendering, for choosing a VAST media file, for macros such as `[DEVICEUA]`, and as the User-Agent of trackers sent in Real mode and of bid requests sent from the Client tab. CTV is landscape only. New windows start on the iPhone 18 Pro.
 
 ## Installation
 
@@ -212,8 +228,12 @@ The project page, release notes and issue tracker are also in the **Help** menu,
 3. Press **⌥⌘N** to open the Network window and watch the trackers fire. Move the **Viewability** slider, or use the **Fire** buttons, to trigger more events.
 4. Optionally paste the bid request into **Request**, pick another seat or bid, and set the clearing price or other macro values.
 
+Or start from a request: open the **Client** tab, enter your endpoint and the bid request, and press **⌘↩**. The response is shown on the device.
+
 | Shortcut | Action |
 |---|---|
+| **⌘↩** | Send the request (Client tab) |
+| **⌘S** | Save the request and its response (Client tab) |
 | **⌥⌘N** | Network window |
 | **⌘K** | Clear the Network window's list |
 | **⌘,** | Settings |
@@ -273,7 +293,7 @@ CcinnOpenRTB (SwiftUI app: shell, simulator, renderers, Network window)
 ```
 
 - **A deterministic core.** RTBKit uses only Foundation and does no I/O. Parsing, wrapper merging, macro expansion and the tracking plan are pure functions of their input, so the order of trackers is covered by unit tests. VAST wrapper fetches go through a `VASTFetcher` protocol that the app implements on top of the network monitor.
-- **One gate to the network.** Every request goes through one dispatch policy — trackers, content and the media player's byte ranges and HLS playlists and segments alike. The transport can only be called with a send permit; the policy issues none for a tracker in Simulated or Offline mode, and none for remote content when Offline. Switching back to Simulated stops a tracker's redirect chain before its next hop.
+- **One gate to the network.** Every request goes through one dispatch policy — trackers, content, the media player's byte ranges and HLS playlists and segments, and the bid requests you send from the Client tab alike. The transport can only be called with a send permit; the policy issues none for a tracker in Simulated or Offline mode, and none for remote content when Offline. Switching back to Simulated stops a tracker's redirect chain before its next hop.
 - **Every hop is visible.** The transport sends exactly one request and never follows redirects. The monitor records each 3xx and follows it itself.
 - **Never crash on input.** Wrong types and missing fields become validation issues with a location; unknown fields are kept.
 - **Concurrency safety.** The project builds in Swift 6 strict-concurrency mode. Network updates are batched before they reach the UI, so a burst of trackers does not stall the window.

@@ -59,38 +59,53 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | **由竞价成功通知返回的广告素材**（有 `nurl` 但没有 `adm` 的出价） | 不请求 | 不请求：竞价成功通知本身是监测请求。广告位上会说明原因，切换到真实模式后才会请求 | 使用 `nurl` 的响应体作为广告素材，素材中的 URL 都挂在该请求之下 |
 | **`data:` URL 与内置示例媒体**（`ccinn-sample://`） | 在本机解码或生成 | 在本机解码或生成 | 在本机解码或生成 |
 | **点击跳转** | 记录为导航，永不打开 | 记录为导航，永不打开 | 记录；只有在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭）才会打开，并且使用默认 Web 浏览器——即打开网页链接的那个应用，绝不会交给声明了该链接的其他应用。 |
+| **你在 [Client](#client-标签页) 标签页中发送的竞价请求** | 记录为 `offline`，**不发出** | 按你输入的内容发往你填写的 URL | 按你输入的内容发往你填写的 URL |
 
 - 切换到真实模式时会弹出确认框。它列出所选出价的监测请求主机名，说明哪些请求无法事先列出（脚本类监测、创意自身的脚本），列出本次渲染已经访问过的内容主机，并在本会话中已经发出过同一次竞价的竞价成功、计费或竞价失败通知时给出警告：再次发送可能导致 DSP 重复计数。取消则保持当前模式。
 - 该确认只对当前会话有效，并且只针对确定的一个出价、设备与广告位：确认框显示期间只要其中任何一项发生变化，就会重新询问。
 - 离开真实模式、重新渲染、**Reset** 和 **Lose** 都会立即生效：正在进行的监测请求会被取消（已在传输中的那一跳记为已取消，尚未发出的记为未发送），所有真实模式下的 Web 视图（脚本类监测、HTML 或 iframe 伴随广告）都会停止，仍在真实模式下准备中的渲染也会停止，因此之后的 Wrapper 请求不会带着真实模式的取值发出。
 - 再次渲染同一个出价就是重放它的竞价：第一次之后的每一次播放都会在生命周期日志以及它引起的每条 Network 记录的来源中编号为 **replay N**（`bid 1.1 · replay 2 › nurl`）。在真实模式下，重放会再次发出该竞价的通知。
-- **在你确认进入真实模式之前，粘贴的竞价请求中的个人数据不会离开你的 Mac。** 在模拟模式和离线模式下，任何由它派生的数据都不会离开本机：播放器请求 VAST 标签或 Wrapper 时，`[IFA]`、`[IFATYPE]`、`[DEVICEIP]`、`[LATLONG]`、`[GDPRCONSENT]`、`[GPPSTRING]` 与 `[GPPSECTIONID]` 一律以 `-1` 发出，`[DEVICEUA]` 则使用模拟设备的 User-Agent。描述发布方环境的宏（`[LIMITADTRACKING]`、`[DOMAIN]`、`[PAGEURL]`、`[APPBUNDLE]`、`[TRANSACTIONID]`）仍会用竞价请求中的值填充：它们描述的是广告位，而不是用户。真实模式会像真实设备一样，用粘贴的竞价请求中的值填充所有宏，包括设备标识符、位置与同意字符串；请只在测试请求或已获同意的情况下使用。
+- **在你确认进入真实模式之前，粘贴的竞价请求中的个人数据不会离开你的 Mac。** 在模拟模式和离线模式下，任何由它派生的数据都不会离开本机（你自己在 Client 标签页中发送的竞价请求会按你输入的内容发往你填写的 URL；离线模式下不发出任何请求）：播放器请求 VAST 标签或 Wrapper 时，`[IFA]`、`[IFATYPE]`、`[DEVICEIP]`、`[LATLONG]`、`[GDPRCONSENT]`、`[GPPSTRING]` 与 `[GPPSECTIONID]` 一律以 `-1` 发出，`[DEVICEUA]` 则使用模拟设备的 User-Agent。描述发布方环境的宏（`[LIMITADTRACKING]`、`[DOMAIN]`、`[PAGEURL]`、`[APPBUNDLE]`、`[TRANSACTIONID]`）仍会用竞价请求中的值填充：它们描述的是广告位，而不是用户。真实模式会像真实设备一样，用粘贴的竞价请求中的值填充所有宏，包括设备标识符、位置与同意字符串；请只在测试请求或已获同意的情况下使用。
 - 每个监测请求与内容请求都带有模拟设备的 User-Agent 和显式的 `Accept-Language`，不带 Cookie 和凭据；身份验证质询一律拒绝。视频和音频由应用自己请求，绝不经由媒体播放器自身的网络功能。
 - 当前模式显示在工具栏上，也显示在 Network 窗口的每一条记录上。
 - CTV 设备在任何模式下都不会跳转。
 - Native 1.2 的 `dcourl`（动态创意，规范中仍为 beta）只会被记录为不支持，永远不会被请求。
 - 除上述请求外，唯一会离开你的 Mac 的只有每天一次、向 GitHub 发起的更新检查，并且可以关闭。
+- Client 标签页发出的竞价请求不是监测请求：离开真实模式、重新渲染、**Reset** 和 **Lose** 都不会取消它；切换到离线模式以及在 Network 窗口中 **Clear** 会取消它。
 
 > [!WARNING]
 > 真实模式发出的是真实的监测请求。对接收方服务器而言，它们看起来就像来自所模拟设备的流量，因此可能会抬高线上广告活动的数据。请只对自己的测试端点使用真实模式，或事先征得监测链接所有者的同意。
 
 ## 功能特性
 
+- **像 Postman 一样发送竞价请求**：[Client](#client-标签页) 标签页把你输入的请求发往一个端点，展示响应，并按请求与响应所对应的格式和广告位在设备上渲染。可以把请求连同响应一起保存，日后再打开。
 - **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。
 - **也模拟 Exchange 的那一部分**：和 Exchange 一样（OpenRTB 2.6 §4.4），模拟器会在设备拿到出价的内嵌 `adm`（HTML、Native JSON 或 VAST XML）之前，替换其中的 `${AUCTION_*}` / `${OPENRTB_*}` 宏；VAST 的 `[MACROS]` 留给播放器，在每个监测请求触发时才填充。DSP 在竞价成功后返回的素材（`nurl` 响应、`display.curl`）按原样使用。
-- **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。
+- **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。出价对应的曝光位决定广告单元：`imp.rwdd`（或 `imp.ext.is_rewarded_inventory`、`imp.ext.prebid.is_rewarded_inventory`；AdCOM `placement.reward`）表示激励，`imp.instl` 或 `video.plcmt` 为 3（AdCOM `display.instl`）表示插屏。
 - **像设备一样渲染**
   - HTML 与富媒体运行在带 MRAID 3.0 桥接的沙盒 Web 视图中。桥接调用都会被记录；点击和导航只会被记录，不会离开模拟器。
   - 图片横幅（OpenRTB 3.0 `display.banner`）。
   - Native 1.0、1.1、1.2，提供信息流、内容流和应用安装三种布局，支持隐私链接与按资源的点击。
   - VAST 视频与音频：跳过（来自 `skipoffset`）、静音、暂停、倒计时、点击跳转、进度条、伴随广告（从该广告的第一帧起展示）或结束卡片、AdChoices 等行业图标、按 `sequence` 顺序播放的 Ad Pod，以及最多 5 层的 Wrapper 链。必需的伴随广告（`CompanionAds@required`）无法展示时（CTV 上一个都无法展示），该广告不会播放（错误 602）；Wrapper 的 `BlockedAdCategories` 会拒绝类别匹配的广告（错误 205）。
-  - 广告位：内嵌横幅、信息流、插屏、激励视频，以及 CTV 贴片（instream）。出价会自动选择合适的广告位（320×480 的出价为插屏，CTV 设备为贴片），也可以手动更改。全屏广告带有关闭按钮，点击区域在 Apple 设备上至少 44 pt、在 Android 设备上至少 50 pt；不可跳过的视频在播放结束后才提供关闭按钮。
+  - 广告位：内嵌横幅、信息流、插屏、激励视频，以及 CTV 贴片（instream）。出价会自动选择合适的广告位（优先采用竞价请求中的激励或插屏曝光位，其次 320×480 的出价为插屏、Native 为信息流、视频为全屏；CTV 设备为贴片），也可以手动更改。全屏广告带有关闭按钮，点击区域在 Apple 设备上至少 44 pt、在 Android 设备上至少 50 pt；不可跳过的视频在播放结束后才提供关闭按钮。
   - CTV：全屏播放 Ad Pod（"Ad 1 of 2"），用方向键、Return、Escape 和空格进行遥控器式焦点操作，不支持点击跳转。
-- **设备**：共 28 款：从 SE 到 18 Pro Max 的 iPhone、Android 手机、包括 iPhone Duo 在内的折叠屏（折叠或展开）、Surface Duo（单屏或跨越铰链）、iPad，以及四个 CTV 平台，支持竖屏和横屏，每款设备都有各自的系统界面与模拟应用。详见[设备](#设备)。
+- **设备**：共 28 款（默认 iPhone 18 Pro）：从 SE 到 18 Pro Max 的 iPhone、Android 手机、包括 iPhone Duo 在内的折叠屏（折叠或展开）、Surface Duo（单屏或跨越铰链）、iPad，以及四个 CTV 平台，支持竖屏和横屏，每款设备都有各自的系统界面与模拟应用。详见[设备](#设备)。
 - **在正确的时机触发监测**：监测请求会在真实 SDK 或播放器触发它的时刻触发，OpenRTB、AdCOM 与 VAST 宏都会被展开，未知的宏会被报告。**Viewability** 滑块可以把广告滚入或滚出视野，并据此执行 MRC 规则：展示类广告 50% 可见持续 1 秒，视频广告 50% 可见持续 2 秒。**Fire** 按钮可以手动触发事件。详见[监测与宏](#监测与宏)。
 - **Network 窗口**：以表格、关系树和瀑布图实时展示每一个请求，提供详情、筛选、HAR 导出和复制为 curl。详见 [Network 窗口](#network-窗口)。
 - **规范校验**：检查器会按识别出的 OpenRTB、Native 和 VAST 版本检查响应：必填字段、类型错误、无效 URL、竞价请求要求安全创意时的非 HTTPS 监测链接、缺少可播放的媒体文件、Wrapper 层数，以及属于其他版本的字段。每个问题都有严重级别、代码、说明和位置（JSON 指针或 VAST 元素路径）。
 - **离线可用的示例**：内置示例覆盖所有支持的格式和版本：HTML 与 MRAID、Native 1.0–1.2、VAST 2.0–4.2（包括 Wrapper 链、CTV Ad Pod 和音频广告）、OpenRTB 3.0，以及无出价响应。示例媒体在首次使用时于本机生成，并缓存在 `~/Library/Caches` 下：一段带时间码的 15 秒 1280×720 H.264 MP4、一段 15 秒 AAC 提示音，以及若干 PNG 图片。
+
+## Client 标签页
+
+每个窗口右侧面板中的请求编辑器，用来向 Exchange、SSP 或 DSP 的端点发送竞价请求，并在设备上查看返回的结果。
+
+- **编写**：方法（**POST**；端点通过 URL 接收查询时用 **GET**）、端点 URL、请求头，以及你输入的请求体。新请求默认带有 `Content-Type: application/json` 与 `x-openrtb-version: 2.6`；可以停用、修改这些请求头或添加自己的请求头。**Format**（⇧⌘F）只格式化请求体，不改变键的顺序。
+- **发送**（⌘↩）：经由该窗口的网络关口发出，带有模拟设备的 User-Agent（除非另选设备，否则为 iPhone 18 Pro）和显式的 `Accept-Language`，除非你自己设置了这些请求头。**Cancel**（⌘.）可以中止。无法发送的请求会说明原因：URL 不是 http(s)、请求头名称不是合法 token、取值中含有换行、同一请求头设置了两次。请求体不是 JSON 时仍按原样发送，并给出警告。
+- **响应**：状态码、耗时、大小、响应头，以及响应体（JSON 会被格式化）。任何状态码都会展示，包括错误响应的响应体。
+- **在设备上展示**：带响应体的 2xx 响应会填入 **Response** 编辑器，请求填入 **Request** 编辑器，因此模拟器会根据两者确定出价格式（`mtype`、曝光位的媒体类型、素材本身），并根据请求确定广告位（激励、插屏、信息流……）。模拟模式与离线模式下会立即渲染；真实模式下只填入编辑器，设备等待你点击 **Render**，因为渲染会发出该出价的监测请求。204 或空响应体表示无出价，模拟器保持不变。标签页会显示模拟器的识别结果，例如 "OpenRTB 2.6 · 1 bid · Video · Rewarded · iPhone 18 Pro"。
+- **保存的请求**：**Save**（⌘S）会保存请求及其最近一次响应和发送时使用的设备；**Saved** 在每个窗口中列出它们（最新的在前，可搜索）。打开后可以再次发送，或者在其设备上 **Render** 保存的响应而不发出任何请求。可以在列表中复制或删除。每个请求是 `~/Library/Application Support/CcinnOpenRTB/Requests/` 下的一个 JSON 文件，只有你的账户可以读取；其中包含你的请求头（包括凭据）以及请求中的个人数据。
+- **Copy as curl**（⋯ 菜单中）复制的正是 Send 会发出的内容。
+- 该请求在 Network 窗口中是一条 **Bid request** 记录，带有请求体。重定向由应用逐跳跟随：307 与 308 会重复 POST 及其请求体；303（以及 POST 之后的 301 或 302）改为不带请求体的 GET；跳到其他主机时绝不携带 `Authorization`、`Proxy-Authorization` 或 `Cookie`。
 
 ## Network 窗口
 
@@ -102,8 +117,8 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **详情**：URL 模板与展开后的 URL 并排显示并高亮宏，列出已替换和未知的宏、查询参数、请求头与响应头、重定向链，以及内容请求的响应预览。
 - **筛选**：按类别、模式和文本筛选。**Follow tail** 让最新的记录始终可见，**Clear** 清空当前会话的列表。
 - **内容**类记录带有 CONTENT 标记，因此应用为渲染广告而加载的内容不会被误认为监测请求。VAST 标签或 Wrapper 的 URL 会把书写时的 URI 与实际请求的 URL 并排显示（播放器会展开其中的 VAST 宏）。请求头是实际发出的请求头。
-- **导出 HAR 1.2**：每条记录带有自定义的 `_ccinn` 字段：`sequence`、`category`、`trigger`、`source`、`mode`、`delivery`、`parent`、`template` 和 `macros`。
-- **Copy URL** 与 **Copy as curl**：curl 命令经过 shell 转义并使用 `--globoff`，因此 VAST 的 `[MACROS]` 不会被 curl 当作通配模式。
+- **导出 HAR 1.2**：每条记录带有自定义的 `_ccinn` 字段：`sequence`、`category`、`trigger`、`source`、`mode`、`delivery`、`parent`、`template` 和 `macros`。竞价请求的请求体导出为 `postData`。
+- **Copy URL** 与 **Copy as curl**：curl 命令经过 shell 转义并使用 `--globoff`，因此 VAST 的 `[MACROS]` 不会被 curl 当作通配模式。竞价请求的请求体放在 `--data-binary` 中并保留换行；其他控制字符写成 JSON 的 `\u00XX` 转义。
 - 每个会话最多保留 10,000 条记录，超出时最早的记录会被丢弃。
 
 | 类别 | 含义 |
@@ -120,6 +135,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | `verification` | VAST `AdVerifications` 的监测，例如 `verificationNotExecuted` |
 | `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、Native `assetsurl`、`display.curl` 素材 |
 | `creative` | HTML 创意自己加载或尝试加载的一切 |
+| `bidRequest` | 你在 Client 标签页中发送的竞价请求，包括方法、请求头与请求体 |
 
 HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（即 Sent）、`blocked`、`offline`、`local`、`renderer` 或 `browser`；`_ccinn.mode` 是会话的监测模式。
 
@@ -183,7 +199,7 @@ CcinnOpenRTB 支持 **macOS 14 Sonoma 及以上**（Apple 芯片与 Intel）。
 | 平板 | iPad（第 10 代）、iPad Pro 11"（第 4 代）、iPad Pro 11"（M5） |
 | CTV | Apple TV 4K、Google TV（4K 电视）、Fire TV Stick 4K Max（第 2 代）、Roku Express（1080p）：1920×1080 pt，遥控器操作，不支持点击跳转 |
 
-每台设备都带有 OpenRTB `devicetype`、操作系统及版本（iOS / iPadOS / tvOS 27.2，Android 17——Surface Duo 停留在 12——，Android TV 14，Fire OS 8.1.8.5，Roku OS 15.3）、其应用内 Web 视图的 User-Agent（iPad 使用其 Web 视图发出的桌面级 User-Agent）和屏幕几何信息（尺寸、缩放倍率、圆角、安全区、刘海/开孔、铰链或折叠后的屏幕）。这些信息用于渲染、选择 VAST 媒体文件、展开 `[DEVICEUA]` 等宏，并作为真实模式下监测请求的 User-Agent。CTV 只支持横屏。
+每台设备都带有 OpenRTB `devicetype`、操作系统及版本（iOS / iPadOS / tvOS 27.2，Android 17——Surface Duo 停留在 12——，Android TV 14，Fire OS 8.1.8.5，Roku OS 15.3）、其应用内 Web 视图的 User-Agent（iPad 使用其 Web 视图发出的桌面级 User-Agent）和屏幕几何信息（尺寸、缩放倍率、圆角、安全区、刘海/开孔、铰链或折叠后的屏幕）。这些信息用于渲染、选择 VAST 媒体文件、展开 `[DEVICEUA]` 等宏，并作为真实模式下监测请求以及 Client 标签页所发竞价请求的 User-Agent。CTV 只支持横屏。新窗口默认使用 iPhone 18 Pro。
 
 ## 安装
 
@@ -212,8 +228,12 @@ CcinnOpenRTB 每天也会在后台自动检查一次，可以在 **Settings ▸ 
 3. 按 **⌥⌘N** 打开 Network 窗口，观察监测请求的触发。拖动 **Viewability** 滑块，或使用 **Fire** 按钮，触发更多事件。
 4. 可选：在 **Request** 中粘贴竞价请求，选择其他 seat 或出价，设置成交价或其他宏的取值。
 
+也可以从请求开始：打开 **Client** 标签页，填写端点和竞价请求，然后按 **⌘↩**。响应会显示在设备上。
+
 | 快捷键 | 作用 |
 |---|---|
+| **⌘↩** | 发送请求（Client 标签页） |
+| **⌘S** | 保存请求及其响应（Client 标签页） |
 | **⌥⌘N** | Network 窗口 |
 | **⌘K** | 清空 Network 窗口的列表 |
 | **⌘,** | 设置 |
@@ -273,7 +293,7 @@ CcinnOpenRTB（SwiftUI 应用：外壳、模拟器、渲染器、Network 窗口�
 ```
 
 - **确定性的核心**：RTBKit 只依赖 Foundation，不做任何 I/O。解析、Wrapper 合并、宏展开和监测计划都是输入的纯函数，因此监测请求的顺序由单元测试覆盖。VAST Wrapper 的请求通过 `VASTFetcher` 协议完成，由应用基于网络监视器实现。
-- **通往网络的唯一关口**：所有请求都经过同一个分发策略——监测请求、内容，以及媒体播放器的字节范围请求、HLS 播放列表与分片都是如此。传输层只能凭发送许可调用；该策略不会为模拟模式或离线模式下的监测请求签发许可，离线时也不会为远程内容签发许可。切回模拟模式后，监测请求的重定向链会在下一跳之前停止。
+- **通往网络的唯一关口**：所有请求都经过同一个分发策略——监测请求、内容、媒体播放器的字节范围请求、HLS 播放列表与分片，以及你在 Client 标签页中发送的竞价请求都是如此。传输层只能凭发送许可调用；该策略不会为模拟模式或离线模式下的监测请求签发许可，离线时也不会为远程内容签发许可。切回模拟模式后，监测请求的重定向链会在下一跳之前停止。
 - **每一跳都可见**：传输层每次只发送一个请求，从不跟随重定向。监视器记录每个 3xx 响应，并自行跟随。
 - **输入永不导致崩溃**：类型错误和缺失字段会成为带位置信息的校验问题，未知字段会被保留。
 - **并发安全**：项目在 Swift 6 严格并发模式下编译。网络更新会先合并再送到界面，大量监测请求同时到来也不会卡住窗口。

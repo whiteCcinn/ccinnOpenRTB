@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Client tab:** a Postman-like request composer in every window. Enter a method (POST or GET), an endpoint URL, headers (`Content-Type: application/json` and `x-openrtb-version: 2.6` by default) and the bid request body, and press **Send** (⌘↩). The response shows its status, time, size, headers and body (pretty-printed JSON). A 2xx response with a body goes into the Response editor and the request into the Request editor, so the simulator renders the bid with the format and placement the request and response imply; in Real mode the device waits for an explicit Render. **Copy as curl** copies exactly what Send would send.
+- **Saved requests:** **Save** (⌘S) keeps a request with its last response and device; open it in any window to send it again, or render the saved response without sending anything. Duplicate, delete and search. Stored as one JSON file each in `~/Library/Application Support/CcinnOpenRTB/Requests/` (0700 folder, 0600 files); unreadable files are skipped and reported.
+- **The request picks the ad unit:** `imp.rwdd` (or `imp.ext.is_rewarded_inventory`, `imp.ext.prebid.is_rewarded_inventory`; AdCOM `placement.reward`) suggests the Rewarded placement and `imp.instl` or `video.plcmt` 3 (AdCOM `display.instl`) Interstitial, before the format and size rules.
+- **Network window:** a **Bid request** category with the request's method, headers and body in the details; Copy as curl repeats the body (`--data-binary`) and HAR exports it as `postData`.
+
+### Changed
+
+- The default device is the iPhone 18 Pro.
+- A redirected request with a body (a bid request) repeats its method and body only on 307 and 308; 303, and 301 or 302 after a POST, continue as a GET without the body; a hop to another origin drops `Authorization`, `Proxy-Authorization` and `Cookie`.
+
 ## [1.0.0] - 2026-11-18
 
 First public release.
