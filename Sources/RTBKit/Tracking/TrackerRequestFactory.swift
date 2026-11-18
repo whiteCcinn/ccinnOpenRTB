@@ -1,19 +1,30 @@
 import Foundation
 
-/// Builds `TrackerRequest`s for exchange-side trackers (OpenRTB notices, AdCOM events, Native trackers and clicks):
-/// only OpenRTB `${…}` macros are substituted there, as an exchange would (`MacroExpander.expandOpenRTB`).
+/// Builds `TrackerRequest`s for the URLs of one document: the bid response itself (OpenRTB notices, AdCOM events and the
+/// AdCOM banner link) or the markup (Native trackers, clicktrackers and link).
 ///
-/// A factory serves the URLs of one document: every request it builds gets `parentID`, the request that delivered that
-/// document (`nil` for the pasted bid response and for markup carried inline in it).
+/// What is substituted depends on that document (decisions.md "Macros"):
+/// - `.bidResponse`: OpenRTB `${…}` only, as the exchange does (`MacroExpander.expandOpenRTB`; OpenRTB 2.6 §4.4);
+/// - `.markup`: nothing. The SDK fires Native URLs as written: an inline `adm` was substituted by the exchange before it
+///   was parsed, and markup a request delivered never was. Every `${…}` / `[…]` left is reported in `unknownMacros`.
+///
+/// Every request gets `parentID`, the request that delivered the document (`nil` for the pasted bid response and for
+/// markup carried inline in it).
 struct TrackerRequestFactory {
+    enum Origin {
+        case bidResponse, markup
+    }
+
     let context: MacroContext
     let parentID: UUID?
+    let origin: Origin
     /// `bid <seat>.<bid>`.
     let root: String
 
-    init(candidate: AdCandidate, context: MacroContext, parentID: UUID? = nil) {
+    init(candidate: AdCandidate, context: MacroContext, origin: Origin, parentID: UUID? = nil) {
         self.context = context
         self.parentID = parentID
+        self.origin = origin
         root = "bid " + candidate.id
     }
 
@@ -23,7 +34,10 @@ struct TrackerRequestFactory {
 
     /// A URL tracker (`isScript`: a JavaScript URL injected as `<script src>`).
     func url(_ template: String, category: TrackerCategory, trigger: String, source: String, isScript: Bool = false) -> TrackerRequest {
-        let expanded = MacroExpander.expandOpenRTB(template, context: context)
+        let expanded = switch origin {
+        case .bidResponse: MacroExpander.expandOpenRTB(template, context: context)
+        case .markup: MacroExpander.literal(template)
+        }
         return TrackerRequest(parentID: parentID, category: category, trigger: trigger, source: source, template: template, url: expanded.url,
                               replacedMacros: expanded.replaced, unknownMacros: expanded.unknown, isScript: isScript)
     }
@@ -31,7 +45,10 @@ struct TrackerRequestFactory {
     /// A script tracker given as HTML/JavaScript markup (Native `jstracker`, AdCOM inline script): `template` and `url` hold
     /// the markup, which the renderer injects as is (Real mode only).
     func script(_ markup: String, category: TrackerCategory, trigger: String, source: String) -> TrackerRequest {
-        let expanded = MacroExpander.expandMarkup(markup, context: context)
+        let expanded = switch origin {
+        case .bidResponse: MacroExpander.expandMarkup(markup, context: context)
+        case .markup: MacroExpander.literalMarkup(markup)
+        }
         return TrackerRequest(parentID: parentID, category: category, trigger: trigger, source: source, template: markup, url: expanded.url,
                               replacedMacros: expanded.replaced, unknownMacros: expanded.unknown, isScript: true)
     }

@@ -19,6 +19,9 @@ import Foundation
 ///   `adFailures` entry, so each Error URL is reported exactly once.
 /// - **Requests.** Fetches run one at a time in play order, so the chain and the network monitor are deterministic. Each
 ///   fetch is linked to the request that delivered the wrapper asking for it (`VASTHop.requestID`).
+/// - **Macros by origin.** Only the exchange substitutes OpenRTB `${…}`, and only in the bid's own `adm` (OpenRTB 2.6
+///   §4.4): a document a request delivered (the win notice's markup, a VAST tag URL or AdCOM `curl`, every wrapper hop)
+///   that still carries `${…}` gets one `vast.macro.openrtb.unsubstituted` warning, at its first such element.
 public struct VASTResolver: Sendable {
     public var fetcher: any VASTFetcher
     public var maxDepth: Int
@@ -67,14 +70,15 @@ private struct VASTResolution {
         switch source {
         case let .xml(xml):
             chain.append(VASTHop(requestID: parentRequestID))
-            parsed = parse(xml, hop: 0)
+            // With a parent, a request (the win notice, `curl`) delivered the markup: the exchange never substituted it.
+            parsed = parse(xml, hop: 0, served: parentRequestID != nil)
         case let .url(rawURL):
             let url = expandedTagURI(rawURL.trimmingCharacters(in: .whitespacesAndNewlines))
             fetchCount += 1
             do {
                 let response = try await resolver.fetcher.fetchVAST(url, parentRequestID: parentRequestID)
                 chain.append(VASTHop(url: url, requestID: response.requestID))
-                parsed = parse(response.body, hop: 0)
+                parsed = parse(response.body, hop: 0, served: true)
             } catch {
                 chain.append(VASTHop(url: url, error: .wrapperTimeout))
                 report(.error, "vast.tag.fetch.failed", "The VAST tag could not be loaded: \(Self.describe(error)) (VAST error 301).", "VAST")
@@ -256,7 +260,7 @@ private struct VASTResolution {
             return failed(.wrapperTimeout)
         }
 
-        switch parse(body, hop: hop) {
+        switch parse(body, hop: hop, served: true) {
         case let .failed(code):
             chain[hop].error = code
             return failed(code)
@@ -297,15 +301,17 @@ private struct VASTResolution {
 
     // MARK: Parsing
 
-    private mutating func parse(_ body: String, hop: Int) -> ParsedBody {
+    /// `served`: a request delivered the body (anything but the bid's own `adm`).
+    private mutating func parse(_ body: String, hop: Int, served: Bool) -> ParsedBody {
         guard body.contains(where: { !$0.isWhitespace }) else {
             report(.error, "vast.response.empty", hop == 0 ? "The VAST response is empty (VAST error 303)." : "The wrapper's response is empty (VAST error 303).",
                    Self.path(hop: hop, "VAST"))
             return .failed(.noAdsAfterWrapper)
         }
         switch VASTParser.outcome(of: body, requireSecure: resolver.requireSecure) {
-        case let .document(document, documentIssues):
+        case let .document(document, documentIssues, macroSites):
             issues += documentIssues.map { Self.prefixed($0, hop: hop) }
+            if served { reportUnsubstitutedMacros(macroSites, hop: hop) }
             return .document(document)
         case let .notXML(documentIssues):
             issues += documentIssues.map { Self.prefixed($0, hop: hop) }
@@ -314,6 +320,22 @@ private struct VASTResolution {
             issues += documentIssues.map { Self.prefixed($0, hop: hop) }
             return .failed(.schemaValidation)
         }
+    }
+
+    /// One warning per served document that still carries OpenRTB `${…}`, at its first such element.
+    private mutating func reportUnsubstitutedMacros(_ sites: [VASTMacroSite], hop: Int) {
+        guard let first = sites.first else { return }
+        var macros = OrderedTokens()
+        for site in sites {
+            for macro in site.macros { macros.insert(macro) }
+        }
+        let shownLimit = 5
+        let shown = macros.values.prefix(shownLimit).joined(separator: ", ") + (macros.values.count > shownLimit ? ", …" : "")
+        let document = hop == 0 ? "a fetched VAST document (delivered by the win notice, AdCOM curl or a VAST tag URL)" : "a wrapper-served document"
+        let elements = sites.count == 1 ? "1 element" : "\(sites.count) elements"
+        report(.warning, "vast.macro.openrtb.unsubstituted",
+               "Unsubstituted OpenRTB macro in \(document): \(shown) stays literal in \(elements) when fired. Only the exchange substitutes ${…}, and only in the bid's own adm (OpenRTB 2.6 §4.4); a VAST player expands […] macros only (VAST 4.1 §6.1).",
+               Self.path(hop: hop, first.path))
     }
 
     private func requestID(ofHop hop: Int) -> UUID? {

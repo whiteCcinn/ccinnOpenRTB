@@ -222,8 +222,11 @@ struct TrackingPlanNativeTests {
         #expect(urls == [["https://t.example/e1"], ["https://t.example/e2"], ["https://t.example/e3"], ["https://t.example/e4"]])
     }
 
+    /// The exchange substitutes `${…}` in the inline `adm` before the SDK parses it (OpenRTB 2.6 §4.4); the SDK then fires
+    /// the Native trackers as written (decisions.md "Macros"), so the substituted price reaches every tracker.
     @Test func native10ImpTrackersAndJSTracker() throws {
-        let json = #"{"native":{"ver":"1.1","assets":[{"id":1,"title":{"text":"T"}}],"link":{"url":"https://l.example"},"imptrackers":["https://t.example/i1?p=${AUCTION_PRICE}","https://t.example/i2"],"jstracker":"<script src=\"https://t.example/j.js?p=${AUCTION_PRICE}\"></script>"}}"#
+        let adm = #"{"native":{"ver":"1.1","assets":[{"id":1,"title":{"text":"T"}}],"link":{"url":"https://l.example"},"imptrackers":["https://t.example/i1?p=${AUCTION_PRICE}","https://t.example/i2"],"jstracker":"<script src=\"https://t.example/j.js?p=${AUCTION_PRICE}\"></script>"}}"#
+        let json = MacroExpander.expandMarkup(adm, context: TrackingFixtures.context).url
         let native = try #require(NativeParser.parse(json).ad)
         let candidate = AdCandidate(id: "0.0", bidID: "n", price: 1, format: .native, markup: .native(json))
         #expect(TrackingFixtures.plan(.rendered, candidate, native: native) == [

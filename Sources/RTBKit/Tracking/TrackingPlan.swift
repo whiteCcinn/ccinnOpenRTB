@@ -14,7 +14,9 @@ import Foundation
 /// | `.closed` | nothing |
 /// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
 ///
-/// Exchange-side and SDK trackers substitute OpenRTB `${…}` macros only; VAST `[…]` macros are the player's.
+/// Macros by document origin (decisions.md "Macros"): the bid response's own URLs substitute OpenRTB `${…}` only, as the
+/// exchange does; Native URLs fire as written (an inline `adm` was substituted before parsing, delivered markup never
+/// is); VAST URLs expand VAST `[…]` only (`VASTTrackingPlan`). Whatever is left is listed in `unknownMacros`.
 ///
 /// Parents (decisions.md "Network relationships"): a request's parent is the request that delivered the document
 /// containing its URL. The pasted bid response has none, so its URLs (nurl/purl, burl, lurl, AdCOM `display.event`, the
@@ -47,8 +49,8 @@ public enum TrackingPlan {
             context.lossReason = OpenRTBMacro.bidWonLossReason
         }
         // One factory per document: the pasted response (no parent) and the markup (its delivering request, if any).
-        let response = TrackerRequestFactory(candidate: candidate, context: context)
-        let markup = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
+        let response = TrackerRequestFactory(candidate: candidate, context: context, origin: .bidResponse)
+        let markup = TrackerRequestFactory(candidate: candidate, context: context, origin: .markup, parentID: options.markupRequestID)
         switch event {
         case .won:
             guard options.exchangeSendsWinNotice else { return [] }

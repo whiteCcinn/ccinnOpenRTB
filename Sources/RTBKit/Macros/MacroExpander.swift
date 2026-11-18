@@ -14,8 +14,17 @@ import Foundation
 ///   a value becomes `-1` (VAST 4.1 §6.1 "unknown").
 /// - Unknown macros are left in place and reported. Percent-encoded macros (`%24%7BAUCTION_PRICE%7D`) are reported too:
 ///   exchanges and players substitute only the literal token.
+///
+/// Which family a fire-time expansion substitutes depends on the document the URL was written in (decisions.md "Macros"):
+/// - the bid response's own URLs (nurl/burl/lurl, 3.0 purl/burl/lurl, AdCOM `display.event`, the AdCOM banner `link`):
+///   OpenRTB `${…}` only, as the exchange does (`expandOpenRTB`; OpenRTB 2.6 §4.4);
+/// - VAST documents from any hop: VAST `[…]` only, as the player does (`expandVAST`; VAST 4.1 §6.1/§6.2). The exchange
+///   substituted `${…}` in an inline `adm` before the player saw it (`expandMarkup`); a `${…}` in a document a request
+///   delivered was never substituted and stays literal, reported;
+/// - Native trackers and links: nothing (the SDK fires them as written; an inline `adm` was substituted beforehand).
 public enum MacroExpander {
-    /// A VAST tracker (the player's view): OpenRTB `${…}` (already substituted by the exchange in `adm`) and VAST `[…]`.
+    /// Both families at once (`${…}` and `[…]`), for callers that know a URL went through the exchange and the player.
+    /// Fire-time tracking uses the origin-specific entry points instead (see the type's notes).
     public static func expand(_ template: String, context: MacroContext) -> ExpandedURL {
         expand(template, context: context, timeZone: deviceClock(of: context))
     }
@@ -41,6 +50,46 @@ public enum MacroExpander {
         return MacroScanner.substitute(in: markup, mode: .markup, resolver: &resolver)
     }
 
+    /// A URL in a VAST document, from any hop (the player's view, VAST 4.1 §6.1/§6.2): VAST `[…]` macros are substituted;
+    /// OpenRTB `${…}` is not a player macro, so it stays literal and is listed in `unknown` (an inline `adm` had it
+    /// substituted by the exchange already; a fetched document never did). Also for VAST request URIs (`VASTAdTagURI`, a
+    /// pasted or `curl` VAST tag URL).
+    public static func expandVAST(_ template: String, context: MacroContext) -> ExpandedURL {
+        var resolver = MacroValueResolver(context: context, timeZone: deviceClock(of: context))
+        return MacroScanner.substitute(in: template, mode: .vastURL, resolver: &resolver)
+    }
+
+    /// The OpenRTB `${…}` macros left in a document the exchange never substituted (markup fetched from the win notice or
+    /// AdCOM `curl`, a VAST wrapper's response, …), in first-seen order: every upper-case `${NAME}` / `${NAME:ALG}` and its
+    /// percent-encoded form. Creative markup rules apply, so JavaScript template literals (`${width}`) and `[…]` are not
+    /// reported. For the host's own "unsubstituted macro" warning on fetched HTML and Native documents.
+    public static func unsubstitutedOpenRTBMacros(in document: String) -> [String] {
+        var resolver = MacroValueResolver(context: MacroContext(), timeZone: .gmt)
+        return MacroScanner.substitute(in: document, mode: .literalMarkup, resolver: &resolver).unknown
+    }
+
+    /// A URL fired exactly as written (Native trackers and links at fire time): nothing is substituted; `${…}` and `[…]`
+    /// tokens are reported in `unknown`.
+    static func literal(_ template: String) -> ExpandedURL {
+        var resolver = MacroValueResolver(context: MacroContext(), timeZone: .gmt)
+        return MacroScanner.substitute(in: template, mode: .literalURL, resolver: &resolver)
+    }
+
+    /// Script markup injected exactly as written (Native `jstracker` at fire time): nothing is substituted; upper-case
+    /// `${…}` tokens are reported in `unknown`.
+    static func literalMarkup(_ markup: String) -> ExpandedURL {
+        var resolver = MacroValueResolver(context: MacroContext(), timeZone: .gmt)
+        return MacroScanner.substitute(in: markup, mode: .literalMarkup, resolver: &resolver)
+    }
+
+    /// The `${…}` tokens (any case, and their percent-encoded forms) in a URL, or the upper-case ones in markup
+    /// (`isMarkup`), in first-seen order. Nothing is substituted.
+    static func openRTBTokens(in text: String, isMarkup: Bool) -> [String] {
+        guard text.utf8.contains(where: { $0 == UInt8(ascii: "$") || $0 == UInt8(ascii: "%") }) else { return [] }
+        let tokens = isMarkup ? literalMarkup(text).unknown : literal(text).unknown
+        return tokens.filter { $0.hasPrefix("$") || $0.hasPrefix("%24") }
+    }
+
     /// The simulated device's clock (VAST 4.1 §6.2 `[TIMESTAMP]` carries its UTC offset): `DeviceProfile.timeZone` when
     /// Foundation knows the identifier, otherwise UTC. Never `TimeZone.current`, the Mac's zone.
     static func deviceClock(of context: MacroContext) -> TimeZone {
@@ -56,12 +105,40 @@ public enum MacroExpander {
 /// - `%24%7BNAME%7D`, `%24%7BNAME%3AALG%7D` and `%5BNAME%5D` (percent-encoded forms, reported only).
 enum MacroScanner {
     enum Mode {
-        /// VAST tracker URLs: both families.
+        /// Both families.
         case url
         /// OpenRTB tracker URLs: `${…}` substituted; `[NAME]` left and reported.
         case openRTBURL
+        /// VAST URLs: `[NAME]` substituted; `${…}` left and reported.
+        case vastURL
+        /// URLs fired as written: nothing substituted; `${…}` and `[NAME]` reported.
+        case literalURL
         /// Creative markup: OpenRTB family only; `[…]` ignored; unknown `${…}` reported only when upper-case.
         case markup
+        /// Creative markup kept as written: nothing substituted; upper-case `${…}` reported.
+        case literalMarkup
+
+        var substitutesOpenRTB: Bool {
+            switch self {
+            case .url, .openRTBURL, .markup: true
+            case .vastURL, .literalURL, .literalMarkup: false
+            }
+        }
+
+        var substitutesVAST: Bool {
+            switch self {
+            case .url, .vastURL: true
+            case .openRTBURL, .literalURL, .markup, .literalMarkup: false
+            }
+        }
+
+        /// In markup `[…]` is JavaScript or text, and a lower-case `${…}` a template literal: neither is a macro.
+        var isMarkup: Bool {
+            switch self {
+            case .markup, .literalMarkup: true
+            case .url, .openRTBURL, .vastURL, .literalURL: false
+            }
+        }
     }
 
     private static let dollar = UInt8(ascii: "$"), openBrace = UInt8(ascii: "{"), closeBrace = UInt8(ascii: "}")
@@ -80,19 +157,19 @@ enum MacroScanner {
             let byte = bytes[index]
             if byte == dollar, let token = scanOpenRTB(bytes, at: index) {
                 let literal = String(decoding: bytes[index..<token.end], as: UTF8.self)
-                if let value = resolver.openRTBValue(name: token.name, algorithm: token.algorithm) {
+                if mode.substitutesOpenRTB, let value = resolver.openRTBValue(name: token.name, algorithm: token.algorithm) {
                     output.append(contentsOf: value.utf8)
                     replaced.insert(literal)
                 } else {
                     output.append(contentsOf: bytes[index..<token.end])
-                    if mode != .markup || isUpperCaseName(token.name) { unknown.insert(literal) }
+                    if !mode.isMarkup || isUpperCaseName(token.name) { unknown.insert(literal) }
                 }
                 index = token.end
                 continue
             }
-            if byte == openBracket, mode != .markup, let token = scanVAST(bytes, at: index) {
+            if byte == openBracket, !mode.isMarkup, let token = scanVAST(bytes, at: index) {
                 let literal = String(decoding: bytes[index..<token.end], as: UTF8.self)
-                if mode == .url, let value = resolver.vastValue(name: token.name) {
+                if mode.substitutesVAST, let value = resolver.vastValue(name: token.name) {
                     output.append(contentsOf: value.utf8)
                     replaced.insert(literal)
                 } else {
@@ -102,7 +179,7 @@ enum MacroScanner {
                 index = token.end
                 continue
             }
-            if byte == percent, let end = scanEncodedMacro(bytes, at: index, includeVAST: mode != .markup) {
+            if byte == percent, let end = scanEncodedMacro(bytes, at: index, includeVAST: !mode.isMarkup) {
                 output.append(contentsOf: bytes[index..<end])
                 unknown.insert(String(decoding: bytes[index..<end], as: UTF8.self))
                 index = end

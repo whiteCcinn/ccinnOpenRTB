@@ -30,7 +30,12 @@ import Foundation
 ///
 /// Resolution-time failures (`ResolvedVAST.adFailures`) are planned by `resolutionRequests` (VASTResolutionPlan.swift).
 ///
-/// Macros: the plan sets what it knows about the ad on top of the host's context: `[ERRORCODE]`, `[REASON]` (2 for
+/// Macros: every VAST URL, from any hop, expands VAST `[…]` macros only, as a player does (VAST 4.1 §6.1/§6.2;
+/// `MacroExpander.expandVAST`). OpenRTB `${…}` is the exchange's, which substitutes it in an inline `adm` before the player
+/// sees it; one in a document a request delivered stays literal and is listed in `unknownMacros` (the resolver warns about
+/// that document, `vast.macro.openrtb.unsubstituted`).
+///
+/// The plan sets what it knows about the ad on top of the host's context: `[ERRORCODE]`, `[REASON]` (2 for
 /// `verificationNotExecuted`) and `[PODSEQUENCE]` (the `sequence` of the pod slot the ad plays in). Playback values
 /// (`[ADPLAYHEAD]`, `[ASSETURI]`, `[PLAYERSIZE]`, …) come from the host's context.
 public enum VASTTrackingPlan {
@@ -376,7 +381,7 @@ struct VASTPlanner {
 
     private func request(_ template: String, _ category: TrackerCategory, _ trigger: String, adIndex: Int?, path: [String], parentID: UUID?,
                          context: MacroContext) -> TrackerRequest {
-        let expanded = MacroExpander.expand(template, context: context)
+        let expanded = MacroExpander.expandVAST(template, context: context)
         let podSuffix = vast.ads.count > 1 ? adIndex.map { " (ad " + VASTLabel.ordinal($0) + " of \(vast.ads.count))" } ?? "" : ""
         let sourcePath = ([source] + path).filter { !$0.isEmpty }.joined(separator: " › ")
         return TrackerRequest(parentID: parentID, category: category, trigger: trigger + podSuffix, source: sourcePath, template: template,

@@ -12,6 +12,9 @@ struct VASTDecoder {
     }
 
     private(set) var issues: [ValidationIssue] = []
+    /// Elements whose text carries OpenRTB `${…}` tokens (a URL, or an `HTMLResource`'s markup), in document order. The
+    /// resolver warns about them in documents the exchange never substituted (`vast.macro.openrtb.unsubstituted`).
+    private(set) var openRTBMacroSites: [VASTMacroSite] = []
     /// The declared version when it is one the simulator knows; `nil` when missing or invalid.
     private(set) var version: VASTSpecVersion?
     /// `imp.secure = 1`: a non-HTTPS URL is a warning instead of a note.
@@ -556,6 +559,7 @@ struct VASTDecoder {
                 if let url = url(child, at: childPath, role: .resource) { resources.append(.iframe(url: url)) }
             default:
                 if let html = nonEmpty(child.trimmedText) {
+                    recordOpenRTBMacros(in: html, isMarkup: true, at: childPath)
                     resources.append(.html(html))
                 } else {
                     report(.warning, "vast.companion.html.empty", "<HTMLResource> is empty.", childPath)
@@ -670,6 +674,7 @@ struct VASTDecoder {
     }
 
     private mutating func checkURL(_ url: String, role: VASTURLCheck.Role, at path: String) {
+        recordOpenRTBMacros(in: url, isMarkup: false, at: path)
         switch VASTURLCheck.check(url, role: role) {
         case .ok:
             break
@@ -682,6 +687,11 @@ struct VASTDecoder {
         case let .invalid(reason):
             report(.warning, "vast.url.invalid", "\"\(url)\" is not a usable URL: \(reason).", path)
         }
+    }
+
+    private mutating func recordOpenRTBMacros(in text: String, isMarkup: Bool, at path: String) {
+        let macros = MacroExpander.openRTBTokens(in: text, isMarkup: isMarkup)
+        if !macros.isEmpty { openRTBMacroSites.append(VASTMacroSite(path: path, macros: macros)) }
     }
 
     // MARK: - Version and structure checks
@@ -756,4 +766,12 @@ struct VASTDecoder {
     private mutating func report(_ severity: ValidationIssue.Severity, _ code: String, _ message: String, _ path: String) {
         issues.append(ValidationIssue(severity, code: code, message: message, path: path))
     }
+}
+
+/// An element of a VAST document whose text carries OpenRTB `${…}` macros.
+struct VASTMacroSite: Sendable, Hashable {
+    /// The element path inside its document (`VAST/Ad[1]/InLine/Error[1]`).
+    var path: String
+    /// The distinct `${…}` tokens, in first-seen order.
+    var macros: [String]
 }
