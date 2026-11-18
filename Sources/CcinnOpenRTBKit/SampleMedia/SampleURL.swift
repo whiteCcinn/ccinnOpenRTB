@@ -1,12 +1,14 @@
 import Foundation
 
-/// A generated sample image: a named creative size or any `W×H`.
+/// A generated sample image: a named creative size or any `W×H` up to `maxDimension` × `maxDimension`.
 public struct SampleImageSpec: Sendable, Hashable {
     public var name: String
     public var width: Int
     public var height: Int
 
-    public static let maxDimension = 4096
+    /// The largest width or height of a `<W>x<H>` image (1920: a full-HD interstitial). A creative can name any size,
+    /// and each one is rendered in memory at 4 bytes per pixel, so the bound keeps one image at most ~14 MiB to draw.
+    public static let maxDimension = 1920
 
     /// The named images the built-in samples use.
     public static let named: [String: (width: Int, height: Int)] = [
@@ -49,9 +51,12 @@ public enum SampleAsset: Sendable, Hashable {
         switch self {
         case .video: "sample-15s.mp4"
         case .audio: "sample-15s.m4a"
-        case let .image(spec): "image-\(spec.name).png"
+        case let .image(spec): "\(Self.imageFilePrefix)\(spec.name).png"
         }
     }
+
+    /// Generated images are the cache files with this prefix.
+    static let imageFilePrefix = "image-"
 
     public var mimeType: String {
         switch self {

@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import ImageIO
+import os
 import Testing
 @testable import CcinnOpenRTBKit
 
@@ -32,7 +33,18 @@ struct SampleURLTests {
         }
     }
 
+    /// Only the named images and sizes up to 1920×1920: anything larger costs memory and CPU for nothing an ad needs.
+    @Test func sizesAreCappedAt1920() throws {
+        #expect(SampleImageSpec.maxDimension == 1920)
+        #expect(SampleImageSpec(name: "1920x1920") != nil)
+        #expect(SampleImageSpec(name: "1x1920") != nil)
+        #expect(SampleImageSpec(name: "1921x10") == nil)
+        #expect(SampleImageSpec(name: "10x1921") == nil)
+        #expect(SampleImageSpec(name: "4096x4096") == nil)
+    }
+
     @Test(arguments: ["ccinn-sample://image/unknown.png", "ccinn-sample://image/0x50.png", "ccinn-sample://image/99999x1.png",
+                      "ccinn-sample://image/2000x100.png",
                       "ccinn-sample://media/clip.webm", "ccinn-sample://other/x.png", "ccinn-sample://image/", "ccinn-sample://",
                       "https://media/sample-15s.mp4", "ccinn-sample://image/../../etc/passwd", "ccinn-sample://image/a/b.png"])
     func rejectsUnknownSamples(url: String) {
@@ -168,5 +180,132 @@ struct SampleMediaGenerationTests {
         let samples = (0..<(SampleMovieWriter.sampleRate * 2)).map(SampleMovieWriter.toneSample)
         #expect(samples.contains { $0 != 0 })
         #expect(samples.allSatisfy { $0 > Int16.min })
+    }
+}
+
+/// A renderer that records how many renders run at once, and returns `bytes` bytes after `delay`.
+final class RecordingImageRenderer: Sendable {
+    private struct State {
+        var running = 0
+        var maxRunning = 0
+        var rendered: [String] = []
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    let bytes: Int
+    let delay: TimeInterval
+
+    init(bytes: Int = 1_000, delay: TimeInterval = 0) {
+        self.bytes = bytes
+        self.delay = delay
+    }
+
+    var maxConcurrent: Int { state.withLock { $0.maxRunning } }
+    var rendered: [String] { state.withLock { $0.rendered } }
+
+    func render(_ spec: SampleImageSpec) -> Data? {
+        state.withLock { state in
+            state.running += 1
+            state.maxRunning = max(state.maxRunning, state.running)
+            state.rendered.append(spec.name)
+        }
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        state.withLock { $0.running -= 1 }
+        return Data(repeating: 0x42, count: bytes)
+    }
+}
+
+/// A clock tests move by hand.
+final class ManualInstant: Sendable {
+    private let current = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+
+    func now() -> ContinuousClock.Instant { current.withLock { $0 } }
+
+    func advance(by duration: Duration) { current.withLock { $0 = $0.advanced(by: duration) } }
+}
+
+@Suite("Sample image limits")
+struct SampleImageLimitTests {
+    private func temporaryDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-samples-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func spec(_ name: String) throws -> SampleAsset {
+        .image(try #require(SampleImageSpec(name: name)))
+    }
+
+    @Test func imagesAreGeneratedOneAtATime() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let renderer = RecordingImageRenderer(delay: 0.03)
+        let media = SampleMedia(directory: directory, imageRenderer: renderer.render)
+        let assets = try ["10x10", "20x20", "30x30", "40x40", "50x50", "60x60"].map(spec)
+        try await withThrowingTaskGroup(of: URL.self) { group in
+            for asset in assets { group.addTask { try await media.fileURL(for: asset) } }
+            try await group.waitForAll()
+        }
+        #expect(renderer.rendered.count == 6)
+        #expect(renderer.maxConcurrent == 1)
+    }
+
+    /// Generated images are an LRU cache capped by bytes; the canonical video and audio are never evicted.
+    @Test func theImageCacheEvictsTheLeastRecentlyUsedImage() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let video = directory.appendingPathComponent(SampleAsset.video.fileName)
+        try Data(count: 10_000).write(to: video)
+        let renderer = RecordingImageRenderer(bytes: 1_000)
+        let media = SampleMedia(directory: directory, imageCacheLimit: 2_500, imageRenderer: renderer.render)
+
+        let first = try await media.fileURL(for: try spec("10x10"))
+        let second = try await media.fileURL(for: try spec("20x20"))
+        _ = try await media.fileURL(for: try spec("10x10"))  // used again: now the most recent
+        let third = try await media.fileURL(for: try spec("30x30"))
+
+        let manager = FileManager.default
+        #expect(manager.fileExists(atPath: first.path))
+        #expect(!manager.fileExists(atPath: second.path), "the least recently used image is evicted")
+        #expect(manager.fileExists(atPath: third.path))
+        #expect(manager.fileExists(atPath: video.path), "the canonical video stays")
+        #expect(await media.cachedImageBytes == 2_000)
+        // Evicted images are generated again when asked for.
+        _ = try await media.fileURL(for: try spec("20x20"))
+        #expect(renderer.rendered == ["10x10", "20x20", "30x30", "20x20"])
+    }
+
+    /// Images already on disk (an earlier launch) count towards the cap, oldest first out.
+    @Test func imagesFromAnEarlierLaunchCount() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let old = directory.appendingPathComponent("image-11x11.png")
+        try Data(count: 1_000).write(to: old)
+        try manager.setAttributes([.modificationDate: Date().addingTimeInterval(-3_600)], ofItemAtPath: old.path)
+        let media = SampleMedia(directory: directory, imageCacheLimit: 1_500, imageRenderer: RecordingImageRenderer(bytes: 1_000).render)
+        _ = try await media.fileURL(for: try spec("12x12"))
+        #expect(!manager.fileExists(atPath: old.path))
+        #expect(await media.cachedImageBytes == 1_000)
+    }
+
+    /// At most `maxImageGenerations` new images per `imageGenerationWindow` (32 per minute by default); images already
+    /// cached are not counted.
+    @Test func newImageGenerationsAreRateLimited() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(SampleMedia.maxImageGenerations == 32)
+        #expect(SampleMedia.imageGenerationWindow == .seconds(60))
+        let clock = ManualInstant()
+        let renderer = RecordingImageRenderer()
+        let media = SampleMedia(directory: directory, maxImageGenerations: 3, now: clock.now, imageRenderer: renderer.render)
+        for name in ["10x10", "20x20", "30x30"] { _ = try await media.fileURL(for: try spec(name)) }
+        await #expect(throws: SampleMediaError.rateLimited(limit: 3, window: SampleMedia.imageGenerationWindow)) {
+            _ = try await media.fileURL(for: try spec("40x40"))
+        }
+        _ = try await media.fileURL(for: try spec("10x10"))  // cached: free
+        clock.advance(by: .seconds(61))
+        _ = try await media.fileURL(for: try spec("40x40"))
+        #expect(renderer.rendered == ["10x10", "20x20", "30x30", "40x40"])
     }
 }
