@@ -117,7 +117,7 @@ private struct VideoPlayerLayout: View {
                     FinishedOverlay(model: model)
                 }
                 if case .ad = role, request.isFullscreen, model.phase == .finished {
-                    CloseButton { model.close() }
+                    CloseControl(label: "Close ad") { model.close() }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
             }
@@ -146,12 +146,12 @@ private struct PlayerOverlay: View {
                 ProgressView().controlSize(compact ? .small : .regular).tint(.white)
             }
             VStack(spacing: 0) {
-                HStack(alignment: .top) {
+                HStack(alignment: .center) {
                     AdBadge(model: model, fontSize: compact ? 10 : 12)
                     Spacer()
                     SkipButton(state: model.skipState, fontSize: compact ? 10 : 12, action: model.skip)
                 }
-                .padding(compact ? 4 : 8)
+                .padding(.horizontal, compact ? 4 : 8)
                 Spacer(minLength: 0)
                 if model.phase == .playing || model.phase == .loading {
                     HStack(spacing: compact ? 6 : 10) {
@@ -161,17 +161,19 @@ private struct PlayerOverlay: View {
                                     label: model.isMuted ? "Unmute" : "Mute", size: compact ? 22 : 28, action: model.toggleMute)
                         Spacer()
                         if model.showsLearnMore {
-                            Button("Learn more", action: model.clickThrough)
-                                .buttonStyle(.plain)
-                                .font(.system(size: compact ? 10 : 12, weight: .semibold))
-                                .foregroundStyle(.black)
-                                .padding(.horizontal, compact ? 8 : 12)
-                                .padding(.vertical, compact ? 3 : 5)
-                                .background(Capsule().fill(.white))
+                            Button(action: model.clickThrough) {
+                                Text("Learn more")
+                                    .font(.system(size: compact ? 10 : 12, weight: .semibold))
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, compact ? 8 : 12)
+                                    .padding(.vertical, compact ? 3 : 5)
+                                    .background(Capsule().fill(.white))
+                                    .touchTarget()
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, compact ? 4 : 8)
-                    .padding(.bottom, compact ? 3 : 6)
                     ProgressBar(fraction: model.progress, height: compact ? 2 : 3)
                 }
             }
@@ -195,7 +197,8 @@ private struct AdBadge: View {
     }
 }
 
-private struct SkipButton: View {
+/// "Skip in N" (not a control), then "Skip Ad" with a hit area of the minimum touch target.
+struct SkipButton: View {
     let state: SkipButtonState
     let fontSize: CGFloat
     let action: () -> Void
@@ -222,8 +225,10 @@ private struct SkipButton: View {
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 4).fill(.black.opacity(0.75)))
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.8), lineWidth: 1))
+                    .touchTarget()
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Skip Ad")
         }
     }
 }
@@ -241,6 +246,7 @@ private struct RoundButton: View {
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
                 .background(Circle().fill(.black.opacity(0.55)))
+                .touchTarget()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -259,24 +265,6 @@ private struct ProgressBar: View {
             }
         }
         .frame(height: height)
-    }
-}
-
-private struct CloseButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(Circle().fill(.black.opacity(0.6)))
-                .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .padding(10)
-        .accessibilityLabel("Close ad")
     }
 }
 
@@ -373,7 +361,15 @@ private struct AudioAdCard: View {
                     Text(model.lastError.map { "VAST error \($0.rawValue): \(FinishedOverlay.describe($0))" } ?? "Nothing to play")
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if request.isFullscreen {
-                    Button("Close") { model.close() }
+                    Button { model.close() } label: {
+                        Text("Close")
+                            .font(.system(size: 12, weight: .semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5)
+                            .background(Capsule().strokeBorder(.secondary))
+                            .touchTarget()
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

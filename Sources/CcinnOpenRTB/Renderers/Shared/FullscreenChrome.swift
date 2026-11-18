@@ -46,24 +46,9 @@ private struct ChromeControls: View {
         case .closable:
             if customClose {
                 // The creative draws its own close control; the container's region stays tappable.
-                Color.clear
-                    .frame(width: 50, height: 50)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onClose)
-                    .accessibilityLabel("Close ad")
-                    .accessibilityAddTraits(.isButton)
+                CustomCloseRegion(label: "Close ad", action: onClose)
             } else {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(.black.opacity(0.6)))
-                        .overlay(Circle().strokeBorder(.white.opacity(0.7), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .padding(10)
-                .accessibilityLabel("Close ad")
+                CloseControl(label: "Close ad", action: onClose)
             }
         }
     }

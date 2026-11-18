@@ -8,6 +8,7 @@ struct RendererRoot: View {
 
     var body: some View {
         content
+            .environment(\.minimumTouchTarget, TouchTarget.minimumSide(for: request.device))
             .scriptTrackers(host: host)
     }
 

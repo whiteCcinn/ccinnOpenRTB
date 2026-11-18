@@ -90,24 +90,9 @@ private struct ExpandedCreativeSheet: View {
 
     @ViewBuilder private var closeControl: some View {
         if model.customClose {
-            Color.clear
-                .frame(width: 50, height: 50)
-                .contentShape(Rectangle())
-                .onTapGesture { model.containerClose(fullscreen: false) }
-                .accessibilityLabel("Close expanded ad")
+            CustomCloseRegion(label: "Close expanded ad") { model.containerClose(fullscreen: false) }
         } else {
-            Button {
-                model.containerClose(fullscreen: false)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(.black.opacity(0.6)))
-            }
-            .buttonStyle(.plain)
-            .padding(10)
-            .accessibilityLabel("Close expanded ad")
+            CloseControl(label: "Close expanded ad") { model.containerClose(fullscreen: false) }
         }
     }
 }

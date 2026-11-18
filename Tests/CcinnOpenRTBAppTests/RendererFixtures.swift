@@ -7,6 +7,9 @@ enum RendererFixtures {
     static let phone = DeviceProfile(id: "test-phone", name: "Test Phone", family: .iPhone, screenWidth: 390, screenHeight: 844, scale: 3,
                                      safeArea: DeviceInsets(top: 47, bottom: 34), os: "iOS", osVersion: "18.0", make: "Apple",
                                      model: "Test", userAgent: "TestUA/1.0", openRTBDeviceType: 4)
+    static let android = DeviceProfile(id: "test-android", name: "Test Android", family: .androidPhone, screenWidth: 412, screenHeight: 915,
+                                       scale: 2.625, safeArea: DeviceInsets(top: 28, bottom: 24), os: "Android", osVersion: "14", make: "Google",
+                                       model: "Pixel", userAgent: "AndroidUA/1.0", openRTBDeviceType: 4)
     static let tv = DeviceProfile(id: "test-tv", name: "Test TV", family: .ctv, screenWidth: 1920, screenHeight: 1080, scale: 1, os: "tvOS",
                                   osVersion: "18.0", make: "Apple", model: "TV", userAgent: "TVUA/1.0", openRTBDeviceType: 3, input: .remote,
                                   supportsClickThrough: false)
