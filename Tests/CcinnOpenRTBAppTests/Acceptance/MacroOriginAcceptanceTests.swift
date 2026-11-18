@@ -51,6 +51,20 @@ struct MacroOriginAcceptanceTests {
         #expect(!harness.session.renderIssues.contains { $0.code.contains("unsubstituted") })
     }
 
+    /// OpenRTB 3.0 `display.native` is inline markup of the bid response too: the exchange's `${OPENRTB_*}` are in before
+    /// the Native ad is parsed (AdTech review 2, origin "adm").
+    @Test func inlineNative30() async throws {
+        let response = #"""
+        {"openrtb": {"ver": "3.0", "response": {"id": "req-1", "seatbid": [{"seat": "dsp", "bid": [{"id": "bid-1", "item": "1", "price": 1.5,
+          "media": {"ad": {"id": "ad-1", "display": {"w": 320, "h": 250, "native": {"asset": [{"id": 1, "title": {"text": "T"}}],
+            "link": {"url": "https://adv.example/?p=${OPENRTB_PRICE}"}, "imptrackers": ["https://t.example/imp?p=${OPENRTB_PRICE}"]}}}}}]}]}}}
+        """#
+        let harness = try await render(Sample(id: "m", title: "m", group: "t", response: response), transport: CountingTransport())
+        let native = try #require(harness.session.prepared?.native)
+        #expect(native.link.url == "https://adv.example/?p=1.5", "\(native.link.url)")
+        #expect(native.impressionTrackers == ["https://t.example/imp?p=1.5"], "\(native.impressionTrackers)")
+    }
+
     /// AdCOM `display.curl` HTML: fetched after the win, used as written, with a warning.
     @Test func curlHTML() async throws {
         let transport = CountingTransport()
