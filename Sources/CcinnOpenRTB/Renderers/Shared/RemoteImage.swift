@@ -22,13 +22,27 @@ enum RemoteImageState: Equatable {
 }
 
 enum RemoteImageLoader {
+    /// Which request delivered the document the image's URL is in: its network parent (decisions.md).
+    enum Origin: Equatable, Sendable {
+        /// The bid's markup: the host knows its delivering request.
+        case markup
+        /// Another document, delivered by this request (`nil`: carried in the bid), e.g. a VAST hop.
+        case document(requestID: UUID?)
+    }
+
     /// Fetches and decodes `url`. Never throws: a failure is a state the view shows.
     @MainActor
-    static func load(_ url: String, host: any AdRenderingHost, trigger: String, source: String) async -> RemoteImageState {
+    static func load(_ url: String, host: any AdRenderingHost, trigger: String, source: String, origin: Origin = .markup) async -> RemoteImageState {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failed("No image URL") }
         do {
-            let data = try await host.fetchContent(trimmed, trigger: trigger, source: source)
+            let data = switch origin {
+            case .markup:
+                try await host.fetchContent(trimmed, trigger: trigger, source: source)
+            case let .document(requestID):
+                try await host.monitor.fetchContent(trimmed, category: .content, trigger: trigger, source: source, parentID: requestID,
+                                                    userAgent: host.device.userAgent).data
+            }
             guard let image = NSImage(data: data), image.isValid, image.size.width > 0, image.size.height > 0 else {
                 return .failed("Not an image (\(data.count) bytes)")
             }

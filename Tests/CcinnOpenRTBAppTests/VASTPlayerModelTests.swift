@@ -53,6 +53,25 @@ struct VASTPlayerModelTests {
         #expect(host.events.count == 8)
     }
 
+    /// The host reads `[ADPLAYHEAD]` from the last playback status, so the player reports the playhead before the events
+    /// it crosses: a quartile or `progress` tracker carries the playhead it fired at, not one up to a status interval old.
+    @Test func eventsCarryThePlayheadTheyFiredAt() async {
+        let tracking = [VASTTracking(event: .progress(.seconds(5)), url: "https://t.example/p5")]
+        let (model, host, engine) = make([RendererFixtures.linearAd(duration: 15, tracking: tracking)])
+        model.start()
+        await waitForLoad(engine)
+        engine.send(.ready(duration: 15))
+        engine.tick(from: 0, to: 15, step: 0.1)
+        engine.send(.ended)
+        let fired = zip(host.events, host.playheadAtEvents)
+        let expected: [(AdLifecycleEvent, Double)] = [(.video(.firstQuartile, adIndex: 0), 3.75), (.video(.progress(.seconds(5)), adIndex: 0), 5),
+                                                      (.video(.midpoint, adIndex: 0), 7.5), (.video(.thirdQuartile, adIndex: 0), 11.25)]
+        for (event, threshold) in expected {
+            let playhead = fired.first { $0.0 == event }?.1 ?? nil
+            #expect(playhead.map { $0 >= threshold - 1e-6 && $0 < threshold + 0.11 } == true, "\(event) fired with [ADPLAYHEAD] \(String(describing: playhead))")
+        }
+    }
+
     @Test func podAdsPlayInOrderAndBillingFiresOnce() async {
         let first = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/1.mp4", type: "video/mp4")], sequence: 1)
         let second = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/2.mp4", type: "video/mp4")], sequence: 2)
@@ -136,7 +155,8 @@ struct VASTPlayerModelTests {
         #expect(host.videoEvents(adIndex: 0).suffix(4) == [.pause, .resume, .mute, .unmute])
         // About 4 Hz while playing (playhead steps of 0.25 s), plus every play / pause / mute change.
         let playingTicks = host.statuses.filter { $0.isPlaying && !$0.isMuted }
-        #expect(playingTicks.count >= 4 && playingTicks.count <= 8)
+        #expect(playingTicks.count >= 4 && playingTicks.count <= 8, "\(playingTicks.map(\.playhead))")
+        #expect(zip(host.statuses, host.statuses.dropFirst()).allSatisfy { $0 != $1 }, "no status is reported twice in a row")
         #expect(host.statuses.contains { !$0.isPlaying && $0.playhead >= 0.9 })
         #expect(host.statuses.contains { $0.isMuted })
         #expect(host.statuses.allSatisfy { $0.adIndex == 0 && $0.duration == 10 })

@@ -222,6 +222,12 @@ final class VASTPlayerModel {
 
     // MARK: Companions
 
+    /// The request that delivered ad `adIndex`'s inline document (`nil` for markup carried in the bid): the network parent
+    /// of its media and of its companions' requests.
+    func documentRequestID(adIndex: Int) -> UUID? {
+        items.indices.contains(adIndex) ? items[adIndex].mediaParentID : nil
+    }
+
     /// A companion is on screen: its `creativeView`, once per companion.
     func companionDidAppear(_ choice: CompanionChoice, adIndex: Int) {
         guard !stopped, viewedCompanions.insert([adIndex, choice.companionIndex]).inserted else { return }
@@ -384,6 +390,9 @@ final class VASTPlayerModel {
     }
 
     private func emit(_ events: [VASTEvent], _ item: VASTPodItem) {
+        guard !events.isEmpty else { return }
+        // The host reads `[ADPLAYHEAD]` from the last status: it must be the playhead these events fire at.
+        reportStatusIfChanged()
         for event in events {
             if event == .creativeView {
                 startedAds += 1
@@ -439,9 +448,18 @@ final class VASTPlayerModel {
     }
 
     /// About 4 Hz while playing (playhead steps of 0.25 s), and at once when play / mute / ad changes.
+    private func reportStatusIfChanged() {
+        guard let item = currentItem else { return }
+        let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)
+        guard status != lastStatus else { return }
+        lastStatus = status
+        host?.playbackChanged(status)
+    }
+
     private func reportStatus(force: Bool) {
         guard let item = currentItem else { return }
         let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)
+        if status == lastStatus { return }
         if !force, let last = lastStatus, last.isPlaying == status.isPlaying, last.isMuted == status.isMuted, last.adIndex == status.adIndex,
            abs(status.playhead - last.playhead) < 0.25 {
             return

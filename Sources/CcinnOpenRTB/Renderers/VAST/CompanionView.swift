@@ -5,6 +5,7 @@ import SwiftUI
 
 /// One VAST companion (below the player, as an audio ad's artwork, or as the end card). Its `creativeView` is reported
 /// when it is shown (the image decoded, or the HTML / iframe document loaded); a click goes through the player model.
+/// Its requests hang under the hop that delivered the ad's inline document (`VASTPlayerModel.documentRequestID`).
 struct CompanionView: View {
     let choice: CompanionChoice
     let adIndex: Int
@@ -46,7 +47,8 @@ private struct CompanionImage: View {
             .task(id: url) {
                 state = .loading
                 let loaded = await RemoteImageLoader.load(url, host: host, trigger: "companion image",
-                                                          source: CompanionView.source(source, companionIndex: choice.companionIndex))
+                                                          source: CompanionView.source(source, companionIndex: choice.companionIndex),
+                                                          origin: .document(requestID: player.documentRequestID(adIndex: adIndex)))
                 state = loaded
                 if loaded.image != nil {
                     player.companionDidAppear(choice, adIndex: adIndex)
@@ -97,6 +99,7 @@ private struct CompanionWeb: View {
         controller = created
         created.load(CreativeWebController.Content(document: CompanionDocument.html(for: choice.resource), mraid: nil,
                                                    blocksNetwork: HTMLAdModel.blocksNetwork(host.monitor), disableScroll: true,
-                                                   networkParentID: nil, source: CompanionView.source(source, companionIndex: choice.companionIndex)))
+                                                   networkParentID: player.documentRequestID(adIndex: adIndex),
+                                                   source: CompanionView.source(source, companionIndex: choice.companionIndex)))
     }
 }

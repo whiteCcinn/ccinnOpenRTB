@@ -17,7 +17,8 @@ struct VASTPodItem: Equatable, Sendable {
     var linear: VASTLinear?
     var isNonLinearOnly: Bool
     var companions: [IndexedCompanion]
-    /// The fetch that delivered the inline document (network parent of the media request); `nil` for inline markup.
+    /// The fetch that delivered the inline document (network parent of the media and companion requests); `nil` for
+    /// inline markup.
     var mediaParentID: UUID?
     /// Network source path: `bid 0.0 › VAST › ad 1 of 2 'Title'`.
     var source: String

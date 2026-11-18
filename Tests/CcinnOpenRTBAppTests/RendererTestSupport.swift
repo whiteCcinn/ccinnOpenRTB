@@ -37,7 +37,13 @@ final class RecordingHost: AdRenderingHost {
         self.device = device
     }
 
-    func report(_ event: AdLifecycleEvent) { events.append(event) }
+    /// The playhead of the last `playbackChanged` when each event was reported (what the host's `[ADPLAYHEAD]` reads).
+    private(set) var playheadAtEvents: [Double?] = []
+
+    func report(_ event: AdLifecycleEvent) {
+        events.append(event)
+        playheadAtEvents.append(statuses.last?.playhead)
+    }
 
     func navigate(to url: String, trigger: String, source: String) { navigations.append(Navigation(url: url, trigger: trigger)) }
 

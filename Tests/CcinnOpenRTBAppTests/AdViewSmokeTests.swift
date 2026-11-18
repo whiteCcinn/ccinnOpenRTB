@@ -105,3 +105,55 @@ struct AdViewScriptTrackerTests {
         #expect(await Wait.until { server.connectionCount == 1 })
     }
 }
+
+/// A VAST companion's URLs are in the ad's inline document, so its requests (the image, an HTML / iframe companion's own
+/// loads) hang under the hop that delivered that document — the media's parent — not under the bid's markup request
+/// (decisions.md, "Network relationships").
+@MainActor
+@Suite("Companion network parents (SwiftUI + WebKit)", .serialized)
+struct CompanionNetworkParentTests {
+    private func player(hop: UUID, companion: VASTCompanion, host: RecordingHost) -> VASTPlayerModel {
+        var ad = RendererFixtures.linearAd(companions: [companion])
+        ad.origin = [VASTAdOrigin(hop: 0, ad: 0)]
+        let vast = ResolvedVAST(chain: [VASTHop(url: "https://ads.example/inline.xml", requestID: hop)], ads: [ad])
+        let configuration = VASTPlayerConfiguration(placement: .interstitial, device: RendererFixtures.phone,
+                                                    playerSize: CGSize(width: 390, height: 219), audioOnly: false, source: "bid 0.0 › VAST")
+        return VASTPlayerModel(vast: vast, configuration: configuration, host: host, engine: FakeEngine(), chooseMedia: VASTMediaSelector.choose)
+    }
+
+    @Test func anImageCompanionIsFetchedUnderItsHop() async throws {
+        let host = RecordingHost()
+        let hop = UUID()
+        let companion = VASTCompanion(id: "c", width: 300, height: 250,
+                                      resources: [.staticResource(url: "ccinn-sample://image/companion.png", creativeType: "image/png")])
+        let model = player(hop: hop, companion: companion, host: host)
+        let choice = try #require(CompanionPicker.pick(model.items[0].companions, fitting: nil))
+        let harness = WindowHarness(CompanionView(choice: choice, adIndex: 0, player: model, host: host, source: "bid 0.0 › VAST › ad 1 of 1"),
+                                    size: CGSize(width: 300, height: 250))
+        defer { harness.close() }
+        let fetched = await Wait.until(timeout: .seconds(20)) {
+            host.monitor.liveEntries.contains { $0.url == "ccinn-sample://image/companion.png" && $0.state == .completed(status: 200) }
+        }
+        #expect(fetched, "\(host.monitor.liveEntries.map(\.dumpLine))")
+        let image = host.monitor.liveEntries.filter { $0.url == "ccinn-sample://image/companion.png" }
+        #expect(image.count == 1 && image.allSatisfy { $0.parentID == hop }, "\(image.map(\.dumpLine))")
+        #expect(host.events.contains(.companionView(adIndex: 0, companionIndex: 0)))
+    }
+
+    @Test func anHTMLCompanionsOwnRequestsHangUnderItsHop() async throws {
+        let host = RecordingHost()
+        let hop = UUID()
+        let companion = VASTCompanion(id: "h", width: 300, height: 250, resources: [.html(#"<img src="https://pixel.example/companion.gif">"#)])
+        let model = player(hop: hop, companion: companion, host: host)
+        let choice = try #require(CompanionPicker.pick(model.items[0].companions, fitting: nil))
+        let harness = WindowHarness(CompanionView(choice: choice, adIndex: 0, player: model, host: host, source: "bid 0.0 › VAST › ad 1 of 1"),
+                                    size: CGSize(width: 300, height: 250))
+        defer { harness.close() }
+        let blocked = await Wait.until(timeout: .seconds(20)) {
+            host.monitor.liveEntries.contains { $0.category == .creative && $0.url.hasPrefix("https://pixel.example/") }
+        }
+        #expect(blocked, "\(host.monitor.liveEntries.map(\.dumpLine))")
+        let creative = host.monitor.liveEntries.filter { $0.category == .creative }
+        #expect(!creative.isEmpty && creative.allSatisfy { $0.parentID == hop }, "\(creative.map(\.dumpLine))")
+    }
+}
