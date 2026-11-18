@@ -19,6 +19,12 @@ import Foundation
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
+/// One user action, one `trigger` (decisions "Network relationships": "Siblings from one user action share a trigger"):
+/// every request of one event carries the action's name (`VAST creativeView`, `VAST click`, `VAST companion click`,
+/// `VAST playerExpand`, …), plus ` (ad i of n)` in a pod. `category` separates trackers from the navigation, and the
+/// element path in `source` tells which tracker it is. A chain-wide `.error(code, adIndex: nil)` is one action across the
+/// pod, so it has no ad position.
+///
 /// Indices come from renderers and are never trusted: an `adIndex` or `companionIndex` outside the resolution (negative,
 /// `count`, `Int.max`, …) plans nothing.
 ///
@@ -81,25 +87,28 @@ struct VASTPlanner {
         guard let ad = ad(at: adIndex) else { return [] }
         let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
         let adContext = adContext(ad, lineage: lineage)
+        // The reported action names every request, also a tracker written with an equivalent spelling (`fullscreen` for
+        // `playerExpand`): its own spelling stays in the element path.
+        let trigger = "VAST " + event.vastLabel
         var requests: [TrackerRequest] = []
 
         if event == .creativeView {
             requests += Self.attributed(ad.impressions, lineage, \.impressions).map { url, layer in
-                make(url, .impression, "VAST impression", adIndex, layer, "Impression", context: adContext)
+                make(url, .impression, trigger, adIndex, layer, "Impression", context: adContext)
             }
         }
         let trackings = Self.attributed(ad.trackingEvents, lineage, \.linearTrackings)
         for (tracking, layer) in trackings where Self.event(tracking.event, answers: event) {
-            requests.append(make(tracking.url, .event, "VAST " + tracking.event.vastLabel, adIndex, layer,
-                                 "TrackingEvents/" + tracking.event.vastLabel, context: adContext))
+            requests.append(make(tracking.url, .event, trigger, adIndex, layer, "TrackingEvents/" + tracking.event.vastLabel, context: adContext))
         }
         if event == .creativeView {
-            requests += verificationNotExecuted(ad, adIndex: adIndex, lineage: lineage, adContext: adContext)
+            requests += verificationNotExecuted(ad, adIndex: adIndex, lineage: lineage, adContext: adContext, trigger: trigger)
         }
         return requests
     }
 
-    private func verificationNotExecuted(_ ad: ResolvedVASTAd, adIndex: Int, lineage: VASTLineage?, adContext: MacroContext) -> [TrackerRequest] {
+    private func verificationNotExecuted(_ ad: ResolvedVASTAd, adIndex: Int, lineage: VASTLineage?, adContext: MacroContext,
+                                         trigger: String) -> [TrackerRequest] {
         var reasonContext = adContext
         reasonContext.reason = Self.verificationNotSupported
         return Self.attributed(ad.verifications, lineage, \.verifications).flatMap { verification, layer in
@@ -107,7 +116,7 @@ struct VASTPlanner {
                 .filter { $0.event.vastName == VASTSpecRules.verificationNotExecuted }
                 .map { tracking in
                     let vendor = verification.vendor.map { " '\($0)'" } ?? ""
-                    return make(tracking.url, .verification, "VAST verificationNotExecuted (\(Self.verificationNotSupported))", adIndex, layer,
+                    return make(tracking.url, .verification, trigger, adIndex, layer,
                                 "AdVerifications/Verification\(vendor)/verificationNotExecuted", context: reasonContext)
                 }
         }
@@ -140,7 +149,7 @@ struct VASTPlanner {
             make(url, .click, "VAST click", adIndex, layer, "VideoClicks/ClickTracking", context: adContext)
         }
         if canNavigate, let clickThrough = ad.inline.playedLinear?.clickThrough {
-            requests.append(make(clickThrough, .navigation, "VAST click-through", adIndex, lineage?.inlineLayer, "VideoClicks/ClickThrough",
+            requests.append(make(clickThrough, .navigation, "VAST click", adIndex, lineage?.inlineLayer, "VideoClicks/ClickThrough",
                                  context: adContext))
         }
         return requests
@@ -189,7 +198,7 @@ struct VASTPlanner {
         // navigate themselves, and the renderer reports it.
         let companion = target.companion
         if canNavigate, companion.playerOpensClickThrough, let clickThrough = companion.clickThrough {
-            requests.append(make(clickThrough, .navigation, "VAST companion click-through", adIndex, target.lineage?.inlineLayer,
+            requests.append(make(clickThrough, .navigation, "VAST companion click", adIndex, target.lineage?.inlineLayer,
                                  target.element + "/CompanionClickThrough", context: target.context))
         }
         return requests
@@ -248,7 +257,8 @@ struct VASTPlanner {
         guard !vast.ads.isEmpty else {
             return errorRequests(vast.failureErrorURLs, origin: nil, code: code, adIndex: nil, context: context)
         }
-        return vast.ads.enumerated().flatMap { adErrors($0.element, adIndex: $0.offset, code: code) }
+        // One action across the pod: no ad position in the trigger.
+        return vast.ads.enumerated().flatMap { adErrors($0.element, adIndex: $0.offset, code: code, podPositionInTrigger: false) }
     }
 
     /// The Error URLs of a pod slot or buffet ad that failed during resolution, with its code and slot sequence.
@@ -257,11 +267,12 @@ struct VASTPlanner {
                       context: Self.withPodSequence(slotSequence(of: failure.origin), context))
     }
 
-    private func adErrors(_ ad: ResolvedVASTAd, adIndex: Int, code: VASTErrorCode) -> [TrackerRequest] {
+    private func adErrors(_ ad: ResolvedVASTAd, adIndex: Int, code: VASTErrorCode, podPositionInTrigger: Bool = true) -> [TrackerRequest] {
         let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
         let errorContext = Self.withErrorCode(code, adContext(ad, lineage: lineage))
         return Self.attributed(ad.errors, lineage, \.errors).map { url, layer in
-            make(url, .error, "VAST error \(code.rawValue)", adIndex, layer, "Error", context: errorContext)
+            make(url, .error, "VAST error \(code.rawValue)", adIndex, layer, "Error", context: errorContext,
+                 podPositionInTrigger: podPositionInTrigger)
         }
     }
 
@@ -355,11 +366,12 @@ struct VASTPlanner {
         return lineage.attribute(merged, part: part)
     }
 
+    /// `podPositionInTrigger`: add ` (ad i of n)` to the trigger in a pod (not for an action that spans the pod).
     private func make(_ template: String, _ category: TrackerCategory, _ trigger: String, _ adIndex: Int, _ layer: VASTLayer?,
-                      _ element: String, context: MacroContext) -> TrackerRequest {
+                      _ element: String, context: MacroContext, podPositionInTrigger: Bool = true) -> TrackerRequest {
         let documentParts = layer.map { [$0.documentLabel, $0.adLabel] } ?? ["VAST ad " + VASTLabel.ordinal(adIndex)]
-        return request(template, category, trigger, adIndex: adIndex, path: documentParts + [element], parentID: layer?.hop.requestID,
-                       context: context)
+        return request(template, category, trigger, adIndex: podPositionInTrigger ? adIndex : nil, path: documentParts + [element],
+                       parentID: layer?.hop.requestID, context: context)
     }
 
     private func request(_ template: String, _ category: TrackerCategory, _ trigger: String, adIndex: Int?, path: [String], parentID: UUID?,

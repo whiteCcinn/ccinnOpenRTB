@@ -27,7 +27,8 @@ struct VASTTrackingPlanTests {
             "https://tracker.example/vast42/verification/not-executed?reason=[REASON]",
         ])
         #expect(requests.map(\.category) == [.impression, .event, .verification])
-        #expect(requests.map(\.trigger) == ["VAST impression", "VAST creativeView", "VAST verificationNotExecuted (2)"])
+        // One action (the ad's first frame), one trigger; category and source tell the requests apart.
+        #expect(requests.map(\.trigger) == ["VAST creativeView", "VAST creativeView", "VAST creativeView"])
         #expect(requests[2].source == "bid 0.0 › VAST › InLine Ad[1] 'VAST 4.2 Inline with AdVerifications and Companions' › "
             + "AdVerifications/Verification 'tracker.example-omid'/verificationNotExecuted")
         #expect(requests.allSatisfy { $0.parentID == nil })
@@ -41,7 +42,7 @@ struct VASTTrackingPlanTests {
                 "https://tracker.example/vast41/pod/\(index + 1)/impression?cb=[CACHEBUSTING]&pod=[PODSEQUENCE]",
                 "https://tracker.example/vast41/pod/\(index + 1)/creativeView",
             ])
-            #expect(requests.first?.trigger == "VAST impression (ad \(index + 1) of 2)")
+            #expect(requests.map(\.trigger) == Array(repeating: "VAST creativeView (ad \(index + 1) of 2)", count: 2))
         }
         #expect(plan(.video(.creativeView, adIndex: 2), vast).isEmpty)
         #expect(plan(.video(.creativeView, adIndex: -1), vast).isEmpty)
@@ -95,7 +96,8 @@ struct VASTTrackingPlanTests {
         ])
         #expect(clicks.map(\.category) == [.click, .click, .click, .navigation])
         #expect(clicks.last?.parentID == vast.chain[2].requestID)
-        #expect(clicks.last?.trigger == "VAST click-through")
+        #expect(clicks.map(\.trigger) == Array(repeating: "VAST click", count: 4))
+        #expect(clicks.last?.source.hasSuffix("VideoClicks/ClickThrough") == true)
     }
 
     @Test func handBuiltAdsArePlannedWithoutParents() {
@@ -404,7 +406,7 @@ struct VASTTrackingPlanTests {
             let requests = plan(.companionClick(adIndex: 0, companionIndex: index), vast)
             #expect(requests.map(\.template) == ["https://tracker.example/c\(index + 1)/click", "https://advertiser.example/c\(index + 1)"])
             #expect(requests.map(\.category) == [.click, .navigation])
-            #expect(requests.last?.trigger == "VAST companion click-through")
+            #expect(requests.map(\.trigger) == ["VAST companion click", "VAST companion click"])
         }
         // The sample's static companion behaves the same.
         let sample = await resolved(VASTSamples.inline30Skippable)
@@ -614,5 +616,70 @@ struct VASTTrackingPlanTests {
         #expect(failures.map(\.parentID) == [nil])
         #expect(VASTLabel.ordinal(Int.max) == String(Int.max))
         #expect(VASTLabel.ordinal(-1) == "0")
+    }
+
+    // MARK: One trigger per user action (decisions "Network relationships")
+
+    /// "Siblings from one user action share a trigger": the network window groups one action by it. Every event planned
+    /// for every sample (and a 3-hop chain with wrapper companions) yields at most one distinct trigger.
+    @Test func everyEventHasOneTrigger() async throws {
+        var resolutions = [await resolved(VASTSamples.wrapperChain30)]
+        for sample in VASTSamples.all {
+            resolutions.append(await resolved(sample.xml))
+        }
+        for vast in resolutions {
+            var events: [AdLifecycleEvent] = VASTErrorCode.allCases.map { .error($0, adIndex: nil) }
+            for (adIndex, ad) in vast.ads.enumerated() {
+                let companions = ad.inline.creatives.flatMap(\.companions).count
+                events += Self.perAdEvents(adIndex: adIndex, companionIndex: 0)
+                events += (0..<companions).flatMap { [AdLifecycleEvent.companionView(adIndex: adIndex, companionIndex: $0),
+                                                      .companionClick(adIndex: adIndex, companionIndex: $0)] }
+            }
+            for event in events {
+                let triggers = Set(plan(event, vast).map(\.trigger))
+                #expect(triggers.count <= 1, "\(event): \(triggers)")
+            }
+        }
+    }
+
+    @Test func clickTriggersNameTheActionAndThePodPosition() async throws {
+        let pod = await resolved(VASTSamples.pod41)
+        let click = plan(.videoClick(adIndex: 1), pod)
+        #expect(click.map(\.category) == [.click, .navigation])
+        #expect(click.map(\.trigger) == ["VAST click (ad 2 of 2)", "VAST click (ad 2 of 2)"])
+        let companion = await resolved(VASTSamples.inline30Skippable)
+        let companionClick = plan(.companionClick(adIndex: 0, companionIndex: 0), companion)
+        #expect(companionClick.map(\.category) == [.click, .navigation])
+        #expect(companionClick.map(\.trigger) == ["VAST companion click", "VAST companion click"])
+        #expect(companionClick.last?.source.hasSuffix("/CompanionClickThrough") == true)
+    }
+
+    /// A renamed player action fires every spelling under the reported action's name.
+    @Test func equivalentSpellingsShareTheReportedActionsTrigger() async throws {
+        let both = """
+        <VAST version="3.0"><Ad><InLine><AdSystem>s</AdSystem><AdTitle>t</AdTitle><Impression>https://tracker.example/i</Impression>
+        <Creatives><Creative><Linear><Duration>00:00:10</Duration><TrackingEvents>
+          <Tracking event="fullscreen">https://tracker.example/fullscreen</Tracking><Tracking event="playerExpand">https://tracker.example/playerExpand</Tracking>
+          <Tracking event="close">https://tracker.example/close</Tracking><Tracking event="closeLinear">https://tracker.example/closeLinear</Tracking>
+        </TrackingEvents><MediaFiles><MediaFile delivery="progressive" type="video/mp4" width="1" height="1">https://cdn.example/a.mp4</MediaFile></MediaFiles>
+        </Linear></Creative></Creatives></InLine></Ad></VAST>
+        """
+        let vast = await resolved(both)
+        let expand = plan(.video(.playerExpand, adIndex: 0), vast)
+        #expect(expand.map(\.template) == ["https://tracker.example/fullscreen", "https://tracker.example/playerExpand"])
+        #expect(expand.map(\.trigger) == ["VAST playerExpand", "VAST playerExpand"])
+        #expect(expand.map(\.source).map { $0.components(separatedBy: " › ").last } == ["TrackingEvents/fullscreen", "TrackingEvents/playerExpand"])
+        let close = plan(.video(.close, adIndex: 0), vast)
+        #expect(close.map(\.template) == ["https://tracker.example/close", "https://tracker.example/closeLinear"])
+        #expect(close.map(\.trigger) == ["VAST close", "VAST close"])
+    }
+
+    @Test func aChainWideErrorOverAPodIsOneAction() async throws {
+        let pod = await resolved(VASTSamples.pod41)
+        let errors = plan(.error(.undefinedError, adIndex: nil), pod)
+        #expect(errors.count == 2)
+        #expect(errors.map(\.trigger) == ["VAST error 900", "VAST error 900"])
+        // A single ad's error still names its position.
+        #expect(plan(.error(.undefinedError, adIndex: 1), pod).map(\.trigger) == ["VAST error 900 (ad 2 of 2)"])
     }
 }
