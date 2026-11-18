@@ -47,15 +47,24 @@ struct AdSlotPlaceholder: View {
             }
             .foregroundStyle(tint)
         } else {
-            VStack(spacing: 6) {
-                icon.font(.system(size: 22, weight: .semibold)).foregroundStyle(tint)
-                Text(title).font(.system(size: 13, weight: .semibold)).multilineTextAlignment(.center)
+            let scale = Self.textScale(for: size)
+            VStack(spacing: 6 * scale) {
+                icon.font(.system(size: 22 * scale, weight: .semibold)).foregroundStyle(tint)
+                Text(title).font(.system(size: 13 * scale, weight: .semibold)).multilineTextAlignment(.center)
                 if let detail {
-                    Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(detail).font(.system(size: 11 * scale)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    /// Type size relative to the phone size: 1 up to a 360 pt short side, growing with larger slots up to 3 (a 1080 pt
+    /// TV slot), so the label stays legible however the canvas is zoomed to fit.
+    static func textScale(for size: CGSize) -> CGFloat {
+        let shortSide = min(size.width, size.height)
+        guard shortSide.isFinite, shortSide > 0 else { return 1 }
+        return min(3, max(1, shortSide / 360))
     }
 
     @ViewBuilder private var icon: some View {

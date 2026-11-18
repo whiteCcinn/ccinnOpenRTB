@@ -81,6 +81,16 @@ struct FullScreenPlacementTests {
         #expect(AdSlotPlaceholder.sizeText(CGSize(width: 320.4, height: 49.6)) == "320 × 50")
     }
 
+    /// The placeholder's type grows with large slots (a 1920×1080 TV slot is read from ten feet at a fraction of its
+    /// size), never shrinks below the phone size, and survives nonsense sizes.
+    @Test func thePlaceholderTextScalesWithTheSlot() {
+        #expect(AdSlotPlaceholder.textScale(for: CGSize(width: 320, height: 50)) == 1)
+        #expect(AdSlotPlaceholder.textScale(for: CGSize(width: 360, height: 300)) == 1)
+        #expect(AdSlotPlaceholder.textScale(for: CGSize(width: 1920, height: 1080)) == 3)
+        #expect(AdSlotPlaceholder.textScale(for: CGSize(width: 1114, height: 672)) > 1.5)
+        #expect(AdSlotPlaceholder.textScale(for: CGSize(width: CGFloat.nan, height: .infinity)) == 1)
+    }
+
     // MARK: The bid picks the placement
 
     @Test func anInterstitialSizedBidSelectsTheInterstitialPlacement() async {
