@@ -237,7 +237,24 @@ struct VASTDecoder {
                            verifications: decodeAllVerifications(of: element, at: path),
                            followAdditionalWrappers: boolAttribute("followAdditionalWrappers", of: element, default: true, at: path),
                            allowMultipleAds: boolAttribute("allowMultipleAds", of: element, default: false, at: path),
-                           fallbackOnNoAd: boolAttribute("fallbackOnNoAd", of: element, default: false, at: path))
+                           fallbackOnNoAd: boolAttribute("fallbackOnNoAd", of: element, default: false, at: path),
+                           blockedAdCategories: decodeBlockedAdCategories(element.children(named: "BlockedAdCategories"),
+                                                                          at: path + "/BlockedAdCategories"))
+    }
+
+    /// VAST 4.1 §3.19.2 `Wrapper/BlockedAdCategories`: each element lists one or more category codes (comma-separated),
+    /// all from the list its `authority` names.
+    private mutating func decodeBlockedAdCategories(_ elements: [VASTXMLElement], at path: String) -> [VASTCategory] {
+        elements.enumerated().flatMap { index, element -> [VASTCategory] in
+            let elementPath = path + "[\(index + 1)]"
+            let codes = element.trimmedText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            guard !codes.isEmpty else {
+                report(.warning, "vast.wrapper.blockedAdCategories.empty", "<BlockedAdCategories> lists no category; it blocks nothing.", elementPath)
+                return []
+            }
+            let authority = nonEmpty(element.attribute("authority"))
+            return codes.map { VASTCategory(code: $0, authority: authority) }
+        }
     }
 
     private mutating func boolAttribute(_ name: String, of element: VASTXMLElement, default defaultValue: Bool, at path: String) -> Bool {

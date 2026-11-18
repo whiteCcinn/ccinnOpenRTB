@@ -9,6 +9,9 @@ import Foundation
 /// - **Wrappers.** A wrapper is followed through its `VASTAdTagURI`. With `allowMultipleAds="false"` (the default) only
 ///   the first stand-alone ad of the response is used; with `true` the response may be a pod. With
 ///   `followAdditionalWrappers="false"` wrappers in the response are ignored.
+/// - **Blocked categories.** An InLine ad whose `<Category>` a wrapper above lists in `BlockedAdCategories` (VAST 4.1
+///   §3.19.2; same code, same authority when both name one) is not used: it fails with 205, its Error URLs included.
+///   Without any `<Category>` it plays, with a warning (players that require categories use 204).
 /// - **Errors.** At most `maxDepth` wrappers are followed in a chain; the next one fails with 302 without being fetched.
 ///   A fetch that fails is 301. A response that is not XML is 100; XML that is not VAST is 101. An empty response, or
 ///   one with no usable ad, is 303, and a no-ad response's root `<Error>` URLs join the chain's. A wrapper without a
@@ -257,6 +260,22 @@ private struct VASTResolution {
         let trail = trail.appending(entry.ad, at: origin)
         switch entry.ad.body {
         case let .inline(inline):
+            let inlinePath = Self.path(hop: hop, "VAST/Ad[\(entry.index + 1)]/InLine")
+            if let block = trail.layer?.block(of: inline.categories) {
+                let category = inline.categories[block.index]
+                let authority = category.authority.map { " (authority \($0))" } ?? ""
+                report(.error, "vast.category.blocked",
+                       "Category \(category.code)\(authority) is blocked by the BlockedAdCategories of the wrapper at "
+                           + Self.path(hop: block.wrapper.hop, "VAST/Ad[\(block.wrapper.ad + 1)]")
+                           + ": the ad is not used (VAST error \(VASTErrorCode.blockedAdCategory.rawValue), InLine Category violates Wrapper BlockedAdCategories).",
+                       inlinePath + "/Category[\(block.index + 1)]")
+                return .failed(failure(.blockedAdCategory, trail: trail, at: inlinePath))
+            }
+            if inline.categories.isEmpty, trail.layer?.blocksCategories == true {
+                report(.warning, "vast.category.unverifiable",
+                       "A wrapper above blocks ad categories (BlockedAdCategories), but this InLine ad declares no <Category>: the simulator plays it; players that require categories reject it with VAST error \(VASTErrorCode.adCategoryRequired.rawValue) (ad category required but not provided).",
+                       inlinePath)
+            }
             guard charge(trail.trackerCount, at: Self.path(hop: hop, "VAST/Ad[\(entry.index + 1)]")) else {
                 return .failed(.budgetStop(origin: trail.origin))
             }
@@ -478,7 +497,7 @@ private struct Trail {
     func appending(_ ad: VASTAd, at origin: VASTAdOrigin) -> Trail {
         var trail = self
         trail.origin.append(origin)
-        trail.layer = VASTTrackerLayer(parent: layer, body: ad.body)
+        trail.layer = VASTTrackerLayer(parent: layer, body: ad.body, origin: origin)
         trail.slotSequence = slotSequence ?? ad.sequence
         return trail
     }

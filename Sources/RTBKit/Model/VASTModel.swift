@@ -270,10 +270,15 @@ public struct VASTWrapper: Sendable, Hashable {
     public var followAdditionalWrappers: Bool
     public var allowMultipleAds: Bool
     public var fallbackOnNoAd: Bool
+    /// VAST 4.1 `BlockedAdCategories` (§3.19.2): categories the wrapper does not accept from below, one entry per code
+    /// (an element may list several, comma-separated), with that element's `authority`.
+    public var blockedAdCategories: [VASTCategory]
 
     public init(adTagURI: String, impressions: [String] = [], errors: [String] = [], creatives: [VASTCreative] = [],
                 viewableImpression: VASTViewableImpression? = nil, verifications: [VASTVerification] = [],
-                followAdditionalWrappers: Bool = true, allowMultipleAds: Bool = false, fallbackOnNoAd: Bool = false) {
+                followAdditionalWrappers: Bool = true, allowMultipleAds: Bool = false, fallbackOnNoAd: Bool = false,
+                blockedAdCategories: [VASTCategory] = []) {
+        self.blockedAdCategories = blockedAdCategories
         self.adTagURI = adTagURI
         self.impressions = impressions
         self.errors = errors

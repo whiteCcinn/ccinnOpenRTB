@@ -42,17 +42,30 @@ struct VASTTrackerLists: Sendable, Hashable {
 /// shared: every ad below a wrapper references the wrapper's layer instead of copying its trackers.
 final class VASTTrackerLayer: Sendable {
     let parent: VASTTrackerLayer?
+    /// The `<Ad>` this layer is.
+    let origin: VASTAdOrigin
     let own: VASTTrackerLists
+    /// A wrapper's `BlockedAdCategories`, by lower-cased code.
+    private let blockedByCode: [String: [VASTCategory]]
+    /// Whether this layer or one above blocks any category.
+    let blocksCategories: Bool
     /// Budget entries of this layer and every layer above it: the merged lists, plus the companion tracking the
     /// layer's creatives carry (wrapper companions are matched to each ad's companions when planned).
     let cumulativeCount: Int
     /// Error URLs of this layer and every layer above it.
     let cumulativeErrorCount: Int
 
-    init(parent: VASTTrackerLayer?, body: VASTAd.Body) {
+    init(parent: VASTTrackerLayer?, body: VASTAd.Body, origin: VASTAdOrigin) {
         let own = VASTTrackerLists(body)
         self.parent = parent
+        self.origin = origin
         self.own = own
+        if case let .wrapper(wrapper) = body {
+            blockedByCode = Dictionary(grouping: wrapper.blockedAdCategories) { Self.normalizedCode($0.code) }
+        } else {
+            blockedByCode = [:]
+        }
+        blocksCategories = !blockedByCode.isEmpty || parent?.blocksCategories == true
         let companionTrackers = body.creatives.lazy.flatMap(\.companions)
             .reduce(0) { Self.saturatingSum($0, Self.saturatingSum($1.trackingEvents.count, $1.clickTrackings.count)) }
         cumulativeCount = Self.saturatingSum(parent?.cumulativeCount ?? 0, Self.saturatingSum(own.count, companionTrackers))
@@ -85,6 +98,36 @@ final class VASTTrackerLayer: Sendable {
                                 trackingEvents: layers.flatMap(\.own.trackingEvents), clickTrackings: layers.flatMap(\.own.clickTrackings),
                                 viewableImpression: layers.reduce(VASTViewableImpression()) { $0.merged(with: $1.own.viewableImpression) },
                                 verifications: layers.flatMap(\.own.verifications))
+    }
+
+    /// The first of `categories` (an InLine ad's) that this layer or one above blocks (VAST 4.1 §3.19.2), outermost
+    /// wrapper first: same code (case-insensitive), and the same authority when both name one.
+    func block(of categories: [VASTCategory]) -> (index: Int, blockedBy: VASTCategory, wrapper: VASTAdOrigin)? {
+        guard blocksCategories, !categories.isEmpty else { return nil }
+        for layer in chain where !layer.blockedByCode.isEmpty {
+            for (index, category) in categories.enumerated() {
+                let candidates = layer.blockedByCode[Self.normalizedCode(category.code)] ?? []
+                if let blocked = candidates.first(where: { Self.sameAuthority($0.authority, category.authority) }) {
+                    return (index, blocked, layer.origin)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedCode(_ code: String) -> String {
+        code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Authorities agree when either is absent, or when they name the same list (case and trailing slashes aside).
+    private static func sameAuthority(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs else { return true }
+        func normalized(_ text: String) -> Substring {
+            var value = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            while value.hasSuffix("/") { value = value.dropLast() }
+            return value
+        }
+        return normalized(lhs) == normalized(rhs)
     }
 
     static func saturatingSum(_ lhs: Int, _ rhs: Int) -> Int {
