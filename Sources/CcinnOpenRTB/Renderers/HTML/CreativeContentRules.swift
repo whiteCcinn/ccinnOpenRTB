@@ -3,9 +3,10 @@ import WebKit
 
 /// Compiled `WKContentRuleList`s for creative web views, compiled once per process and shared.
 ///
-/// - `blockNetwork` (Simulated mode without "Allow creative network"): blocks every http(s) and ws(s) load except the
-///   creative document itself (`loadHTMLString` with `CreativeWebController.baseURL`). Attempts are still reported by the
-///   instrumentation, as `blocked`.
+/// - `blockNetwork` (every mode but Real): blocks every http(s) and ws(s) load except the creative document itself
+///   (`loadHTMLString` with `CreativeWebController.baseURL`). The attempts the instrumentation sees (elements, `fetch`,
+///   XHR, `sendBeacon`, WebSocket, WebRTC) are reported as `blocked`; loads from CSS, `EventSource`, `<a ping>` and
+///   workers are blocked without a report.
 /// - `mraidJS` (always): a `<script src="mraid.js">` is served by the container (the shim is already injected), as SDKs do;
 ///   the request is dropped instead of going to the network.
 @MainActor

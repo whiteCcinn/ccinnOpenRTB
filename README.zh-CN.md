@@ -52,7 +52,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | **监测请求**：竞价成功 `nurl`、计费 `burl`、竞价失败 `lurl`、曝光、可见性、VAST 事件、点击、错误 | 仅记录，**永不发出** | 使用模拟设备的 User-Agent 发出，并记录状态码、耗时、请求头/响应头与大小。 |
 | **监测请求的重定向** | 不发出任何请求，因此不存在重定向 | 不会自动跟随。由应用逐跳跟随，每一跳都记录为子条目（最多 10 跳，并检测循环）。 |
 | **脚本类监测**：Native `jstracker`、method 为 2 的 `eventtrackers` 与 AdCOM 事件 | 仅记录，不运行 | 记录后在各自独立的隐藏 Web 视图中各运行一次；它发起的加载记为它的子条目 |
-| **HTML 创意自身的网络请求**：脚本、像素、`fetch`、XHR、beacon | 由 WebKit 内容规则列表拦截，尝试发起的加载显示为 `blocked`。**Allow creative network** 可在当前会话中解除拦截。 | 不拦截 |
+| **HTML 创意自身的网络请求**：脚本、像素、`fetch`、XHR、beacon | 由 WebKit 内容规则列表拦截，模拟模式下无法解除。通过元素（`img`、`script`、`iframe`、`link`、媒体、`object`、`embed`）、`fetch`、XHR、`sendBeacon`、WebSocket 与 WebRTC 发起的加载显示为 `blocked`；来自 CSS（`url()`、字体、`@import`）、`EventSource`、`<a ping>` 与 Worker 的加载同样被拦截，但不产生条目。 | 不拦截 |
 | **渲染所需的内容**：VAST Wrapper 与标签请求、图片、媒体文件、Native `assetsurl`、按引用提供的素材（AdCOM `display.curl`） | 会请求 | 会请求 |
 | **由竞价成功通知返回的广告素材**（有 `nurl` 但没有 `adm` 的出价） | 不请求：竞价成功通知本身是监测请求。广告位上会说明原因，切换到真实模式后才会请求 | 使用 `nurl` 的响应体作为广告素材，素材中的 URL 都挂在该请求之下 |
 | **`data:` URL 与内置示例媒体**（`ccinn-sample://`） | 在本机解码或生成 | 在本机解码或生成 |

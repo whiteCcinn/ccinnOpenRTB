@@ -25,8 +25,6 @@ public final class NetworkMonitor {
     /// The published (coalesced) entries, in sequence order.
     public private(set) var entries: [NetworkEntry] = []
     public var mode: TrackingMode = .simulated
-    /// Simulated mode: let the HTML creative load from the network for this session.
-    public var allowCreativeNetwork = false
     /// Seconds allowed for each request hop (Settings ▸ Network ▸ Request timeout); used clamped to 0.1…300.
     public var requestTimeout: TimeInterval = 15
 

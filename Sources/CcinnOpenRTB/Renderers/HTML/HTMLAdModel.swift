@@ -49,9 +49,10 @@ final class HTMLAdModel {
         controller.onEvent = { [weak self] event in self?.handle(event) }
     }
 
-    /// Whether the creative's own network is blocked now (Simulated mode without "Allow creative network").
+    /// Whether the creative's own network is blocked now: everywhere but Real mode. Nothing lifts it in Simulated mode —
+    /// an HTML creative's own pixels are trackers.
     static func blocksNetwork(_ monitor: NetworkMonitor) -> Bool {
-        monitor.mode == .simulated && !monitor.allowCreativeNetwork
+        monitor.mode != .real
     }
 
     static func loadKey(markup: String, request: RenderRequest, blocksNetwork: Bool) -> LoadKey {

@@ -103,12 +103,11 @@ struct HTMLAdModelTests {
         #expect(host.events == [.rendered, .closed], "the page's own hidden state does not close twice")
     }
 
+    /// Safety review: the creative's own network is blocked in Simulated mode with no way to lift it there (an HTML
+    /// creative's pixels are trackers: lifting the block would send them). Only Real mode lets the creative load.
     @Test func theSandboxFollowsTheMonitor() {
         let monitor = NetworkMonitor(transport: OfflineTransport(), publishInterval: .zero)
         #expect(HTMLAdModel.blocksNetwork(monitor))
-        monitor.allowCreativeNetwork = true
-        #expect(!HTMLAdModel.blocksNetwork(monitor))
-        monitor.allowCreativeNetwork = false
         monitor.mode = .real
         #expect(!HTMLAdModel.blocksNetwork(monitor), "Real mode lets the creative load")
     }

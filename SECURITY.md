@@ -26,7 +26,7 @@ You can expect an acknowledgement within a few days. Once a fix is available, we
 |---|---|---|
 | Trackers: win, billing, loss, impression, viewability, VAST events, clicks, errors | Recorded, never sent | Sent after a per-session confirmation that lists the tracker hosts, with the simulated device's User-Agent |
 | Script trackers: Native `jstracker`, `eventtrackers` with method 2 | Recorded, not injected | Injected into the creative |
-| The HTML creative's own network | Blocked; attempts are recorded as `blocked`. Allowed only after **Allow creative network** for the session | Not blocked |
+| The HTML creative's own network | Blocked, with no way to lift the block in Simulated mode. Loads through elements, `fetch`, XHR, `sendBeacon`, WebSocket and WebRTC are recorded as `blocked`; loads from CSS, `EventSource`, `<a ping>` and workers are blocked without a record | Not blocked |
 | Content needed to render: VAST wrapper and tag fetches, images, media, `dcourl` | Fetched | Fetched |
 | Click-through navigation | Recorded, never opened | Recorded; opened in the default browser only when **Open click-throughs in browser in Real mode** is on (off by default). Never on CTV |
 | Update check | Once a day unless turned off | Once a day unless turned off |
