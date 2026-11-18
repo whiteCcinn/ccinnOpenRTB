@@ -71,9 +71,10 @@ Every session starts in **Simulated** mode. Trackers are recorded with their ful
 ## Features
 
 - **Paste what an exchange returns.** An OpenRTB 2.x or 3.0 bid response, a bare `adm` (HTML, Native JSON or VAST XML) or a VAST tag URL. The input type and version are detected automatically. Parsing is lenient: wrong types become validation issues and unknown fields are kept. A no-bid response shows "No bid" with the `nbr` reason named.
+- **The exchange's part, too.** Like an exchange (OpenRTB 2.6 §4.4), the simulator substitutes its `${AUCTION_*}` / `${OPENRTB_*}` macros in the bid's inline `adm` — HTML, Native JSON or VAST XML — before the device sees it; VAST `[MACROS]` stay for the player and are filled when each tracker fires. Markup the DSP returns after the win (`nurl` response, `display.curl`) is used as delivered.
 - **Pick the bid.** Every bid across all seats is listed with its format. Optionally paste the bid request too: it resolves Native asset types, the impression size and placement, and request-side macros.
 - **Render it as a device would**
-  - HTML and rich media in a sandboxed web view with an MRAID 3.0 bridge. Bridge calls are logged. Clicks and navigations are recorded instead of leaving the simulator. Like an exchange, the simulator substitutes the OpenRTB macros (`${AUCTION_PRICE}` …) in an inline `adm` before the creative sees it.
+  - HTML and rich media in a sandboxed web view with an MRAID 3.0 bridge. Bridge calls are logged. Clicks and navigations are recorded instead of leaving the simulator.
   - Image banners (OpenRTB 3.0 `display.banner`).
   - Native 1.0, 1.1 and 1.2 in in-feed, content-stream and app-install layouts, with the privacy link and per-asset clicks.
   - VAST video and audio: skip (from `skipoffset`), mute, pause, countdown, click-through, progress bar, companions (shown from the ad's first frame) or an end card, ad pods in `sequence` order, and wrapper chains up to 5 levels.
@@ -90,7 +91,7 @@ Every session starts in **Simulated** mode. Trackers are recorded with their ful
 Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; it shows the session of the focused main window.
 
 - **List**, updated in real time: sequence, relative time (+ms), category, trigger, host and path, mode, status and duration.
-- **Tree** of relationships. A request's parent is the request that delivered the document its URL is in: each VAST tracker, media file and companion hangs under the wrapper or inline hop that delivered it; the trackers, clicks, navigations and creative loads of markup delivered by `nurl` or `display.curl` hang under that request; URLs written in the bid response itself (`nurl`, `burl`, `lurl`, AdCOM events, the AdCOM banner link) are roots. Redirect hops hang under their tracker. A tracker never parents a navigation: the requests of one click share its trigger.
+- **Tree** of relationships. A request's parent is the request that delivered the document its URL is in: each VAST tracker, media file and companion (its image, an HTML or iframe companion's own loads and navigation) hangs under the wrapper or inline hop that delivered it; the trackers, clicks, navigations and creative loads of markup delivered by `nurl` or `display.curl` hang under that request; URLs written in the bid response itself (`nurl`, `burl`, `lurl`, AdCOM events, the AdCOM banner link) are roots. Redirect hops hang under their tracker. A tracker never parents a navigation: the requests of one click share its trigger.
 - **Waterfall** timeline.
 - **Details**: the URL template next to the expanded URL with macros highlighted, replaced and unknown macros, query parameters, request and response headers, the redirect chain, and a response preview for content.
 - **Filters** by category, mode and text. **Follow tail** keeps the newest entry in view. **Clear** empties the session's list.
@@ -244,7 +245,7 @@ dist/CcinnOpenRTB.app/Contents/MacOS/CcinnOpenRTB --sample ortb26-vast42-verific
 | `--device <id>`, `--landscape`, `--folded`, `--spanned` | The device and its posture. |
 | `--placement <name>`, `--visibility <0…1>`, `--zoom fit\|<scale>` | Placement (`in-feed`, `interstitial`, …), the ad's visible fraction, the canvas zoom. |
 | `--mode simulated\|real` | `real` only shows the confirmation: the command line never switches Real mode on by itself. |
-| `--snapshot <file.png>` | Renders the main window to a PNG after `--snapshot-delay <s>` (default 4), once it has finished drawing, with the current video frame drawn in. `--quit-after-snapshot` quits afterwards. |
+| `--snapshot <file.png>` | Renders the main window to a PNG after `--snapshot-delay <s>` (default 4), once it has finished drawing, with the current video frame and any sheet (such as the Real-mode confirmation) drawn in. `--quit-after-snapshot` quits afterwards, cancelling a pending confirmation. |
 | `--export-har <file.har>` | Writes the window's network log (HAR 1.2 with the `_ccinn` relationships) after the snapshot. |
 | `--open-network` | Opens the Network window. |
 | `--demo-network` | Fills the Network window with synthetic entries, so it can be checked without rendering an ad. |
