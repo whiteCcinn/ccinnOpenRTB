@@ -56,6 +56,30 @@ struct RealModeTeardownTests {
         try await expectSilence(server, after: "Simulated")
     }
 
+    /// The HTML creative itself loads freely in Real mode; leaving Real (to Simulated or Offline) closes its network at once.
+    @Test(arguments: ["simulated", "offline"])
+    func leavingRealStopsTheHTMLCreativesOwnLoads(_ change: String) async throws {
+        let server = try EchoServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let adm = JSONValue.string(#"<script>setInterval(function () { new Image().src = 'http://127.0.0.1:\#(port)/creative?' + Date.now(); }, 100);</script>"#).serialized()
+        let response = """
+        {"id": "req-1", "seatbid": [{"seat": "dsp", "bid": [{"id": "bid-1", "impid": "1", "price": 1, "mtype": 1, "w": 320, "h": 50, "adm": \(adm)}]}]}
+        """
+        let harness = AcceptanceSession(transport: URLSessionTransport())
+        await harness.session.load(Sample(id: "creative", title: "creative", group: "test", response: response), render: false)
+        try harness.confirmRealMode()
+        harness.session.render()
+        await harness.waitUntilSettled()
+        let size = harness.session.adSize
+        let window = WindowHarness(AdSlotView(session: harness.session, size: size), size: size)
+        defer { window.close() }
+        let loading = await Wait.until(timeout: .seconds(20)) { server.requests.filter { $0.target.hasPrefix("/creative") }.count >= 3 }
+        #expect(loading, "the Real-mode creative loads: \(server.requests.map(\.target))")
+        harness.session.choose(change == "offline" ? .offline : .simulated)
+        try await expectSilence(server, after: change)
+    }
+
     @Test func resettingStopsEveryRealModeWebView() async throws {
         let (harness, server, window) = try await beatingSession()
         defer {
