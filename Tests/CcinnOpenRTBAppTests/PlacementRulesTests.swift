@@ -45,6 +45,24 @@ struct PlacementRulesTests {
         #expect(ScreenLayout(device: notATV, landscape: false, folded: false, spanned: false).chrome != .television)
     }
 
+    /// The request's ad unit comes before the format and size (bid-client B6): rewarded, then interstitial. CTV still only
+    /// plays instream.
+    @Test func theRequestedPresentationComesFirst() throws {
+        let rewarded = BidRequestSummary.Impression(id: "1", formats: [.video], isInterstitial: true, isRewarded: true)
+        let interstitial = BidRequestSummary.Impression(id: "1", formats: [.banner], isInterstitial: true)
+        let plain = BidRequestSummary.Impression(id: "1", formats: [.banner])
+        let banner = AdSize(width: 320, height: 50)
+        #expect(Placement.suggested(for: .video, size: nil, on: phone, impression: rewarded) == .rewarded)
+        #expect(Placement.suggested(for: .native, size: nil, on: phone, impression: rewarded) == .rewarded)
+        #expect(Placement.suggested(for: .banner, size: banner, on: phone, impression: interstitial) == .interstitial)
+        #expect(Placement.suggested(for: .banner, size: banner, on: phone, impression: plain) == .inlineBanner)
+        #expect(Placement.suggested(for: .banner, size: banner, on: phone, impression: nil) == .inlineBanner)
+        let tv = try #require(DeviceCatalog.device(id: "apple-tv-4k"))
+        #expect(Placement.suggested(for: .video, size: nil, on: tv, impression: rewarded) == .ctvInstream)
+        #expect(Placement.inlineBanner.compatible(with: tv, format: .video, size: nil, impression: rewarded) == .ctvInstream)
+        #expect(Placement.ctvInstream.compatible(with: phone, format: .video, size: nil, impression: rewarded) == .rewarded)
+    }
+
     @Test func fullScreenPlacements() {
         #expect(Placement.allCases.filter(\.isFullScreen) == [.interstitial, .rewarded, .ctvInstream])
     }

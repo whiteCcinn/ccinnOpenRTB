@@ -25,9 +25,13 @@ extension Placement {
         device.family == .ctv ? [.ctvInstream] : [.inlineBanner, .inFeed, .interstitial, .rewarded]
     }
 
-    /// The placement a bid of `format` most likely targets on `device`.
-    static func suggested(for format: AdFormat?, size: AdSize?, on device: DeviceProfile) -> Placement {
+    /// The placement a bid of `format` most likely targets on `device`. The bid's impression in the request, when known,
+    /// names its ad unit first: rewarded, then interstitial (`imp.rwdd`, `imp.instl`, …); CTV only plays instream.
+    static func suggested(for format: AdFormat?, size: AdSize?, on device: DeviceProfile,
+                          impression: BidRequestSummary.Impression? = nil) -> Placement {
         if device.family == .ctv { return .ctvInstream }
+        if impression?.isRewarded == true { return .rewarded }
+        if impression?.isInterstitial == true { return .interstitial }
         switch format {
         case .native?: return .inFeed
         case .video?, .audio?: return .interstitial
@@ -44,8 +48,8 @@ extension Placement {
         return short >= 320 && long >= 480
     }
 
-    /// `self` when it can run on `device`, else the suggestion for `format`.
-    func compatible(with device: DeviceProfile, format: AdFormat?, size: AdSize?) -> Placement {
-        Self.available(on: device).contains(self) ? self : Self.suggested(for: format, size: size, on: device)
+    /// `self` when it can run on `device`, else the suggestion for `format` (and the bid's impression).
+    func compatible(with device: DeviceProfile, format: AdFormat?, size: AdSize?, impression: BidRequestSummary.Impression? = nil) -> Placement {
+        Self.available(on: device).contains(self) ? self : Self.suggested(for: format, size: size, on: device, impression: impression)
     }
 }

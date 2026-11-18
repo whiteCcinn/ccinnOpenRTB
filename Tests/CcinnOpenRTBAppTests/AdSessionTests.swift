@@ -29,6 +29,28 @@ struct AdSessionTests {
         #expect(harness.session.isParsing == false)
     }
 
+    /// The bid's impression in the request decides the ad unit (bid-client B6): found by `impid`.
+    @Test func theRequestedImpressionPicksThePlacement() async {
+        var input = Fixtures.input([display, Fixtures.candidate(.html("<p>2</p>"), id: "0.1")])
+        input.candidates[1].impID = "2"
+        input.request = BidRequestSummary(id: "r", impressions: [BidRequestSummary.Impression(id: "2", formats: [.banner], isRewarded: true),
+                                                                 BidRequestSummary.Impression(id: "1", formats: [.banner], isInterstitial: true)])
+        let harness = SessionHarness(input)
+        await harness.paste()
+        #expect(harness.session.placement == .interstitial)
+        harness.session.selectedCandidateID = "0.1"
+        #expect(harness.session.placement == .rewarded)
+    }
+
+    /// With a single impression, a bid without a matching `impid` still belongs to it.
+    @Test func theOnlyImpressionCountsWhateverTheImpID() async {
+        var input = Fixtures.input([video])
+        input.request = BidRequestSummary(id: "r", impressions: [BidRequestSummary.Impression(id: "imp-x", formats: [.video], isRewarded: true)])
+        let harness = SessionHarness(input)
+        await harness.paste()
+        #expect(harness.session.placement == .rewarded)
+    }
+
     @Test func typingIsDebouncedAndOnlyTheLatestTextIsApplied() async throws {
         let recorder = KitRecorder()
         let session = AdSession(services: Fixtures.services(Fixtures.input([display]), recorder: recorder),

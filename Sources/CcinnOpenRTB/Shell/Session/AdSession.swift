@@ -275,7 +275,7 @@ final class AdSession: AdRenderingHost {
     private func candidateSelectionChanged() {
         defer { refreshRealModeConfirmation() }
         if let candidate = selectedCandidate {
-            let suggested = Placement.suggested(for: candidate.format, size: candidate.size, on: device)
+            let suggested = Placement.suggested(for: candidate.format, size: candidate.size, on: device, impression: requestImpression(for: candidate))
             let kindChanged = suggested != lastSuggestedPlacement
             lastSuggestedPlacement = suggested
             if placement != suggested, kindChanged || !Self.placement(placement, suits: candidate.format) { placement = suggested }
@@ -316,9 +316,13 @@ final class AdSession: AdRenderingHost {
     }
 
     private func nativeHints(for candidate: AdCandidate) -> NativeRequestHints? {
+        requestImpression(for: candidate)?.nativeHints
+    }
+
+    /// The impression of the pasted request that `candidate` bids on: by `impid`, else the request's only impression.
+    private func requestImpression(for candidate: AdCandidate) -> BidRequestSummary.Impression? {
         guard let impressions = parsed.request?.impressions else { return nil }
-        let impression = impressions.first { $0.id == candidate.impID } ?? (impressions.count == 1 ? impressions.first : nil)
-        return impression?.nativeHints
+        return impressions.first { $0.id == candidate.impID } ?? (impressions.count == 1 ? impressions.first : nil)
     }
 
     /// Loads a built-in sample into the editors and renders its first bid.
@@ -336,7 +340,8 @@ final class AdSession: AdRenderingHost {
         if device.family != .foldable { folded = false }
         if device.family != .dualScreen { spanned = false }
         let candidate = selectedCandidate
-        let compatible = placement.compatible(with: device, format: candidate?.format, size: candidate?.size)
+        let compatible = placement.compatible(with: device, format: candidate?.format, size: candidate?.size,
+                                              impression: candidate.flatMap(requestImpression(for:)))
         if compatible != placement { placement = compatible }
         isAdjustingContext = false
         geometryChanged()
@@ -351,7 +356,9 @@ final class AdSession: AdRenderingHost {
     private func placementChanged(from oldValue: Placement) {
         guard placement != oldValue else { return }
         if !Placement.available(on: device).contains(placement) {
-            placement = placement.compatible(with: device, format: selectedCandidate?.format, size: selectedCandidate?.size)
+            let candidate = selectedCandidate
+            placement = placement.compatible(with: device, format: candidate?.format, size: candidate?.size,
+                                             impression: candidate.flatMap(requestImpression(for:)))
             return
         }
         if placement == .inFeed { feedOffset = feedGeometry.offset(forVisibleFraction: visibility) }
