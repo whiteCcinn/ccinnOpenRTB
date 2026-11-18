@@ -129,13 +129,21 @@ public struct MacroContext: Sendable, Hashable {
     /// Fixed cache-buster for deterministic tests; `nil` = random 8 digits.
     public var cacheBuster: String?
     public var device: DeviceProfile?
+    /// VAST 4.1 §6.2 `[BREAKPOSITION]`: where the ad break sits in the content. `simulatorDefaults` sets it from the
+    /// placement (an instream break on CTV is a pre-roll; mobile placements without content are standalone). A
+    /// `custom["[BREAKPOSITION]"]` value overrides it; without either, it comes from `contentPlayhead`, else -1.
+    public var breakPosition: VASTBreakPosition?
+    /// VAST 4.1 §6.2 `[ADCOUNT]`: the number of ads in the pod or buffet that will play. `VASTTrackingPlan` sets it from
+    /// the resolved VAST; `nil`: unknown (-1), e.g. in a VAST request URI.
+    public var adCount: Int?
 
     public init(auctionID: String? = nil, bidID: String? = nil, impID: String? = nil, seatID: String? = nil, adID: String? = nil,
                 price: Double? = nil, encryptedPrice: String? = nil, currency: String? = nil, marketBidRatio: Double? = nil,
                 lossReason: Int? = nil, minimumToWin: Double? = nil, custom: [String: String] = [:], customLists: [String: [String]] = [:],
                 errorCode: Int? = nil,
                 adPlayhead: Double? = nil, contentPlayhead: Double? = nil, assetURI: String? = nil, playerWidth: Int? = nil,
-                playerHeight: Int? = nil, reason: Int? = nil, timestamp: Date? = nil, cacheBuster: String? = nil, device: DeviceProfile? = nil) {
+                playerHeight: Int? = nil, reason: Int? = nil, timestamp: Date? = nil, cacheBuster: String? = nil, device: DeviceProfile? = nil,
+                breakPosition: VASTBreakPosition? = nil, adCount: Int? = nil) {
         self.auctionID = auctionID
         self.bidID = bidID
         self.impID = impID
@@ -159,7 +167,17 @@ public struct MacroContext: Sendable, Hashable {
         self.timestamp = timestamp
         self.cacheBuster = cacheBuster
         self.device = device
+        self.breakPosition = breakPosition
+        self.adCount = adCount
     }
+}
+
+/// VAST 4.1 §6.2 `[BREAKPOSITION]` values: "the position of the ad break within the underlying video content that the ad
+/// is playing within".
+public enum VASTBreakPosition: Int, Sendable, Hashable, CaseIterable {
+    case preroll = 1, midroll = 2, postroll = 3
+    /// No content: the ad plays on its own (outstream, in-feed, interstitial).
+    case standalone = 4
 }
 
 /// A URL after macro expansion.

@@ -35,7 +35,8 @@ import Foundation
 /// sees it; one in a document a request delivered stays literal and is listed in `unknownMacros` (the resolver warns about
 /// that document, `vast.macro.openrtb.unsubstituted`).
 ///
-/// The plan sets what it knows about the ad on top of the host's context: `[ERRORCODE]`, `[REASON]` (2 for
+/// The plan sets what it knows about the resolution and the ad on top of the host's context: `[ADCOUNT]` (the number of
+/// ads that will play), `[ERRORCODE]`, `[REASON]` (2 for
 /// `verificationNotExecuted`) and `[PODSEQUENCE]` (the `sequence` of the pod slot the ad plays in). Playback values
 /// (`[ADPLAYHEAD]`, `[ASSETURI]`, `[PLAYERSIZE]`, …) come from the host's context.
 public enum VASTTrackingPlan {
@@ -66,8 +67,17 @@ public enum VASTTrackingPlan {
 /// Builds the requests of one event for one resolution. Internal so that `resolutionRequests` (its own file) shares it.
 struct VASTPlanner {
     let vast: ResolvedVAST
+    /// The host's context with `[ADCOUNT]`: the number of ads of this resolution that will play (VAST 4.1 §6.2).
     let context: MacroContext
     let source: String
+
+    init(vast: ResolvedVAST, context: MacroContext, source: String) {
+        self.vast = vast
+        var planContext = context
+        planContext.adCount = vast.ads.count
+        self.context = planContext
+        self.source = source
+    }
 
     /// `MacroContext.custom` keys of the ad-level VAST macros the plan fills (VAST 4.1 / 4.2, all "Contexts: All tracking
     /// pixels"). `[ADCATEGORIES]` is not one of them: it is a VAST request macro, "List of desired ad categories" (§6.3).

@@ -240,8 +240,10 @@ struct VASTMacroTests {
         #expect(result.url == "s=640,360&a=https%3A%2F%2Fcdn.example%2Fa.mp4%3Fx%3D1&ua=Mozilla%2F5.0%20%28iPhone%3B%20CPU%29&r=2")
     }
 
+    /// VAST 4.1 §6.2 `[BREAKPOSITION]`; §6.1: -1 when unknown. Standalone (4) is a placement fact, never a guess: without
+    /// a typed position, a `custom` value or a content playhead, the position is unknown.
     @Test func breakPositionIsDerivedFromTheContentPlayhead() {
-        #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext()).url == "4")
+        #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext()).url == "-1")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(contentPlayhead: 0)).url == "1")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(contentPlayhead: 30)).url == "2")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(custom: ["[BREAKPOSITION]": "3"])).url == "3")
