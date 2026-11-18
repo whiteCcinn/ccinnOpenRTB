@@ -149,6 +149,7 @@ private struct PlayerOverlay: View {
         ZStack {
             if model.phase == .loading {
                 ProgressView().controlSize(compact ? .small : .regular).tint(.white)
+                    .simulatorStatusPlacement()
             }
             VStack(spacing: 0) {
                 HStack(alignment: .center) {
@@ -276,6 +277,7 @@ private struct ProgressBar: View {
 /// After the pod: why nothing plays, or that it ended.
 private struct FinishedOverlay: View {
     let model: VASTPlayerModel
+    @Environment(\.simulatorTextScale) private var scale
 
     var body: some View {
         if model.startedAds == 0 {
@@ -285,12 +287,12 @@ private struct FinishedOverlay: View {
                 .foregroundStyle(.white)
         } else {
             Text("Ad finished")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 12 * scale, weight: .semibold))
                 .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 10 * scale)
+                .padding(.vertical, 5 * scale)
                 .background(Capsule().fill(.black.opacity(0.6)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .simulatorStatusPlacement()
         }
     }
 
@@ -400,7 +402,7 @@ private struct CTVPlayerLayout: View {
             ZStack {
                 Color.black
                 PlayerLayerView(player: model.avPlayer.player)
-                if model.phase == .loading { ProgressView().controlSize(.large).tint(.white) }
+                if model.phase == .loading { ProgressView().controlSize(.large).tint(.white).simulatorStatusPlacement() }
                 if model.phase == .finished { FinishedOverlay(model: model) }
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top) {

@@ -3,13 +3,28 @@ import SwiftUI
 
 /// The ad (through the renderers' `AdView`) or, while there is none, an outlined slot saying why. Both are drawn at
 /// `size`, and the placeholder's label is that size: what the slot says is what it is.
+///
+/// The simulator's own text in the slot (the placeholder's label, a renderer's message) goes to the slot's part on one
+/// screen when a dual-screen hinge crosses it, and is sized for the 10-foot UI on a CTV (`SimulatorTextLayout`).
 struct AdSlotView: View {
     let session: AdSession
     let size: CGSize
-    /// Where the placeholder's label goes inside the slot (`nil`: centred); see `AdSizing.placeholderLabelRect`.
+    /// Where the placeholder's label goes inside the slot; `nil`: found from where the slot is on the screen.
     var labelArea: CGRect?
 
     var body: some View {
+        GeometryReader { proxy in
+            let area = labelArea ?? AdSizing.placeholderLabelRect(slot: proxy.frame(in: .named(SimulatorTextLayout.screenSpace)),
+                                                                  layout: session.layout)
+            slot(textArea: area)
+                .environment(\.simulatorTextArea, area)
+                .environment(\.simulatorTextScale, SimulatorTextLayout.scale(device: session.device, slot: size))
+                .coordinateSpace(name: SimulatorTextLayout.adSpace)
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    @ViewBuilder private func slot(textArea: CGRect) -> some View {
         if let request = session.renderRequest {
             AdView(request: request, host: session.rendererHost)
                 .frame(width: size.width, height: size.height)
@@ -17,7 +32,7 @@ struct AdSlotView: View {
                 .id(request.generation)
         } else {
             AdSlotPlaceholder(phase: session.phase, format: session.slotCandidate?.format, size: size, compact: size.height < 90,
-                              labelArea: labelArea)
+                              labelArea: textArea)
                 .frame(width: size.width, height: size.height)
         }
     }
@@ -70,7 +85,7 @@ struct AdSlotPlaceholder: View {
 
     /// Type size relative to the phone size: 1 up to a 360 pt short side, growing with larger slots up to 3 (a 1080 pt
     /// TV slot), so the label stays legible however the canvas is zoomed to fit.
-    static func textScale(for size: CGSize) -> CGFloat {
+    nonisolated static func textScale(for size: CGSize) -> CGFloat {
         let shortSide = min(size.width, size.height)
         guard shortSide.isFinite, shortSide > 0 else { return 1 }
         return min(3, max(1, shortSide / 360))

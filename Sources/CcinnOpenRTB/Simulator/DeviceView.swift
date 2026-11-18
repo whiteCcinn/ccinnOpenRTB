@@ -157,6 +157,7 @@ private struct ScreensView: View {
             }
             SimulatedAppView(session: session, layout: layout)
                 .frame(width: content.width, height: content.height)
+                .coordinateSpace(name: SimulatorTextLayout.screenSpace)
                 .offset(x: content.minX, y: content.minY)
             if let hinge = layout.hinge {
                 Rectangle().fill(Color(white: 0.04))

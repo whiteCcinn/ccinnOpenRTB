@@ -30,36 +30,42 @@ struct RendererRoot: View {
     }
 }
 
-/// A renderer's own state message (nothing to draw, a load failure, a closed ad).
+/// A renderer's own state message (nothing to draw, a load failure, a closed ad): in the simulator's text area (never
+/// under a hinge) and at its text scale (the 10-foot UI on a CTV).
 struct RendererMessageView: View {
     let symbol: String
     let title: String
     var detail: String?
+
+    @Environment(\.simulatorTextScale) private var scale
 
     var body: some View {
         GeometryReader { proxy in
             let compact = proxy.size.height < 90
             ZStack {
                 Rectangle().fill(Color.secondary.opacity(0.08))
-                if compact {
-                    HStack(spacing: 6) {
-                        Image(systemName: symbol)
-                        Text(title).fontWeight(.semibold).lineLimit(1)
-                        if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1) }
-                    }
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 6)
-                } else {
-                    VStack(spacing: 6) {
-                        Image(systemName: symbol).font(.system(size: 22, weight: .semibold))
-                        Text(title).font(.system(size: 13, weight: .semibold)).multilineTextAlignment(.center)
-                        if let detail {
-                            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                                .fixedSize(horizontal: false, vertical: true)
+                Group {
+                    if compact {
+                        HStack(spacing: 6) {
+                            Image(systemName: symbol)
+                            Text(title).fontWeight(.semibold).lineLimit(1)
+                            if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1) }
                         }
+                        .font(.system(size: 11 * scale))
+                        .padding(.horizontal, 6)
+                    } else {
+                        VStack(spacing: 6 * scale) {
+                            Image(systemName: symbol).font(.system(size: 22 * scale, weight: .semibold))
+                            Text(title).font(.system(size: 13 * scale, weight: .semibold)).multilineTextAlignment(.center)
+                            if let detail {
+                                Text(detail).font(.system(size: 11 * scale)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(12 * scale)
                     }
-                    .padding(12)
                 }
+                .simulatorStatusPlacement()
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
