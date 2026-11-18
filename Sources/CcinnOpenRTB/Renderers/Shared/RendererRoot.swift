@@ -74,8 +74,8 @@ struct RendererMessageView: View {
 }
 
 extension RenderRequest {
-    /// `bid 0.0`, the root of every network source path the renderers write.
-    var sourceRoot: String { "bid \(candidate.id)" }
+    /// `bid 0.0` (`bid 0.0 · replay N` for a replay), the root of every network source path the renderers write.
+    var sourceRoot: String { AuctionReplays.sourceRoot(candidateID: candidate.id, replay: replay) }
 
     /// Click-throughs exist on this device (not on CTV).
     var allowsClickThrough: Bool { device.supportsClickThrough && device.family != .ctv && placement != .ctvInstream }

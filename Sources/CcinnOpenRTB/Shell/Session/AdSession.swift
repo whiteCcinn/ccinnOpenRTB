@@ -83,6 +83,11 @@ final class AdSession: AdRenderingHost {
     private(set) var prepared: PreparedAd?
     /// Incremented by every render, reset and loss; renderers restart on change.
     private(set) var generation = 0
+    /// Which replay of its auction the current play is (0: the first play, or nothing played); see `AuctionReplays`.
+    private(set) var replay = 0
+    @ObservationIgnored private var replays = AuctionReplays()
+    /// The auction of the current play (its `AuctionReplays` key).
+    @ObservationIgnored private var playedAuction: String?
     /// Issues found while rendering (VAST resolution), appended to the input's issues.
     private(set) var renderIssues: [ValidationIssue] = []
     private(set) var lifecycleLog: [LifecycleLogEntry] = []
@@ -195,7 +200,7 @@ final class AdSession: AdRenderingHost {
         return RenderRequest(candidate: candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
                              landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: visibleFraction,
                              generation: generation, markupRequestID: prepared.markupEntryID,
-                             publisherAppBundle: renderInput.request?.appBundle)
+                             publisherAppBundle: renderInput.request?.appBundle, replay: replay)
     }
 
     /// The selected bid differs from the one on the device (the response was edited or another bid picked).
@@ -400,7 +405,8 @@ final class AdSession: AdRenderingHost {
         renderInput = input
         let token = generation
         phase = .preparing("Preparing…")
-        log("render bid \(candidate.id) on \(device.name)", origin: "simulator", outcome: .fired(requests: 0))
+        beginPlay(candidate, input: input)
+        log("render bid \(candidate.id) on \(device.name)" + replaySuffix, origin: "simulator", outcome: .fired(requests: 0))
         renderTask = Task { [weak self] in await self?.prepare(candidate, input: input, token: token) }
     }
 
@@ -419,6 +425,8 @@ final class AdSession: AdRenderingHost {
         prepared = PreparedAd(candidate: candidate, native: nil, vast: nil, markupEntryID: nil, markupFromWinNotice: false)
         phase = .lost(reason)
         renderInput = parsed
+        beginPlay(candidate, input: parsed)
+        log("lose bid \(candidate.id) (\(reason.title))" + replaySuffix, origin: "simulator", outcome: .fired(requests: 0))
         deliver([.loss(reason: reason.code)], origin: "manual")
     }
 
@@ -439,7 +447,30 @@ final class AdSession: AdRenderingHost {
         viewability = ViewabilityController(kind: .none)
         lastReportedFraction = nil
         transactionID = UUID().uuidString
+        replay = 0
+        playedAuction = nil
         refreshRealModeConfirmation()
+    }
+
+    /// The auction a bid belongs to: its `${AUCTION_ID}` (the response id or the macro override); without one, the bid of
+    /// this input.
+    private func auctionKey(_ candidate: AdCandidate, input: ParsedInput) -> (key: String, auctionID: String) {
+        let auctionID = macroContext(for: candidate, input: input, adIndex: nil).auctionID?.trimmingCharacters(in: .whitespaces) ?? ""
+        return auctionID.isEmpty ? ("bid \(candidate.id) of input \(inputRevision)", "bid \(candidate.id)") : ("auction " + auctionID, auctionID)
+    }
+
+    /// A render or a Lose plays the bid's auction: numbered as a replay after the first.
+    private func beginPlay(_ candidate: AdCandidate, input: ParsedInput) {
+        let auction = auctionKey(candidate, input: input).key
+        playedAuction = auction
+        replay = replays.play(auction)
+    }
+
+    private var replaySuffix: String { replay > 0 ? " · replay \(replay)" : "" }
+
+    /// The root of the current play's network sources (`bid 0.0`, `bid 0.0 · replay N`).
+    private func sourceRoot(_ candidate: AdCandidate) -> String {
+        AuctionReplays.sourceRoot(candidateID: candidate.id, replay: replay)
     }
 
     private func prepare(_ original: AdCandidate, input: ParsedInput, token: Int) async {
@@ -458,7 +489,7 @@ final class AdSession: AdRenderingHost {
                 phase = .preparing("Fetching markup…")
                 do {
                     let (data, entryID) = try await monitor.fetchContent(markupURL, category: .content, trigger: "markup (display.curl)",
-                                                                         source: "bid \(candidate.id) › display.curl", parentID: nil,
+                                                                         source: sourceRoot(candidate) + " › display.curl", parentID: nil,
                                                                          userAgent: device.userAgent)
                     guard token == generation else { return }
                     markupEntryID = entryID
@@ -475,7 +506,7 @@ final class AdSession: AdRenderingHost {
                 let expanded = services.expandOpenRTB(winURL, context)
                 do {
                     let (data, entryID) = try await monitor.fetchContent(expanded.url, category: .win, trigger: "win (markup)",
-                                                                         source: "bid \(candidate.id) › nurl", parentID: nil,
+                                                                         source: sourceRoot(candidate) + " › nurl", parentID: nil,
                                                                          userAgent: device.userAgent)
                     guard token == generation else { return }
                     markupEntryID = entryID
@@ -516,7 +547,7 @@ final class AdSession: AdRenderingHost {
             }
         case let .vast(source):
             phase = .preparing("Resolving VAST…")
-            let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidate.id) › VAST",
+            let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: sourceRoot(candidate) + " › VAST",
                                              rootParentID: markupEntryID)
             let resolved = await services.resolveVAST(source, fetcher, markupEntryID)
             guard token == generation else { return }
@@ -532,7 +563,7 @@ final class AdSession: AdRenderingHost {
         lastReportedFraction = visibleFraction
         _ = viewability.visibility(visibleFraction, at: clock.now())
         phase = .ready
-        if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: "bid \(candidate.id) › VAST") }
+        if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: sourceRoot(candidate) + " › VAST") }
     }
 
     /// The exchange's substitution of its OpenRTB `${…}` auction macros in the bid's inline `adm` — HTML, Native JSON or
@@ -695,7 +726,9 @@ final class AdSession: AdRenderingHost {
     /// keeps the parent the plan gave it: the request that delivered the document its URL is in, never a tracker.
     @discardableResult
     private func dispatch(_ requests: [TrackerRequest]) -> Int {
-        for request in requests {
+        var sentNotices = 0
+        for var request in requests {
+            if let prepared { request.source = AuctionReplays.source(request.source, candidateID: prepared.candidate.id, replay: replay) }
             if request.category == .navigation {
                 recordNavigation(url: request.url, trigger: request.trigger, source: request.source, parentID: request.parentID)
                 continue
@@ -704,7 +737,9 @@ final class AdSession: AdRenderingHost {
             if request.isScript, monitor.mode == .real {
                 scriptTrackers.append(ScriptTracker(entryID: entryID, request: request))
             }
+            if monitor.mode == .real, AuctionReplays.noticeCategories.contains(request.category) { sentNotices += 1 }
         }
+        if let playedAuction { replays.noteSent(sentNotices, auction: playedAuction) }
         return requests.count
     }
 
@@ -799,7 +834,7 @@ final class AdSession: AdRenderingHost {
         if let pending = nativeVideoResolution, pending.source == source { return await pending.task.value }
         let token = generation
         let parent = prepared.markupEntryID
-        let label = "bid \(prepared.candidate.id) › native video"
+        let label = sourceRoot(prepared.candidate) + " › native video"
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent)
         let resolve = services.resolveVAST
         let task = Task { await resolve(source, fetcher, parent) }
@@ -880,7 +915,11 @@ final class AdSession: AdRenderingHost {
                                            nativeVideo: nativeVideo)
         return RealModeTarget(candidateID: candidate?.id, bidLabel: candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") },
                               summary: summary, inputRevision: inputRevision, generation: generation, deviceID: device.id,
-                              placement: placement, landscape: landscape, folded: folded, spanned: spanned)
+                              placement: placement, landscape: landscape, folded: folded, spanned: spanned,
+                              sentNotices: candidate.flatMap { candidate in
+                                  let auction = auctionKey(candidate, input: parsed)
+                                  return replays.sentNotices(auction: auction.key, auctionID: auction.auctionID)
+                              })
     }
 
     /// A shown confirmation always describes the current target: anything that changed it re-prompts with a new snapshot.
@@ -966,6 +1005,8 @@ struct RealModeTarget: Equatable, Sendable {
     var landscape: Bool
     var folded: Bool
     var spanned: Bool
+    /// Notices of this bid's auction already sent this session (sending again may double-count at the DSP).
+    var sentNotices: AuctionReplays.SentNotices? = nil
 }
 
 /// One line of the renderer console, numbered in arrival order.

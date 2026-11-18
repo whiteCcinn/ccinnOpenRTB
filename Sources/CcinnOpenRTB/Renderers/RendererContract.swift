@@ -49,6 +49,8 @@ struct RenderRequest: Equatable {
     var markupRequestID: UUID? = nil
     /// The publisher's app (the pasted request's `app.bundle`); `nil`: the simulated host app (`Placement.simulatedAppBundle`).
     var publisherAppBundle: String? = nil
+    /// Which replay of the auction this render is (0: its first play); shown in every network source (`AuctionReplays`).
+    var replay: Int = 0
 }
 
 /// What the renderer is playing (VAST pod ad `adIndex`, or a Native video asset with `adIndex` 0). Reported about 4 Hz

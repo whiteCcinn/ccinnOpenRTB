@@ -130,6 +130,12 @@ struct RealModeSheet: View {
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
+    /// The warning when this auction's notices already went out this session.
+    nonisolated static func sentNoticesWarning(_ sent: AuctionReplays.SentNotices) -> String {
+        "Win, billing or loss notices for auction \(sent.auctionID) were already sent this session (\(sent.count)). "
+            + "Sending again may double-count at the DSP."
+    }
+
     var body: some View {
         let summary = confirmation.summary
         VStack(alignment: .leading, spacing: 14) {
@@ -149,6 +155,12 @@ struct RealModeSheet: View {
             }
             if let bid = confirmation.bidLabel {
                 Label(bid, systemImage: "dollarsign.circle").font(.callout)
+            }
+            if let sent = confirmation.target.sentNotices {
+                Label(Self.sentNoticesWarning(sent), systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text(summary.hosts.isEmpty ? "No tracker hosts found" :

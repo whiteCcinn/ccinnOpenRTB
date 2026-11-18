@@ -574,6 +574,74 @@ struct AdSessionTests {
         #expect(harness.transport.requests.allSatisfy { $0.headers["User-Agent"] == tablet.userAgent })
     }
 
+    // MARK: Replays
+
+    /// AdTech review: rendering again re-fires the auction's win, billing and impressions. It stays possible as a simulator
+    /// replay, made explicit: each play of the same `${AUCTION_ID}` after the first (a render or a Lose) is "replay N" in
+    /// the lifecycle log and in the source of every Network entry it causes.
+    @Test func everyPlayAfterTheFirstIsANumberedReplayOfTheAuction() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.fireManually(.rendered)
+        #expect(harness.session.replay == 0)
+        #expect(harness.monitor.liveEntries.allSatisfy { !$0.source.contains("replay") }, "\(harness.monitor.liveEntries.map(\.source))")
+        #expect(harness.session.lifecycleLog.contains { $0.label == "render bid 0.0 on \(harness.session.device.name)" })
+
+        let before = harness.monitor.liveEntries.count
+        await harness.renderAndWait()
+        harness.session.fireManually(.rendered)
+        #expect(harness.session.replay == 1)
+        let replayed = harness.monitor.liveEntries.dropFirst(before)
+        #expect(!replayed.isEmpty)
+        #expect(replayed.allSatisfy { $0.source == "bid 0.0 · replay 1" || $0.source.hasPrefix("bid 0.0 · replay 1 › ") },
+                "\(replayed.map(\.source))")
+        #expect(harness.session.lifecycleLog.contains { $0.label == "render bid 0.0 on \(harness.session.device.name) · replay 1" })
+
+        harness.session.lose(LossReason.lossReasons[0])
+        #expect(harness.session.replay == 2)
+        #expect(harness.monitor.liveEntries.last?.category == .loss)
+        #expect(harness.monitor.liveEntries.last?.source.hasPrefix("bid 0.0 · replay 2") == true)
+
+        harness.session.reset()
+        #expect(harness.session.replay == 0, "nothing is played")
+    }
+
+    /// Another auction (a different `${AUCTION_ID}`) starts its own count.
+    @Test func anotherAuctionIsNotAReplay() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.macros.auctionID = "auction-2"
+        await harness.renderAndWait()
+        #expect(harness.session.replay == 0)
+        await harness.renderAndWait()
+        #expect(harness.session.replay == 1)
+    }
+
+    /// In Real mode, the confirmation warns when notices (win, billing, loss) of this auction were already sent this
+    /// session: sending again may double-count at the DSP. Simulated plays send nothing and do not count.
+    @Test func theRealModeSheetWarnsWhenThisAuctionsNoticesWereAlreadySent() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.fireManually(.rendered)
+        harness.session.requestRealMode()
+        #expect(harness.session.realModeConfirmation?.target.sentNotices == nil, "Simulated mode sent nothing")
+        harness.session.cancelRealMode()
+
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        harness.session.fireManually(.rendered)
+        harness.session.useSimulatedMode()
+        harness.session.requestRealMode()
+        let sent = try #require(harness.session.realModeConfirmation?.target.sentNotices)
+        #expect(sent.auctionID == "auction-1")
+        #expect(sent.count == 2, "the win and the billing notice")
+        #expect(RealModeSheet.sentNoticesWarning(sent)
+            == "Win, billing or loss notices for auction auction-1 were already sent this session (2). Sending again may double-count at the DSP.")
+    }
+
     // MARK: Click-throughs
 
     @Test func clickThroughsAreRecordedAndOpenedOnlyInRealModeWithTheSetting() async throws {
