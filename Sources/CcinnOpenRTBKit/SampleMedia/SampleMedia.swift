@@ -4,8 +4,10 @@ import Foundation
 ///
 /// - Thread-safe and idempotent: concurrent requests for the same asset share one generation task; different assets
 ///   generate in parallel, off the actor.
-/// - Files are written to a temporary name and moved into place, so a half-written file is never served, also across
-///   processes. A generator version is part of the directory, so a changed generator never serves stale files.
+/// - Files are written in a private temporary directory and moved into place, so a half-written file is never served,
+///   also across processes. The temporary directory is removed afterwards with whatever the encoder put next to its
+///   output (AVAssetWriter keeps a side file there until it is torn down). A generator version is part of the directory,
+///   so a changed generator never serves stale files.
 public actor SampleMedia: SampleMediaProviding {
     public static let generatorVersion = 1
     public static let shared = SampleMedia(directory: SampleMedia.defaultDirectory)
@@ -52,7 +54,7 @@ public actor SampleMedia: SampleMediaProviding {
 
     // MARK: Generation (off the actor and off the Swift concurrency pool)
 
-    /// Runs blocking work (encoding polls the writer) on a dispatch queue, not on a cooperative thread.
+    /// Runs blocking work (encoding waits for the writer) on a dispatch queue, not on a cooperative thread.
     private nonisolated static func offThePool<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -70,8 +72,10 @@ public actor SampleMedia: SampleMediaProviding {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
         if isUsable(target) { return target }
-        let temporary = directory.appendingPathComponent(".tmp-\(UUID().uuidString)-\(asset.fileName)")
-        defer { try? manager.removeItem(at: temporary) }
+        let workspace = directory.appendingPathComponent(".tmp-\(UUID().uuidString)", isDirectory: true)
+        try manager.createDirectory(at: workspace, withIntermediateDirectories: false)
+        defer { try? manager.removeItem(at: workspace) }
+        let temporary = workspace.appendingPathComponent(asset.fileName)
         switch asset {
         case let .image(spec):
             guard let data = SampleImageRenderer.png(spec) else { throw SampleMediaError.generationFailed("could not render \(spec.name)") }

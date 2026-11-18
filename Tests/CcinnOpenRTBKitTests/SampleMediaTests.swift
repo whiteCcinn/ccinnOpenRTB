@@ -97,6 +97,26 @@ struct SampleMediaGenerationTests {
         #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date == modified)
     }
 
+    /// Several app processes can generate the same files at the same moment; independent `SampleMedia` instances share
+    /// nothing but the directory, like processes. Every request succeeds, one file per asset remains, and no
+    /// temporary file is left behind.
+    @Test(.timeLimit(.minutes(2)))
+    func instancesSharingADirectoryEachGetTheSameFiles() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let instances = (0..<4).map { _ in SampleMedia(directory: directory) }
+        let urls = try await withThrowingTaskGroup(of: URL.self) { group in
+            for media in instances {
+                group.addTask { try await media.fileURL(for: .video) }
+                group.addTask { try await media.fileURL(for: .audio) }
+            }
+            return try await group.reduce(into: Set<URL>()) { $0.insert($1) }
+        }
+        #expect(urls == [directory.appendingPathComponent("sample-15s.mp4"), directory.appendingPathComponent("sample-15s.m4a")])
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        #expect(files == ["sample-15s.m4a", "sample-15s.mp4"], "no temporary files are left behind")
+    }
+
     @Test func audioIsFifteenSecondsOfAAC() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

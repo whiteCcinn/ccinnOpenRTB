@@ -6,8 +6,8 @@ import CoreVideo
 import Foundation
 
 /// Writes the sample video (H.264 + AAC MP4 with a running timecode and the VAST quartile the playhead is in) and the
-/// sample audio (AAC M4A tone) with AVAssetWriter. Synchronous: call it off the Swift concurrency pool
-/// (`SampleMedia` runs it on a dispatch queue).
+/// sample audio (AAC M4A tone) with AVAssetWriter, through a `MovieWriteSession`. Synchronous: call it off the Swift
+/// concurrency pool (`SampleMedia` runs it on a dispatch queue).
 enum SampleMovieWriter {
     static let duration = 15
     static let width = 1280
@@ -16,113 +16,89 @@ enum SampleMovieWriter {
     static let sampleRate = 44_100
     /// Audio is appended in chunks of this many samples (0.1 s).
     static let audioChunk = 4_410
-    /// Generation never hangs: a writer that stops accepting data for this long fails.
+    /// Generation never hangs: a writer that makes no progress for this long is cancelled and fails.
     static let stallTimeout: TimeInterval = 30
 
+    /// How long each track is, in video frames and audio samples; a track of length zero is left out.
+    struct Tracks: Sendable, Hashable {
+        var videoFrames: Int
+        var audioSamples: Int
+
+        /// The sample video: 15 s of video and 15 s of audio.
+        static let video = Tracks(videoFrames: duration * Int(framesPerSecond), audioSamples: duration * sampleRate)
+        /// The sample audio: 15 s of audio only.
+        static let audio = Tracks(videoFrames: 0, audioSamples: duration * sampleRate)
+    }
+
     static func writeVideo(to url: URL) throws {
-        try write(to: url, fileType: .mp4, includeVideo: true)
+        try write(.video, to: url, fileType: .mp4)
     }
 
     static func writeAudio(to url: URL) throws {
-        try write(to: url, fileType: .m4a, includeVideo: false)
+        try write(.audio, to: url, fileType: .m4a)
     }
 
-    private static func write(to url: URL, fileType: AVFileType, includeVideo: Bool) throws {
-        let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
-        writer.shouldOptimizeForNetworkUse = true
-
-        var videoInput: AVAssetWriterInput?
-        var adaptor: AVAssetWriterInputPixelBufferAdaptor?
-        if includeVideo {
-            let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: width,
-                AVVideoHeightKey: height,
-                AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: 2_000_000,
-                    AVVideoMaxKeyFrameIntervalKey: Int(framesPerSecond),
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                    AVVideoExpectedSourceFrameRateKey: Int(framesPerSecond),
-                ] as [String: Any],
-            ])
-            input.expectsMediaDataInRealTime = false
-            guard writer.canAdd(input) else { throw SampleMediaError.generationFailed("the writer refused the video track") }
-            writer.add(input)
-            adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
-                kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
-            ])
-            videoInput = input
+    /// Writes `tracks` to `url`. The writer is torn down before this returns (its own autorelease pool), which also
+    /// deletes the side file AVAssetWriter keeps next to an MP4 it optimises for network use.
+    static func write(_ tracks: Tracks, to url: URL, fileType: AVFileType, stallTimeout: TimeInterval = stallTimeout) throws {
+        guard tracks.videoFrames > 0 || tracks.audioSamples > 0 else { throw SampleMediaError.generationFailed("no tracks to write") }
+        try autoreleasepool {
+            let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
+            writer.shouldOptimizeForNetworkUse = true
+            var feeds: [TrackFeed] = []
+            if tracks.videoFrames > 0 { feeds.append(try videoFeed(frames: tracks.videoFrames, writer: writer)) }
+            if tracks.audioSamples > 0 { feeds.append(try audioFeed(samples: tracks.audioSamples, writer: writer)) }
+            try MovieWriteSession(writer: writer, feeds: feeds, stallTimeout: stallTimeout).run()
         }
-        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+    }
+
+    /// Adds the H.264 video input to `writer`; its items are the frames.
+    static func videoFeed(frames: Int, writer: AVAssetWriter) throws -> TrackFeed {
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: 2_000_000,
+                AVVideoMaxKeyFrameIntervalKey: Int(framesPerSecond),
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoExpectedSourceFrameRateKey: Int(framesPerSecond),
+            ] as [String: Any],
+        ])
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else { throw SampleMediaError.generationFailed("the writer refused the video track") }
+        writer.add(input)
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        ])
+        let background = FrameRenderer.background()
+        return TrackFeed(input: input, itemCount: frames) { frame in
+            try appendFrame(frame, adaptor: adaptor, background: background)
+        }
+    }
+
+    /// Adds the AAC audio input to `writer`; its items are chunks of `audioChunk` samples.
+    static func audioFeed(samples: Int, writer: AVAssetWriter) throws -> TrackFeed {
+        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: sampleRate,
             AVNumberOfChannelsKey: 1,
             AVEncoderBitRateKey: 96_000,
         ])
-        audioInput.expectsMediaDataInRealTime = false
-        guard writer.canAdd(audioInput) else { throw SampleMediaError.generationFailed("the writer refused the audio track") }
-        writer.add(audioInput)
-
-        guard let audioFormat = makeAudioFormat() else { throw SampleMediaError.generationFailed("no audio format") }
-        guard writer.startWriting() else {
-            throw SampleMediaError.generationFailed(writer.error?.localizedDescription ?? "the writer did not start")
-        }
-        writer.startSession(atSourceTime: .zero)
-
-        let background = includeVideo ? FrameRenderer.background() : nil
-        let totalFrames = includeVideo ? duration * Int(framesPerSecond) : 0
-        let totalSamples = duration * sampleRate
-        var frame = 0
-        var sample = 0
-        var lastProgress = Date()
-
-        while frame < totalFrames || sample < totalSamples {
-            if writer.status == .failed {
-                throw SampleMediaError.generationFailed(writer.error?.localizedDescription ?? "the writer failed")
+        input.expectsMediaDataInRealTime = false
+        guard writer.canAdd(input) else { throw SampleMediaError.generationFailed("the writer refused the audio track") }
+        writer.add(input)
+        guard let format = makeAudioFormat() else { throw SampleMediaError.generationFailed("no audio format") }
+        let chunks = samples / audioChunk + (samples % audioChunk == 0 ? 0 : 1)
+        return TrackFeed(input: input, itemCount: chunks) { chunk in
+            let start = chunk * audioChunk
+            let count = min(audioChunk, samples - start)
+            guard let buffer = makeAudioBuffer(start: start, count: count, format: format), input.append(buffer) else {
+                throw SampleMediaError.generationFailed("could not append audio at sample \(start)")
             }
-            let videoTime = Double(frame) / Double(framesPerSecond)
-            let audioTime = Double(sample) / Double(sampleRate)
-            let videoWanted = frame < totalFrames && (videoTime <= audioTime || sample >= totalSamples)
-            var progressed = false
-
-            if videoWanted, let videoInput, let adaptor, videoInput.isReadyForMoreMediaData {
-                try appendFrame(frame, adaptor: adaptor, background: background)
-                frame += 1
-                progressed = true
-            } else if sample < totalSamples, audioInput.isReadyForMoreMediaData {
-                let count = min(audioChunk, totalSamples - sample)
-                guard let buffer = makeAudioBuffer(start: sample, count: count, format: audioFormat), audioInput.append(buffer) else {
-                    throw SampleMediaError.generationFailed(writer.error?.localizedDescription ?? "could not append audio")
-                }
-                sample += count
-                progressed = true
-            } else if frame < totalFrames, let videoInput, let adaptor, videoInput.isReadyForMoreMediaData {
-                try appendFrame(frame, adaptor: adaptor, background: background)
-                frame += 1
-                progressed = true
-            }
-
-            if progressed {
-                lastProgress = Date()
-            } else {
-                if Date().timeIntervalSince(lastProgress) > stallTimeout {
-                    writer.cancelWriting()
-                    throw SampleMediaError.generationFailed("the writer stalled")
-                }
-                usleep(1_000)
-            }
-        }
-        videoInput?.markAsFinished()
-        audioInput.markAsFinished()
-
-        let finished = DispatchSemaphore(value: 0)
-        writer.finishWriting { finished.signal() }
-        guard finished.wait(timeout: .now() + stallTimeout) == .success, writer.status == .completed else {
-            writer.cancelWriting()
-            throw SampleMediaError.generationFailed(writer.error?.localizedDescription ?? "the writer did not finish")
         }
     }
 
