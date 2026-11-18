@@ -69,8 +69,9 @@ enum NetworkDemo {
                                            "https://dsp.example.com/win?auction=a-1029&price=1.23&cur=USD", source: "bid 0.0",
                                            replaced: ["${AUCTION_ID}", "${AUCTION_PRICE}", "${AUCTION_CURRENCY}"]), userAgent: ua)
         try? await Task.sleep(for: .milliseconds(40))
-        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: ua, source: "bid 0.0 › VAST", rootParentID: win)
-        let wrapper = try? await fetcher.fetchVAST("https://adserver.example.com/vast/wrapper.xml?bid=b-7", parentRequestID: nil)
+        let tag = "https://adserver.example.com/vast/wrapper.xml?bid=b-7"
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: ua, source: "bid 0.0 › VAST", rootParentID: win, resolving: .url(tag))
+        let wrapper = try? await fetcher.fetchVAST(tag, parentRequestID: nil)
         _ = try? await fetcher.fetchVAST("https://cdn.example.net/vast/inline-42.xml", parentRequestID: wrapper?.requestID)
         let media = await monitor.prepareMedia(SampleURL.video, trigger: "media file", source: "bid 0.0 › VAST inline 'Acme' › MediaFiles",
                                                parentID: nil, userAgent: ua)
