@@ -5,7 +5,16 @@ import Foundation
 enum NativeRequestReader {
     /// `request` is the JSON string of `imp.native.request`.
     static func hints(fromRequestString request: String, at pointer: JSONPointer, log: inout IssueLog) -> NativeRequestHints? {
-        guard let value = try? JSONValue.parse(request), case let .object(members) = value else {
+        let value: JSONValue
+        do {
+            value = try JSONValue.parse(request)
+        } catch {
+            if !log.nestedTooDeeply(error, code: "request.native.depth", severity: .warning, in: pointer, outcome: "The Native request was ignored.") {
+                log.warning("request.native.invalid", "The Native request is not a JSON object.", at: pointer)
+            }
+            return nil
+        }
+        guard case let .object(members) = value else {
             log.warning("request.native.invalid", "The Native request is not a JSON object.", at: pointer)
             return nil
         }

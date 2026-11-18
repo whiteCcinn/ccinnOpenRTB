@@ -3,38 +3,6 @@ import Foundation
 // Lenient, issue-reporting access to decoded JSON, shared by the OpenRTB, AdCOM and Native parsers.
 // Wrong types never fail a parse: a usable value is coerced (with a warning) or the field is treated as absent.
 
-/// RFC 6901 JSON pointer. `prefix` scopes pointers that do not point into the response itself (`request:`), and pointers
-/// continue into JSON embedded in a string field (`/seatbid/0/bid/0/adm/native/assets/0`).
-struct JSONPointer: Hashable, CustomStringConvertible {
-    private var rendered: String
-
-    static let root = JSONPointer(rendered: "")
-
-    init(prefix: String) {
-        rendered = prefix
-    }
-
-    private init(rendered: String) {
-        self.rendered = rendered
-    }
-
-    func appending(_ key: String) -> JSONPointer {
-        let escaped = key.replacingOccurrences(of: "~", with: "~0").replacingOccurrences(of: "/", with: "~1")
-        return JSONPointer(rendered: rendered + "/" + escaped)
-    }
-
-    func appending(_ index: Int) -> JSONPointer {
-        JSONPointer(rendered: rendered + "/" + String(index))
-    }
-
-    /// Appends another pointer (`/a` + `/b/c` = `/a/b/c`).
-    func appending(pointer: String) -> JSONPointer {
-        JSONPointer(rendered: rendered + pointer)
-    }
-
-    var description: String { rendered }
-}
-
 /// Collects validation issues in order.
 struct IssueLog {
     private(set) var issues: [ValidationIssue] = []
@@ -61,6 +29,17 @@ struct IssueLog {
             issues.append(ValidationIssue(issue.severity, code: issue.code, message: issue.message,
                                           path: pointer.appending(pointer: issue.path).description))
         }
+    }
+
+    /// When `JSONValue.parse` rejected the document at `document` (the root, `request:`, or a string field holding
+    /// JSON) for its nesting, logs `code` ("Nested too deeply…", then `outcome`) at the first array or object past the
+    /// limit and returns true. Returns false for malformed JSON, which each reader reports in its own words.
+    mutating func nestedTooDeeply(_ error: JSONValue.ParseError, code: String, severity: ValidationIssue.Severity, in document: JSONPointer,
+                                  outcome: String) -> Bool {
+        guard case let .nestedTooDeeply(pointer) = error.reason else { return false }
+        issues.append(ValidationIssue(severity, code: code, message: error.description + " " + outcome,
+                                      path: document.appending(pointer: pointer).description))
+        return true
     }
 }
 

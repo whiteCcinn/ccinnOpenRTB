@@ -18,7 +18,9 @@ public enum NativeParser {
         do {
             value = try JSONValue.parse(json)
         } catch {
-            log.error("native.json.invalid", "The Native markup is not valid JSON: \(error).", at: .root)
+            if !log.nestedTooDeeply(error, code: "native.json.depth", severity: .error, in: .root, outcome: "The Native markup was not parsed.") {
+                log.error("native.json.invalid", "The Native markup is not valid JSON. \(error.description)", at: .root)
+            }
             return (nil, log.issues)
         }
         guard case let .object(members) = value else {
@@ -85,8 +87,18 @@ private struct NativeDecoder {
             body = JSONObjectReader(members, at: wrapperPointer, domain: "native")
             wrapped = true
         case let .string(text)?:
-            // Double-encoded wrapper: `{"native": "{…}"}`.
-            guard let inner = try? JSONValue.parse(text), case let .object(members) = inner else {
+            // Double-encoded wrapper: `{"native": "{…}"}`, a document of its own.
+            let inner: JSONValue
+            do {
+                inner = try JSONValue.parse(text)
+            } catch {
+                if !log.nestedTooDeeply(error, code: "native.json.depth", severity: .error, in: wrapperPointer,
+                                        outcome: "The Native markup was not parsed.") {
+                    log.error("native.json.invalid", "`native` must be an object.", at: wrapperPointer)
+                }
+                return nil
+            }
+            guard case let .object(members) = inner else {
                 log.error("native.json.invalid", "`native` must be an object.", at: wrapperPointer)
                 return nil
             }

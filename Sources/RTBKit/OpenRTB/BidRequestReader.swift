@@ -8,7 +8,16 @@ enum BidRequestReader {
 
     static func read(_ json: String) -> (summary: BidRequestSummary?, issues: [ValidationIssue]) {
         var log = IssueLog()
-        guard let value = try? JSONValue.parse(json), case let .object(members) = value else {
+        let value: JSONValue
+        do {
+            value = try JSONValue.parse(json)
+        } catch {
+            if !log.nestedTooDeeply(error, code: "request.json.depth", severity: .warning, in: rootPointer, outcome: "The bid request was ignored.") {
+                log.warning("request.json.invalid", "The bid request is not a JSON object; it was ignored.", at: rootPointer)
+            }
+            return (nil, log.issues)
+        }
+        guard case let .object(members) = value else {
             log.warning("request.json.invalid", "The bid request is not a JSON object; it was ignored.", at: rootPointer)
             return (nil, log.issues)
         }

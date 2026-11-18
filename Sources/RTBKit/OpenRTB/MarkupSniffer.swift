@@ -1,6 +1,6 @@
 import Foundation
 
-/// Recognises what a piece of markup is (D3 detection and the 2.x `adm` sniff). Pure string inspection, no parsing.
+/// Recognises what a piece of markup is (D3 detection and the 2.x `adm` sniff): string inspection, plus a JSON parse to tell Native.
 enum MarkupSniffer {
     enum Kind: Equatable {
         case vast
@@ -13,7 +13,14 @@ enum MarkupSniffer {
         let trimmed = markup.trimmingCharacters(in: .whitespacesAndNewlines)
         if isVASTDocument(trimmed) { return .vast }
         if isHTTPURL(trimmed) { return .url }
-        if trimmed.hasPrefix("{"), let value = try? JSONValue.parse(trimmed), isNativeObject(value) { return .native }
+        if trimmed.hasPrefix("{") {
+            do {
+                if isNativeObject(try JSONValue.parse(trimmed)) { return .native }
+            } catch {
+                // Native is the only JSON markup `adm` carries; the Native parser then reports the nesting.
+                if case .nestedTooDeeply = error.reason { return .native }
+            }
+        }
         return .html
     }
 

@@ -37,8 +37,11 @@ public enum InputParser {
             do {
                 value = try JSONValue.parse(trimmed)
             } catch {
-                let reason = "Invalid JSON: \(error)"
-                return ParsedInput(kind: .invalid(reason), issues: [ValidationIssue(.error, code: "input.json.invalid", message: reason, path: "")])
+                var log = IssueLog()
+                if !log.nestedTooDeeply(error, code: "input.json.depth", severity: .error, in: .root, outcome: "The input was not parsed.") {
+                    log.error("input.json.invalid", error.description, at: .root)
+                }
+                return ParsedInput(kind: .invalid(error.description), issues: log.issues)
             }
             return parseJSON(value, text: trimmed, request: request)
         }
