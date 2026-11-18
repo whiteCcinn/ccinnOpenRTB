@@ -117,14 +117,26 @@ private struct ScriptTrackerRunner: ViewModifier {
     @State private var injector: ScriptTrackerInjector?
 
     func body(content: Content) -> some View {
-        // Observable on the session: a tracker listed after `.rendered` updates this view.
+        // Observable on the session: a tracker listed after `.rendered` updates this view. The session empties the list
+        // when Real mode ends (and on every new render or reset): every Real-mode web view is torn down at once, linger
+        // included, so nothing more reaches the network (safety review).
         let trackers = host.scriptTrackers
+        let real = host.monitor.mode == .real
         content
             .onChange(of: trackers, initial: true) { _, current in
-                guard !current.isEmpty else { return }
+                guard real, !current.isEmpty else {
+                    injector?.teardown()
+                    injector = nil
+                    return
+                }
                 let active = injector ?? ScriptTrackerInjector(host: host)
                 injector = active
                 active.inject(current)
+            }
+            .onChange(of: real) { _, isReal in
+                guard !isReal else { return }
+                injector?.teardown()
+                injector = nil
             }
             .onDisappear {
                 injector?.teardown()

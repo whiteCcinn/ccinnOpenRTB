@@ -879,6 +879,8 @@ final class AdSession: AdRenderingHost {
         realModeConfirmation = nil
         guard monitor.mode != .simulated else { return }
         monitor.mode = .simulated
+        // The renderers tear down every Real-mode script tracker web view when the list empties.
+        scriptTrackers = []
         log("Simulated mode: trackers are recorded, not sent", origin: "mode", outcome: .fired(requests: 0))
     }
 
