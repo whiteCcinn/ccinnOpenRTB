@@ -56,6 +56,27 @@ struct MacroContextDefaultsTests {
                            "[LIMITADTRACKING]": "1", "[TRANSACTIONID]": "tx-1"])
     }
 
+    /// Spec review (blocker on 0864bf9): what the app fetches in Simulated mode must not carry the pasted request's personal
+    /// values. The context for those fetches drops IFA, IFA type, device IP, lat/long, GDPR consent and the GPP string and
+    /// section ids (they take the expander's unknown value, -1); `[DEVICEUA]` is the simulated device's User-Agent — the one
+    /// the app sends. Everything else (cache buster, the publisher's domain, …) keeps working.
+    @Test func theContextForSimulatedContentFetchesCarriesNoRequestIdentifiers() {
+        let request = BidRequestSummary(id: "r", impressions: [], domain: "news.example", ifa: "REAL-USER-IFA-1234", deviceIP: "203.0.113.7",
+                                        deviceUserAgent: "RealUA/1.0", latitude: 3.139, longitude: 101.6869, ifaType: "idfa",
+                                        gdprConsent: "CPREALCONSENTSTRING", usPrivacy: "1YNN", gppString: "DBABMA~CPREALGPP", gppSectionIDs: [2, 6])
+        let full = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        let template = "ifa=[IFA]&t=[IFATYPE]&ip=[DEVICEIP]&ll=[LATLONG]&gdpr=[GDPRCONSENT]&gpp=[GPPSTRING]&sid=[GPPSECTIONID]&ua=[DEVICEUA]&d=[DOMAIN]"
+        #expect(MacroExpander.expandVAST(template, context: full).url
+            == "ifa=REAL-USER-IFA-1234&t=idfa&ip=203.0.113.7&ll=3.139,101.6869&gdpr=CPREALCONSENTSTRING&gpp=DBABMA~CPREALGPP&sid=2,6&ua=RealUA%2F1.0&d=news.example",
+                "Real mode: the request's values (unchanged)")
+        let safe = full.withoutRequestIdentifiers()
+        let expanded = MacroExpander.expandVAST(template + "&cb=[CACHEBUSTING]", context: safe).url
+        #expect(expanded.hasPrefix("ifa=-1&t=-1&ip=-1&ll=-1&gdpr=-1&gpp=-1&sid=-1&ua=UA&d=news.example&cb="), "\(expanded)")
+        for secret in ["REAL-USER-IFA-1234", "203.0.113.7", "3.139", "101.6869", "CPREALCONSENTSTRING", "CPREALGPP", "RealUA", "idfa"] {
+            #expect(!expanded.contains(secret), "\(secret) left the Mac: \(expanded)")
+        }
+    }
+
     /// decisions.md "Request facts for the remaining macros": typed request facts become VAST macros only here.
     @Test func requestFactsMapToTheirVASTMacros() {
         let request = BidRequestSummary(id: "r", impressions: [], deviceIP: "192.0.2.1", deviceUserAgent: "Request UA", latitude: 51.004703,

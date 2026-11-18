@@ -559,7 +559,7 @@ final class AdSession: AdRenderingHost {
             phase = .preparing("Resolving VAST…")
             let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: sourceRoot(candidate) + " › VAST",
                                              rootParentID: markupEntryID, resolving: source)
-            let resolved = await services.resolveVAST(source, fetcher, markupEntryID, macroContext(for: candidate, input: input, adIndex: nil))
+            let resolved = await services.resolveVAST(source, fetcher, markupEntryID, contentFetchContext(for: candidate, input: input))
             guard token == generation else { return }
             vast = resolved
             renderIssues = resolved.issues
@@ -790,6 +790,14 @@ final class AdSession: AdRenderingHost {
         monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened)
     }
 
+    /// The macros of what the player fetches to render (VAST tag and wrapper URIs). Before Real mode is confirmed, nothing
+    /// derived from the pasted request's personal data leaves the Mac: its identifiers, address, location and consent
+    /// strings are unknown and `[DEVICEUA]` is the simulated device's (spec review, blocker on 0864bf9). Real mode fills them.
+    func contentFetchContext(for candidate: AdCandidate, input: ParsedInput) -> MacroContext {
+        let context = macroContext(for: candidate, input: input, adIndex: nil)
+        return monitor.mode == .real ? context : context.withoutRequestIdentifiers()
+    }
+
     func macroContext(for candidate: AdCandidate, input: ParsedInput, adIndex: Int?, lossReason: Int = LossReason.bidWon.code) -> MacroContext {
         macros.context(candidate: candidate, input: input, device: device, playerSize: adSize, transactionID: transactionID,
                        playhead: playback[adIndex ?? currentAdIndex]?.playhead, lossCode: lossReason,
@@ -875,7 +883,7 @@ final class AdSession: AdRenderingHost {
         let label = sourceRoot(prepared.candidate) + " › native video"
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent, resolving: source)
         let resolve = services.resolveVAST
-        let context = macroContext(for: prepared.candidate, input: renderInput, adIndex: nil)
+        let context = contentFetchContext(for: prepared.candidate, input: renderInput)
         let task = Task { await resolve(source, fetcher, parent, context) }
         nativeVideoResolution = (source, task)
         let resolved = await task.value
@@ -926,7 +934,7 @@ final class AdSession: AdRenderingHost {
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidateID) › native video (Real-mode review)",
                                          rootParentID: parent, resolving: source)
         let resolve = services.resolveVAST
-        let context = realModeCandidate.map { macroContext(for: $0, input: parsed, adIndex: nil) } ?? MacroContext()
+        let context = realModeCandidate.map { contentFetchContext(for: $0, input: parsed) } ?? MacroContext()
         Task { [weak self] in
             let resolved = await resolve(source, fetcher, parent, context)
             guard let self, let pending = self.reviewedNativeVideo, pending.candidateID == candidateID, pending.revision == revision,
