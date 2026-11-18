@@ -5,13 +5,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-### Fixed
-
-- Generating the sample video (`ccinn-sample://media/sample-15s.mp4`) could fail with "the writer stalled", mostly on a busy Mac. The audio track was finished before the video track, but its input was left open, and AVAssetWriter then waited for more audio forever and stopped taking video frames. Now AVAssetWriter pulls each track, and each track is marked finished as soon as its last sample is in. A writer that makes no progress is still cancelled after 30 s.
-- Sample media generation no longer leaves AVAssetWriter's temporary side file (`*.sb-*`) next to the generated file. The file stayed there until the writer was released, and for good when a generation failed. Now the writer is released before generation returns, and each generation writes into its own temporary directory, which is removed afterwards.
-- Temporary files left in the sample media cache by a generation that never finished (for example when the app crashed or was force-quit) no longer pile up. The app removes them in the background at launch once they are more than an hour old, including those left by earlier versions.
-
-## [1.0.0] - Unreleased
+## [1.0.0] - 2026-11-18
 
 First public release.
 
