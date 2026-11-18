@@ -194,7 +194,8 @@ final class AdSession: AdRenderingHost {
         if let deviceMarkup = prepared.deviceMarkup { candidate.markup = deviceMarkup }
         return RenderRequest(candidate: candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
                              landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: visibleFraction,
-                             generation: generation, markupRequestID: prepared.markupEntryID)
+                             generation: generation, markupRequestID: prepared.markupEntryID,
+                             publisherAppBundle: renderInput.request?.appBundle)
     }
 
     /// The selected bid differs from the one on the device (the response was edited or another bid picked).

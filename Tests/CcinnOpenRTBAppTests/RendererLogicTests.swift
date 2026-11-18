@@ -73,6 +73,19 @@ struct MRAIDEnvironmentTests {
         #expect(environment.supports["sms"] == false)
     }
 
+    /// AdTech review: MRAID 3.0 §3.2 `MRAID_ENV.appId` is the PUBLISHER's app (the request's `app.bundle`), else the
+    /// simulated host app's own id — never the advertiser's `bid.bundle`.
+    @Test func appIDIsThePublishersAppNeverTheBidBundle() {
+        var request = RendererFixtures.request(.html("x"))
+        request.candidate.bundle = "com.advertiser.game"
+        #expect(MRAIDEnvironment(request: request).appID == Placement.inlineBanner.simulatedAppBundle)
+        request.publisherAppBundle = "com.publisher.news"
+        #expect(MRAIDEnvironment(request: request).appID == "com.publisher.news")
+        for placement in Placement.allCases {
+            #expect(placement.simulatedAppBundle.hasPrefix("com.example."), "\(placement)")
+        }
+    }
+
     @Test func interstitialIsCenteredAndScrollable() {
         let request = RendererFixtures.request(.html("x"), placement: .rewarded, adSize: CGSize(width: 320, height: 480))
         let environment = MRAIDEnvironment(request: request)

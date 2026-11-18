@@ -406,6 +406,20 @@ struct AdSessionTests {
         #expect(curl.recorder.resolutions == [.xml(vastXML)])
     }
 
+    /// The renderers learn the publisher's app (MRAID_ENV.appId) from the pasted request's `app.bundle`.
+    @Test func theRenderRequestNamesThePublishersApp() async {
+        var input = Fixtures.input([display])
+        input.request = BidRequestSummary(id: "req-1", impressions: [], appBundle: "com.publisher.news")
+        let harness = SessionHarness(input)
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.renderRequest?.publisherAppBundle == "com.publisher.news")
+        let bare = SessionHarness(Fixtures.input([display]))
+        await bare.paste()
+        await bare.renderAndWait()
+        #expect(bare.session.renderRequest?.publisherAppBundle == nil)
+    }
+
     @Test func theShellsPlanOptionsBecomeTheKitsInOnePlace() {
         let markupRequestID = UUID()
         let options = TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: markupRequestID)

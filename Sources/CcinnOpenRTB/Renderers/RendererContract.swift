@@ -13,6 +13,16 @@ enum Placement: String, CaseIterable, Identifiable, Sendable {
     case ctvInstream = "CTV instream"
 
     var id: String { rawValue }
+
+    /// The bundle id of the simulator's own host app for this placement (the news app, the feed app, the TV home), the
+    /// publisher app a creative sees when no bid request names one.
+    var simulatedAppBundle: String {
+        switch self {
+        case .inlineBanner, .interstitial, .rewarded: "com.example.ccinn.dailybrief"
+        case .inFeed: "com.example.ccinn.pulse"
+        case .ctvInstream: "com.example.ccinn.tvhome"
+        }
+    }
 }
 
 /// Everything a renderer needs to draw one bid.
@@ -37,6 +47,8 @@ struct RenderRequest: Equatable {
     /// The monitor entry of the request that delivered the markup (the nurl / purl win notice, or AdCOM `display.curl`);
     /// `nil` for inline `adm`. The parent of the requests the creative makes itself (decisions.md, "Network relationships").
     var markupRequestID: UUID? = nil
+    /// The publisher's app (the pasted request's `app.bundle`); `nil`: the simulated host app (`Placement.simulatedAppBundle`).
+    var publisherAppBundle: String? = nil
 }
 
 /// What the renderer is playing (VAST pod ad `adIndex`, or a Native video asset with `adIndex` 0). Reported about 4 Hz

@@ -57,7 +57,8 @@ struct MRAIDEnvironment: Equatable, Codable, Sendable {
         exposedPercentage = Self.percentage(request.visibleFraction)
         orientation = request.landscape ? "landscape" : "portrait"
         supports = Self.supportedFeatures
-        appID = request.candidate.bundle
+        // MRAID 3.0 §3.2: the publisher's app, never the advertiser's bid.bundle.
+        appID = request.publisherAppBundle ?? request.placement.simulatedAppBundle
         disableScroll = !interstitial
     }
 
