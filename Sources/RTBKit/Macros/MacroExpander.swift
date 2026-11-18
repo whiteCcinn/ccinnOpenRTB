@@ -17,10 +17,10 @@ import Foundation
 public enum MacroExpander {
     /// A VAST tracker (the player's view): OpenRTB `${…}` (already substituted by the exchange in `adm`) and VAST `[…]`.
     public static func expand(_ template: String, context: MacroContext) -> ExpandedURL {
-        expand(template, context: context, timeZone: .current)
+        expand(template, context: context, timeZone: deviceClock(of: context))
     }
 
-    /// `timeZone` is the device clock used for `[TIMESTAMP]` (tests pin it).
+    /// `timeZone` is the device clock used for `[TIMESTAMP]` (tests pin it; the other entry points use `deviceClock(of:)`).
     public static func expand(_ template: String, context: MacroContext, timeZone: TimeZone) -> ExpandedURL {
         var resolver = MacroValueResolver(context: context, timeZone: timeZone)
         return MacroScanner.substitute(in: template, mode: .url, resolver: &resolver)
@@ -29,7 +29,7 @@ public enum MacroExpander {
     /// An OpenRTB / Native / AdCOM tracker (`nurl`, `burl`, `lurl`, `imptrackers`, `eventtrackers`, `display.event`): only
     /// the exchange substitutes these, so only `${…}` is expanded. VAST-style `[NAME]` tokens stay literal and are reported.
     public static func expandOpenRTB(_ template: String, context: MacroContext) -> ExpandedURL {
-        var resolver = MacroValueResolver(context: context, timeZone: .current)
+        var resolver = MacroValueResolver(context: context, timeZone: deviceClock(of: context))
         return MacroScanner.substitute(in: template, mode: .openRTBURL, resolver: &resolver)
     }
 
@@ -37,8 +37,14 @@ public enum MacroExpander {
     /// `${…}` macros, because `[…]` and lower-case `${…}` are ordinary JavaScript there (and VAST `[…]` belongs to the player).
     /// Unknown `${UPPER_CASE}` tokens are still reported.
     public static func expandMarkup(_ markup: String, context: MacroContext) -> ExpandedURL {
-        var resolver = MacroValueResolver(context: context, timeZone: .current)
+        var resolver = MacroValueResolver(context: context, timeZone: deviceClock(of: context))
         return MacroScanner.substitute(in: markup, mode: .markup, resolver: &resolver)
+    }
+
+    /// The simulated device's clock (VAST 4.1 §6.2 `[TIMESTAMP]` carries its UTC offset): `DeviceProfile.timeZone` when
+    /// Foundation knows the identifier, otherwise UTC. Never `TimeZone.current`, the Mac's zone.
+    static func deviceClock(of context: MacroContext) -> TimeZone {
+        context.device?.timeZone.flatMap(TimeZone.init(identifier:)) ?? .gmt
     }
 }
 

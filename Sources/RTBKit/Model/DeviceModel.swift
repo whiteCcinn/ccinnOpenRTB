@@ -58,11 +58,15 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
     public var input: Input
     /// CTV cannot open click-through URLs.
     public var supportsClickThrough: Bool
+    /// The device clock's IANA time zone (`Asia/Kuala_Lumpur`), the offset of VAST `[TIMESTAMP]`; `nil` (the catalog's
+    /// default) or an identifier Foundation does not know means UTC. Never the Mac's own zone: the simulator plays the
+    /// device, not the machine it runs on.
+    public var timeZone: String?
 
     public init(id: String, name: String, family: Family, screenWidth: Double, screenHeight: Double, scale: Double, cornerRadius: Double = 0,
                 safeArea: DeviceInsets = DeviceInsets(), cutout: Cutout = .none, hingeWidth: Double? = nil, foldedWidth: Double? = nil,
                 foldedHeight: Double? = nil, foldedSafeArea: DeviceInsets? = nil, os: String, osVersion: String, make: String, model: String, userAgent: String,
-                openRTBDeviceType: Int, input: Input = .touch, supportsClickThrough: Bool = true) {
+                openRTBDeviceType: Int, input: Input = .touch, supportsClickThrough: Bool = true, timeZone: String? = nil) {
         self.id = id
         self.name = name
         self.family = family
@@ -84,5 +88,6 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
         self.openRTBDeviceType = openRTBDeviceType
         self.input = input
         self.supportsClickThrough = supportsClickThrough
+        self.timeZone = timeZone
     }
 }

@@ -188,6 +188,25 @@ struct VASTMacroTests {
             == "2016-01-17T13%3A15%3A07.127Z")
     }
 
+    /// VAST 4.1 §6.2 `[TIMESTAMP]`: "the date and time at which the URI using this macro is accessed", ISO 8601 with
+    /// milliseconds and the offset (IAB example `2016-01-17T08:15:07.127-05`). The clock is the simulated device's, never
+    /// the Mac's (`TimeZone.current` would leak the developer's UTC offset into every tracker): the device's `timeZone`
+    /// when it has one Foundation knows, otherwise UTC.
+    @Test func timestampUsesTheSimulatedDeviceTimeZoneElseUTC() {
+        let date = Date(timeIntervalSince1970: 1_453_036_507.127) // 2016-01-17T13:15:07.127Z
+        func device(_ timeZone: String?) -> DeviceProfile {
+            DeviceProfile(id: "d", name: "D", family: .iPhone, screenWidth: 393, screenHeight: 852, scale: 3, os: "iOS", osVersion: "18",
+                          make: "Apple", model: "iPhone", userAgent: "UA", openRTBDeviceType: 4, timeZone: timeZone)
+        }
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date)).url == "2016-01-17T13%3A15%3A07.127Z")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device(nil))).url
+            == "2016-01-17T13%3A15%3A07.127Z")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device("Asia/Kuala_Lumpur"))).url
+            == "2016-01-17T21%3A15%3A07.127%2B08%3A00")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device("Not/AZone"))).url
+            == "2016-01-17T13%3A15%3A07.127Z")
+    }
+
     @Test func playheadsAreHHMMSSmmm() {
         let context = MacroContext(adPlayhead: 3.5, contentPlayhead: 3_725.0456)
         let result = MacroExpander.expand("a=[ADPLAYHEAD]&c=[CONTENTPLAYHEAD]&m=[MEDIAPLAYHEAD]", context: context)
