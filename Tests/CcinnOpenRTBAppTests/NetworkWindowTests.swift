@@ -165,6 +165,7 @@ struct NetworkPresentationTests {
             == "Request Headers (not sent)")
         #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, delivery: .offline, state: .blocked)) == "Request Headers (not sent)")
         #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, state: .pending)) == "Request Headers (to be sent)")
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, state: .failed("refused"))) == "Request Headers (planned)")
     }
 
     /// Offline requests are a mode of their own: listed in the Mode filter, and the filter finds them.

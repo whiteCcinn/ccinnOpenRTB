@@ -43,11 +43,13 @@ enum NetworkPresentation {
         }
     }
 
-    /// Whether the headers shown are the ones that went over the wire.
+    /// Whether the headers shown are the ones that went over the wire: reported by the transport ("as sent"), the ones a
+    /// request is being or was set up with when the wire never reported (a failed connection; the media entry, whose
+    /// requests are its children), or the ones a request never sent would have had.
     static func requestHeadersTitle(for entry: NetworkEntry) -> String {
         if entry.requestHeadersAsSent { return "Request Headers (as sent)" }
-        if entry.state == .pending, entry.delivery == .network { return "Request Headers (to be sent)" }
-        return "Request Headers (not sent)"
+        guard entry.delivery == .network else { return "Request Headers (not sent)" }
+        return entry.state == .pending ? "Request Headers (to be sent)" : "Request Headers (planned)"
     }
 }
 
