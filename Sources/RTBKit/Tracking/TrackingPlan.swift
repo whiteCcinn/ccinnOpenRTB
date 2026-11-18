@@ -15,19 +15,28 @@ import Foundation
 /// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
 ///
 /// Exchange-side and SDK trackers substitute OpenRTB `${…}` macros only; VAST `[…]` macros are the player's.
+///
+/// Parents (decisions.md "Network relationships"): every request this plan builds (auction notices, AdCOM events,
+/// Native trackers, click trackers and the navigation) is a child of `options.markupRequestID`, the request that
+/// delivered the markup (nil for inline `adm`). A tracker never parents a navigation: one click's requests are siblings
+/// sharing the trigger "click". VAST requests come from `VASTTrackingPlan` unchanged, each a child of its VAST hop.
 public enum TrackingPlan {
     public struct Options: Sendable, Hashable {
         /// The exchange sends the win notice (`nurl`) itself.
         public var exchangeSendsWinNotice: Bool
+        /// The network entry of the request that delivered the markup (`nurl`/`purl` or `display.curl`), the parent of
+        /// every non-VAST request; `nil` when the markup is inline in the bid response.
+        public var markupRequestID: UUID?
 
-        public init(exchangeSendsWinNotice: Bool = true) {
+        public init(exchangeSendsWinNotice: Bool = true, markupRequestID: UUID? = nil) {
             self.exchangeSendsWinNotice = exchangeSendsWinNotice
+            self.markupRequestID = markupRequestID
         }
     }
 
     public static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, native: NativeAd?, vast: ResolvedVAST?,
                                 context: MacroContext, options: Options = Options()) -> [TrackerRequest] {
-        let factory = TrackerRequestFactory(candidate: candidate, context: context)
+        let factory = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
         switch event {
         case .won:
             guard options.exchangeSendsWinNotice else { return [] }
@@ -46,7 +55,8 @@ public enum TrackingPlan {
         case let .loss(reason):
             var lossContext = context
             lossContext.lossReason = reason
-            return AuctionTracking.loss(candidate, reason: reason, factory: TrackerRequestFactory(candidate: candidate, context: lossContext))
+            return AuctionTracking.loss(candidate, reason: reason,
+                                        factory: TrackerRequestFactory(candidate: candidate, context: lossContext, parentID: options.markupRequestID))
         case .video, .videoViewability, .videoClick, .companionView, .companionClick, .error:
             guard let vast else { return [] }
             return VASTTrackingPlan.requests(for: event, vast: vast, candidate: candidate, context: context,

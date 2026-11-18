@@ -145,8 +145,8 @@ struct TrackingPlanAdcomTests {
         let context = MacroContext.simulatorDefaults(candidate: Self.candidate, request: nil, device: TrackingFixtures.phone)
         #expect(TrackingFixtures.plan(.click(assetID: nil), Self.candidate, context: context) == [
             PlannedRequest(.click, "click", "bid 0.0 › display › banner › link › trkr[0]", "https://t.example/c?p=1.5"),
-            PlannedRequest(.navigation, "click-through (fallback: https://adv.example/fb)", "bid 0.0 › display › banner › link",
-                           "https://adv.example/click?tok=A7D800F2716DB", hasParent: true),
+            PlannedRequest(.navigation, "click", "bid 0.0 › display › banner › link (fallback: https://adv.example/fb)",
+                           "https://adv.example/click?tok=A7D800F2716DB"),
         ])
     }
 
@@ -156,11 +156,14 @@ struct TrackingPlanAdcomTests {
         #expect(TrackingFixtures.plan(.click(assetID: nil), Self.candidate, context: context).map(\.category) == [.click])
     }
 
-    @Test func navigationIsAChildOfTheFirstClickTracker() throws {
+    /// The trackers and the navigation of one click are siblings: same trigger, none the parent of another (the click
+    /// causes them all; no tracker causes the navigation).
+    @Test func aClickIsOneGroupOfSiblings() throws {
         let requests = TrackingPlan.requests(for: .click(assetID: nil), candidate: Self.candidate, native: nil, vast: nil,
                                              context: TrackingFixtures.context)
-        #expect(requests.count == 2)
-        #expect(requests[1].parentID == requests[0].id)
+        #expect(requests.map(\.category) == [.click, .navigation])
+        #expect(Set(requests.map(\.trigger)) == ["click"])
+        #expect(requests.allSatisfy { $0.parentID == nil })
     }
 
     @Test func vendorEventsAreNeverFiredByTheLifecycle() {
@@ -220,14 +223,14 @@ struct TrackingPlanNativeTests {
         #expect(TrackingFixtures.plan(.click(assetID: 7), Self.candidate, native: Self.native12) == [
             PlannedRequest(.click, "click", "bid 1.2 › native › asset 7 › link › clicktrackers[0]", "https://t.example/asset-click"),
             PlannedRequest(.click, "click", "bid 1.2 › native › link › clicktrackers[0]", "https://t.example/click"),
-            PlannedRequest(.navigation, "click-through", "bid 1.2 › native › asset 7 › link", "https://landing.example/asset", hasParent: true),
+            PlannedRequest(.navigation, "click", "bid 1.2 › native › asset 7 › link", "https://landing.example/asset"),
         ])
     }
 
     @Test func clickOnTheAdOrAnAssetWithoutALink() {
         let expected = [
             PlannedRequest(.click, "click", "bid 1.2 › native › link › clicktrackers[0]", "https://t.example/click"),
-            PlannedRequest(.navigation, "click-through", "bid 1.2 › native › link", "https://landing.example/", hasParent: true),
+            PlannedRequest(.navigation, "click", "bid 1.2 › native › link", "https://landing.example/"),
         ]
         #expect(TrackingFixtures.plan(.click(assetID: nil), Self.candidate, native: Self.native12) == expected)
         #expect(TrackingFixtures.plan(.click(assetID: 1), Self.candidate, native: Self.native12) == expected)
@@ -238,8 +241,8 @@ struct TrackingPlanNativeTests {
         let native = try #require(NativeParser.parse(NativeFixtures.response10).ad)
         let candidate = AdCandidate(id: "0.0", bidID: "n", price: 1, format: .native, markup: .native(NativeFixtures.response10))
         let navigation = try #require(TrackingFixtures.plan(.click(assetID: nil), candidate, native: native).last)
-        #expect(navigation == PlannedRequest(.navigation, "click-through (fallback: http://i.am.a/URL)", "bid 0.0 › native › link",
-                                             "deeplink://deeplink/url/into/app", hasParent: true))
+        #expect(navigation == PlannedRequest(.navigation, "click", "bid 0.0 › native › link (fallback: http://i.am.a/URL)",
+                                             "deeplink://deeplink/url/into/app"))
     }
 
     @Test func noNativeTrackersWithoutTheParsedAd() {
@@ -301,5 +304,81 @@ struct TrackingPlanVASTTests {
         let expected = VASTTrackingPlan.requests(for: event, vast: Self.resolved, candidate: candidate, context: TrackingFixtures.context,
                                                  source: "bid 1.2 › native › asset 6 › video").map(PlannedRequest.init)
         #expect(TrackingFixtures.plan(event, candidate, native: native, vast: Self.resolved) == expected)
+    }
+}
+
+/// decisions.md "Network relationships": a request's parent is the request that delivered the markup (the nurl/purl or
+/// `display.curl` entry the shell passes as `markupRequestID`, nil for inline `adm`). Every non-VAST request takes it:
+/// auction notices, AdCOM events, Native trackers, click trackers and the navigation. A tracker never parents a
+/// navigation; one click's requests are siblings sharing the trigger "click". VAST requests keep their hop parents.
+@Suite("TrackingPlan – parents")
+struct TrackingPlanParentTests {
+    static let markupRequest = UUID()
+    static let delivered = TrackingPlan.Options(exchangeSendsWinNotice: true, markupRequestID: markupRequest)
+
+    static let events: [AdLifecycleEvent] = [.won, .rendered, .viewable(.mrc50), .viewable(.mrc100), .viewable(.video50), .click(assetID: nil),
+                                             .click(assetID: 7), .loss(reason: 102), .closed]
+
+    /// HTML with the three notices; an AdCOM image banner with events (scripts included) and a link; Native 1.2 with
+    /// eventtrackers, asset and ad clicktrackers; Native 1.1 with imptrackers and a jstracker.
+    static func everyNonVASTRequest(options: TrackingPlan.Options) throws -> [TrackerRequest] {
+        let native11JSON = #"{"native":{"ver":"1.1","assets":[{"id":1,"title":{"text":"T"}}],"link":{"url":"https://l.example","clicktrackers":["https://t.example/c"]},"imptrackers":["https://t.example/i"],"jstracker":"<script>j()</script>"}}"#
+        let native11 = try #require(NativeParser.parse(native11JSON).ad)
+        let native11Candidate = AdCandidate(id: "0.1", bidID: "n", price: 1, format: .native, markup: .native(native11JSON),
+                                            winURL: "https://t.example/win", lossURL: "https://t.example/loss")
+        let ads: [(AdCandidate, NativeAd?)] = [(TrackingFixtures.banner, nil), (TrackingPlanAdcomTests.candidate, nil),
+                                               (TrackingPlanNativeTests.candidate, TrackingPlanNativeTests.native12), (native11Candidate, native11)]
+        return ads.flatMap { candidate, native in
+            events.flatMap { event in
+                TrackingPlan.requests(for: event, candidate: candidate, native: native, vast: nil, context: TrackingFixtures.context, options: options)
+            }
+        }
+    }
+
+    @Test func everyNonVASTRequestIsAChildOfTheMarkupRequest() throws {
+        let requests = try Self.everyNonVASTRequest(options: Self.delivered)
+        #expect(Set(requests.map(\.category)) == [.win, .billing, .loss, .event, .impression, .viewability, .click, .navigation])
+        #expect(requests.contains { $0.isScript && $0.source.hasSuffix("jstracker") })
+        #expect(requests.contains { $0.isScript && $0.source.contains("display") })
+        #expect(requests.allSatisfy { $0.parentID == Self.markupRequest })
+    }
+
+    @Test func inlineMarkupHasNoParents() throws {
+        let requests = try Self.everyNonVASTRequest(options: TrackingPlan.Options(markupRequestID: nil))
+        #expect(!requests.isEmpty)
+        #expect(requests.allSatisfy { $0.parentID == nil })
+    }
+
+    /// The click causes its trackers and its navigation alike: none of them is the parent of another.
+    @Test(arguments: [nil, 7])
+    func aClickIsSiblingsNeverParentedToATracker(assetID: Int?) {
+        for (candidate, native) in [(TrackingPlanNativeTests.candidate, Optional(TrackingPlanNativeTests.native12)),
+                                    (TrackingPlanAdcomTests.candidate, nil)] {
+            let click = TrackingPlan.requests(for: .click(assetID: assetID), candidate: candidate, native: native, vast: nil,
+                                              context: TrackingFixtures.context, options: Self.delivered)
+            #expect(click.last?.category == .navigation)
+            #expect(click.dropLast().allSatisfy { $0.category == .click } && click.count >= 2)
+            #expect(Set(click.map(\.trigger)) == ["click"])
+            let ids = Set(click.map(\.id))
+            #expect(!click.contains { $0.parentID.map(ids.contains) == true })
+            #expect(click.allSatisfy { $0.parentID == Self.markupRequest })
+        }
+    }
+
+    /// VAST requests are parented by `VASTTrackingPlan` to the hop that delivered their document; the plan passes them
+    /// through untouched, while the auction notices of the same bid take the markup request.
+    @Test func vastRequestsKeepTheirHopParents() {
+        let candidate = TrackingPlanVASTTests.vastCandidate
+        let resolved = TrackingPlanVASTTests.resolved
+        for event in TrackingPlanVASTTests.vastEvents {
+            let planned = TrackingPlan.requests(for: event, candidate: candidate, native: nil, vast: resolved, context: TrackingFixtures.context,
+                                                options: Self.delivered)
+            let vast = VASTTrackingPlan.requests(for: event, vast: resolved, candidate: candidate, context: TrackingFixtures.context, source: "bid 0.0")
+            #expect(planned.map(\.parentID) == vast.map(\.parentID), "\(event)")
+        }
+        let billing = TrackingPlan.requests(for: .rendered, candidate: candidate, native: nil, vast: resolved, context: TrackingFixtures.context,
+                                            options: Self.delivered)
+        #expect(billing.map(\.category) == [.billing])
+        #expect(billing.map(\.parentID) == [Self.markupRequest])
     }
 }
