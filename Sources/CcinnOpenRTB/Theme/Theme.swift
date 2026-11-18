@@ -80,6 +80,7 @@ enum Theme {
         case .local: Color(nsColor: .adaptive(light: .hex(0x0369A1), dark: .hex(0x7DD3FC)))
         case .renderer: Color(nsColor: .adaptive(light: .hex(0x0F766E), dark: .hex(0x5EEAD4)))
         case .browser: Color(nsColor: .adaptive(light: .hex(0xBE185D), dark: .hex(0xF9A8D4)))
+        case .offline: Color(nsColor: .adaptive(light: .hex(0x475569), dark: .hex(0xCBD5E1)))
         }
     }
 
@@ -91,6 +92,7 @@ enum Theme {
         case .local: "internaldrive"
         case .renderer: "play.rectangle"
         case .browser: "safari"
+        case .offline: "wifi.slash"
         }
     }
 

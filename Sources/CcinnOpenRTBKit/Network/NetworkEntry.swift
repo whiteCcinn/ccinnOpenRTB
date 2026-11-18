@@ -12,7 +12,7 @@ public enum TrackingMode: String, Sendable, Hashable, Codable {
 public enum NetworkEntryState: Sendable, Hashable {
     /// A tracker in Simulated mode: recorded, never sent.
     case simulated
-    /// A creative request stopped by the simulated-mode sandbox.
+    /// Stopped before it was sent: a creative request by the Simulated-mode sandbox, remote content by Offline.
     case blocked
     case pending
     case completed(status: Int)
@@ -33,6 +33,8 @@ public enum NetworkDelivery: String, Sendable, Hashable, Codable, CaseIterable {
     case renderer
     /// Opened in the default browser (Real-mode click-through with "Open click-throughs in browser" on).
     case browser
+    /// Remote content recorded and not sent because the session is Offline.
+    case offline
 
     /// Short label for badges.
     public var label: String {
@@ -43,6 +45,7 @@ public enum NetworkDelivery: String, Sendable, Hashable, Codable, CaseIterable {
         case .local: "Local"
         case .renderer: "Renderer"
         case .browser: "Browser"
+        case .offline: "Offline"
         }
     }
 }
