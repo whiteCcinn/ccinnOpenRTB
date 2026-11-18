@@ -68,7 +68,7 @@ final class RecordingHost: AdRenderingHost {
     /// What the session would list after dispatching Real-mode script trackers.
     var scriptTrackers: [ScriptTracker] = []
 
-    /// What `resolveVAST` answers (the default resolver is a kit placeholder until kit-vast merges).
+    /// What `resolveVAST` answers (tests pin the resolution; the session's resolver is covered by the session suites).
     var vastResolution = ResolvedVAST()
     private(set) var resolvedSources: [VASTSource] = []
 

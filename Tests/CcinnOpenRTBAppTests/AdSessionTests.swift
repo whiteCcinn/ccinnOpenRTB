@@ -315,9 +315,11 @@ struct AdSessionTests {
     }
 
     @Test func theShellsPlanOptionsBecomeTheKitsInOnePlace() {
-        let options = TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: UUID())
-        #expect(options.kitOptions.exchangeSendsWinNotice == false)
-        #expect(TrackingPlanOptions(exchangeSendsWinNotice: true, markupRequestID: nil).kitOptions.exchangeSendsWinNotice)
+        let markupRequestID = UUID()
+        let options = TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: markupRequestID)
+        #expect(options.kitOptions == TrackingPlan.Options(exchangeSendsWinNotice: false, markupRequestID: markupRequestID))
+        #expect(TrackingPlanOptions(exchangeSendsWinNotice: true, markupRequestID: nil).kitOptions
+            == TrackingPlan.Options(exchangeSendsWinNotice: true, markupRequestID: nil))
     }
 
     @Test func fetchedMarkupIsSniffed() {

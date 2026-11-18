@@ -66,12 +66,11 @@ struct AdViewSmokeTests {
         let harness = show(RendererFixtures.request(.vast(.xml("<VAST/>")), format: .video, vast: vast, placement: .interstitial,
                                                     adSize: CGSize(width: 390, height: 844)), host: host)
         defer { harness.close() }
-        // With kit-vast's selector the sample plays (`loaded` first); with the placeholder selector it is error 403.
-        let started = await Wait.until(timeout: .seconds(30)) {
-            host.events.first == .video(.loaded, adIndex: 0) || host.events.first == .error(.noSupportedMedia, adIndex: 0)
-        }
+        // kit-vast's selector picks the offline MP4, so the sample plays: `loaded` first, never `.rendered` before a frame.
+        let started = await Wait.until(timeout: .seconds(30)) { !host.events.isEmpty }
         #expect(started, "\(host.events)")
-        #expect(host.events.first != .rendered)
+        #expect(host.events.first == .video(.loaded, adIndex: 0), "\(host.events)")
+        #expect(!host.events.contains(.error(.noSupportedMedia, adIndex: 0)), "\(host.events)")
     }
 
     @Test func messagesNeedNoHostCalls() async throws {

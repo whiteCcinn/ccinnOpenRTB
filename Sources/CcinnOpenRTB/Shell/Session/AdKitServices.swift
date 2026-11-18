@@ -50,9 +50,8 @@ struct TrackingPlanOptions: Equatable, Sendable {
     /// navigations to it (decisions.md, "Network relationships"); VAST requests keep their own hops.
     var markupRequestID: UUID?
 
-    /// The kit's options, built here and nowhere else. Integration: kit-openrtb's `TrackingPlan.Options` gains
-    /// `markupRequestID`; pass it on in this initialiser (`markupRequestID: markupRequestID`), the only change needed.
+    /// The kit's options, built here and nowhere else.
     var kitOptions: TrackingPlan.Options {
-        TrackingPlan.Options(exchangeSendsWinNotice: exchangeSendsWinNotice)
+        TrackingPlan.Options(exchangeSendsWinNotice: exchangeSendsWinNotice, markupRequestID: markupRequestID)
     }
 }

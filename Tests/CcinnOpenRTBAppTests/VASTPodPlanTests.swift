@@ -86,11 +86,52 @@ struct CompanionTests {
         #expect(resource([]) == nil)
     }
 
+    /// The renderer has no rule of its own: it draws exactly kit-vast's `displayResource` and navigates exactly when
+    /// kit-vast's `playerOpensClickThrough` says so, the predicate the tracking plan uses for `.companionClick`.
+    @Test func theRendererDrawsAndNavigatesByTheKitsRule() {
+        let pool: [VASTCompanion.Resource] = [
+            .staticResource(url: "https://c.example/a.png", creativeType: "image/png"),
+            .staticResource(url: "https://c.example/b.gif", creativeType: nil),
+            .staticResource(url: "https://c.example/s.js", creativeType: nil),
+            .staticResource(url: "https://c.example/s", creativeType: "application/x-javascript"),
+            .staticResource(url: "https://c.example/x.swf", creativeType: "application/x-shockwave-flash"),
+            .staticResource(url: "https://c.example/noext", creativeType: nil),
+            .staticResource(url: " ", creativeType: "image/png"),
+            .html("<b>x</b>"), .html("  \n"),
+            .iframe(url: "https://c.example/f"), .iframe(url: ""),
+        ]
+        var cases: [[VASTCompanion.Resource]] = [[]] + pool.map { [$0] }
+        for first in pool {
+            for second in pool where first != second { cases.append([first, second]) }
+        }
+        for resources in cases {
+            let companion = VASTCompanion(id: "c", width: 300, height: 250, resources: resources, clickThrough: "https://adv.example/")
+            let expected: CompanionResource? = switch companion.displayResource {
+            case nil: nil
+            case let .html(markup)?: .html(markup)
+            case let .iframe(url)?: .iframe(url: url)
+            case let .staticResource(url, _)?: companion.playerOpensClickThrough ? .image(url: url) : .script(url: url)
+            }
+            #expect(CompanionPicker.resource(of: companion) == expected, "\(resources)")
+            if let choice = CompanionPicker.pick([IndexedCompanion(companionIndex: 0, companion: companion)], fitting: nil) {
+                #expect(choice.playerOpensClickThrough == companion.playerOpensClickThrough, "\(resources)")
+            } else {
+                #expect(companion.displayResource == nil, "\(resources)")
+            }
+        }
+        // An untyped `.js` StaticResource is a script companion (kit-vast's rule), drawn as `<script src>`.
+        #expect(CompanionPicker.resource(of: VASTCompanion(resources: [.staticResource(url: "https://c.example/s.js", creativeType: nil)]))
+            == .script(url: "https://c.example/s.js"))
+    }
+
+    /// The choice's navigation predicate is the companion's, whatever resource a caller pairs it with.
     @Test func onlyAnImageLetsThePlanOpenTheClickThrough() {
-        #expect(CompanionResource.image(url: "u").playerOpensClickThrough)
-        #expect(!CompanionResource.html("<b>x</b>").playerOpensClickThrough)
-        #expect(!CompanionResource.iframe(url: "u").playerOpensClickThrough)
-        #expect(!CompanionResource.script(url: "u").playerOpensClickThrough)
+        let image = VASTCompanion(resources: [.staticResource(url: "https://c.example/a.png", creativeType: "image/png")])
+        let html = VASTCompanion(resources: [.html("<b>x</b>")])
+        #expect(CompanionChoice(companionIndex: 0, companion: image, resource: .image(url: "https://c.example/a.png")).playerOpensClickThrough)
+        #expect(!CompanionChoice(companionIndex: 0, companion: html, resource: .html("<b>x</b>")).playerOpensClickThrough)
+        #expect(!CompanionChoice(companionIndex: 0, companion: html, resource: .image(url: "u")).playerOpensClickThrough,
+                "the companion decides, not the resource a caller pairs it with")
     }
 
     @Test func scriptsAndIframesAreDrawnInAnEscapedDocument() {

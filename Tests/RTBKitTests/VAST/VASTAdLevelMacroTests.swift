@@ -174,7 +174,7 @@ struct VASTAdLevelMacroTests {
 
     // MARK: Expansion (enabled once kit-openrtb's MacroExpander is merged)
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func expandedOnTrackingPixelsPerVersion() async throws {
         func impression(_ xml: String) async throws -> String {
             let vast = await resolved(xml)

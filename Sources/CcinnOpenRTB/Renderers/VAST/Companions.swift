@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import RTBKit
 
-/// How a companion is drawn.
+/// How a companion is drawn: kit-vast's `VASTCompanion.displayResource`, as the view needs it.
 enum CompanionResource: Equatable, Sendable {
     /// An image `StaticResource`, fetched as content.
     case image(url: String)
@@ -12,18 +12,16 @@ enum CompanionResource: Equatable, Sendable {
     case iframe(url: String)
     /// A script `StaticResource`, drawn as `<script src>` in the creative web view.
     case script(url: String)
-
-    /// Only an image's click-through is opened by the tracking plan (`.companionClick` → CompanionClickThrough); HTML,
-    /// iframe and script companions open their own, which the player records with `host.navigate`.
-    var playerOpensClickThrough: Bool {
-        if case .image = self { true } else { false }
-    }
 }
 
 struct CompanionChoice: Equatable, Sendable {
     var companionIndex: Int
     var companion: VASTCompanion
     var resource: CompanionResource
+
+    /// Whether the tracking plan opens the CompanionClickThrough (`.companionClick`): kit-vast's predicate, the one the
+    /// plan uses, so exactly one navigation follows a click. Otherwise the companion opens its own and the player records it.
+    var playerOpensClickThrough: Bool { companion.playerOpensClickThrough }
 
     /// The declared size, when both dimensions are positive.
     var declaredSize: CGSize? {
@@ -35,10 +33,20 @@ struct CompanionChoice: Equatable, Sendable {
 enum CompanionPicker {
     private static let defaultSize = CGSize(width: 300, height: 250)
 
-    /// The resource to draw — the single call site of the shared rule. Switch it to kit-vast's
-    /// `VASTCompanion.displayResource` / `playerOpensClickThrough` when they are on this branch.
+    /// The resource to draw: exactly kit-vast's `displayResource` (decisions "Renderer contract rulings"), the rule the
+    /// tracking plan also follows. A StaticResource there is either an image (`playerOpensClickThrough`) or a script.
     static func resource(of companion: VASTCompanion) -> CompanionResource? {
-        CompanionDisplayRule.resource(of: companion)
+        switch companion.displayResource {
+        case nil:
+            return nil
+        case let .html(markup)?:
+            return .html(markup)
+        case let .iframe(url)?:
+            return .iframe(url: url.trimmingCharacters(in: .whitespacesAndNewlines))
+        case let .staticResource(url, _)?:
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            return companion.playerOpensClickThrough ? .image(url: trimmed) : .script(url: trimmed)
+        }
     }
 
     /// The largest renderable companion that fits `fitting` (below the player); any size when `fitting` is `nil` (an end
@@ -54,43 +62,6 @@ enum CompanionPicker {
             if best.map({ area > $0.area }) ?? true { best = (choice, area) }
         }
         return best?.choice
-    }
-}
-
-/// Local copy of the shared companion rule (decisions "Renderer contract rulings"), until kit-vast's
-/// `VASTCompanion.displayResource` reaches this branch: an image `StaticResource` (`creativeType` `image/*`, or untyped
-/// with an image file extension), then the first non-blank `HTMLResource`, then `IFrameResource`, then a script
-/// `StaticResource`; `nil` when nothing renders.
-private enum CompanionDisplayRule {
-    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic"]
-
-    static func resource(of companion: VASTCompanion) -> CompanionResource? {
-        var html: CompanionResource?
-        var iframe: CompanionResource?
-        var script: CompanionResource?
-        for resource in companion.resources {
-            switch resource {
-            case let .staticResource(url, creativeType):
-                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { continue }
-                let type = creativeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-                if type.isEmpty ? hasImageExtension(trimmed) : type.hasPrefix("image/") { return .image(url: trimmed) }
-                if script == nil, type.contains("javascript") || type.contains("ecmascript") { script = .script(url: trimmed) }
-            case let .html(markup):
-                if html == nil, !markup.allSatisfy(\.isWhitespace) { html = .html(markup) }
-            case let .iframe(url):
-                let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-                if iframe == nil, !trimmed.isEmpty { iframe = .iframe(url: trimmed) }
-            }
-        }
-        return html ?? iframe ?? script
-    }
-
-    private static func hasImageExtension(_ url: String) -> Bool {
-        var path = Substring(url)
-        if let end = path.firstIndex(where: { $0 == "?" || $0 == "#" }) { path = path[..<end] }
-        guard let dot = path.lastIndex(of: ".") else { return false }
-        return imageExtensions.contains(path[path.index(after: dot)...].lowercased())
     }
 }
 

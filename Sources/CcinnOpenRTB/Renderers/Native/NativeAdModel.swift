@@ -17,7 +17,7 @@ extension NativeVideoItem {
 }
 
 /// Parses a Native object (`{"ver", "assets"}`) into its assets, with the parser's issues. The single seam to kit-openrtb's
-/// asset parsing: the default is `NativeParser.parse` (a placeholder on this branch until kit-openrtb merges).
+/// asset parsing: the default is `NativeParser.parse`; tests may inject another.
 typealias NativeAssetsParser = @Sendable (_ nativeJSON: String) -> (assets: [NativeAsset]?, issues: [ValidationIssue])
 
 /// The Native 1.2 `assetsurl` response (§5.1: it mirrors the `assets` array of the bid response).

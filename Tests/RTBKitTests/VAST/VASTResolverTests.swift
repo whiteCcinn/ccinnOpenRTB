@@ -375,7 +375,7 @@ struct VASTResolverTests {
         #expect(await fetcher.calls.count == 4)
     }
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func macrosInHTTPTagURIsAreExpandedButDataURIsAreNot() async {
         let tag = "https://ads.example/tag?cb=[CACHEBUSTING]"
         let fetcher = FakeVASTFetcher(["https://ads.example/tag?cb=12345678": .body(VASTSamples.inline40)])

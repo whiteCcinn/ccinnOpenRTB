@@ -250,7 +250,7 @@ struct VASTTrackingPlanTests {
 
     // MARK: Macros (enabled once kit-openrtb's MacroExpander is merged)
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func errorCodeReasonAndCacheBusterAreExpanded() async throws {
         let vast = await resolved(VASTSamples.inline42Verification)
         let error = try #require(plan(.error(.noSupportedMedia, adIndex: 0), vast).first)
@@ -328,7 +328,7 @@ struct VASTTrackingPlanTests {
 
     // MARK: Macros (more; enabled once kit-openrtb's MacroExpander is merged)
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func podSequenceIsTheSlotOfEachAd() async throws {
         let vast = await resolved(VASTSamples.pod41)
         for index in 0..<2 {
@@ -341,7 +341,7 @@ struct VASTTrackingPlanTests {
         #expect(plan(.video(.creativeView, adIndex: 0), single).last?.url == "https://tracker.example/s?pod=-1")
     }
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func resolutionRequestsExpandEachFailuresOwnErrorCode() async throws {
         let xml = F.document(ads: [F.inlineAd(id: "a", sequence: 1, name: "one"),
                                    F.wrapperAd(id: "w", sequence: 2, name: "w", adTagURI: F.dataURL(VASTSamples.noAd), attributes: #"fallbackOnNoAd="true""#),
@@ -353,7 +353,7 @@ struct VASTTrackingPlanTests {
         #expect(requests.allSatisfy { $0.replacedMacros.contains("[ERRORCODE]") && $0.unknownMacros.isEmpty })
     }
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func chainFailureAndMediaErrorsExpandTheirCode() async throws {
         let inner = F.wrapper(name: "w2", adTagURI: "https://ads.example/down")
         let chain = await resolved(F.wrapper(name: "w1", adTagURI: F.dataURL(inner)))
@@ -364,7 +364,7 @@ struct VASTTrackingPlanTests {
         #expect(plan(.error(.noAdsAfterWrapper, adIndex: nil), noAd).map(\.url) == ["https://tracker.example/no-ad/error?code=303&cb=12345678"])
     }
 
-    @Test(.enabled(if: MacroSupport.isImplemented, "needs kit-openrtb's MacroExpander"))
+    @Test
     func playheadComesFromTheHostsContext() async throws {
         let vast = await resolved(VASTSamples.inline42Verification)
         var context = Self.context

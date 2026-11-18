@@ -234,7 +234,7 @@ final class VASTPlayerModel {
     func companionClicked(_ choice: CompanionChoice, adIndex: Int, url: String?) {
         guard !stopped, configuration.allowsClickThrough else { return }
         host?.report(.companionClick(adIndex: adIndex, companionIndex: choice.companionIndex))
-        if choice.resource.playerOpensClickThrough {
+        if choice.playerOpensClickThrough {
             let clickThrough = choice.companion.clickThrough?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if clickThrough.isEmpty {
                 log(.warning, "Companion \(choice.companionIndex + 1) of ad \(adIndex + 1) has no CompanionClickThrough: CompanionClickTracking only")

@@ -143,14 +143,6 @@ enum VASTFixture {
     }
 }
 
-/// Whether kit-openrtb's `MacroExpander` is merged (the placeholder returns templates unchanged). Expansion assertions are
-/// enabled automatically once it is.
-enum MacroSupport {
-    static let isImplemented: Bool = {
-        MacroExpander.expand("[ERRORCODE]", context: MacroContext(errorCode: 405)).url != "[ERRORCODE]"
-    }()
-}
-
 extension [ValidationIssue] {
     func codes(_ severity: ValidationIssue.Severity? = nil) -> [String] {
         filter { severity == nil || $0.severity == severity }.map(\.code)
