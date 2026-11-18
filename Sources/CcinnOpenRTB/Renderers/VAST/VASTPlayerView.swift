@@ -102,8 +102,11 @@ private struct VideoPlayerLayout: View {
                                                         isCTV: false)
             ZStack(alignment: .topLeading) {
                 Color.black
-                PlayerLayerView(player: model.avPlayer.player)
-                    .frame(width: arrangement.playerFrame.width, height: arrangement.playerFrame.height)
+                // The end card replaces the player: the finished video's layer is not kept under it.
+                if model.endCard == nil {
+                    PlayerLayerView(player: model.avPlayer.player)
+                        .frame(width: arrangement.playerFrame.width, height: arrangement.playerFrame.height)
+                }
                 PlayerOverlay(model: model, compact: arrangement.playerFrame.height < 160)
                     .frame(width: arrangement.playerFrame.width, height: arrangement.playerFrame.height)
                 if let below, let frame = arrangement.companionFrame, let item = model.currentItem {
@@ -125,9 +128,11 @@ private struct VideoPlayerLayout: View {
         }
     }
 
-    /// A companion shown under the player while the ad plays, when one fits.
+    /// A companion shown under the player while the ad plays (from its first frame, as players show companions on start),
+    /// when one fits.
     private func belowCompanion(in size: CGSize) -> CompanionChoice? {
-        guard model.configuration.showsCompanions, model.phase != .finished, let item = model.currentItem, size.width > 0 else { return nil }
+        guard model.configuration.showsCompanions, model.phase != .finished, model.currentAdStarted, let item = model.currentItem,
+              size.width > 0 else { return nil }
         let playerHeight = size.width / (16.0 / 9.0)
         let remaining = size.height - playerHeight - CompanionArrangement.spacing
         guard remaining > 0 else { return nil }

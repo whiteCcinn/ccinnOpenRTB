@@ -70,6 +70,8 @@ final class VASTPlayerModel {
     private(set) var endCard: EndCard?
     /// Pod ads that reached their first frame.
     private(set) var startedAds = 0
+    /// The current ad reached its first frame (`creativeView`): its companions may show from now on.
+    private(set) var currentAdStarted = false
     /// The last media error the player reported (shown when no ad could play).
     private(set) var lastError: VASTErrorCode?
 
@@ -86,6 +88,8 @@ final class VASTPlayerModel {
     @ObservationIgnored private var renderedReported = false
     @ObservationIgnored private var pendingMedia: (id: UUID, mimeType: String?)?
     @ObservationIgnored private var viewedCompanions: Set<[Int]> = []
+    /// Companions reported shown before their ad started, viewed right after the ad's `creativeView`.
+    @ObservationIgnored private var pendingCompanionViews: [(choice: CompanionChoice, adIndex: Int)] = []
     @ObservationIgnored private var lastStatus: PlaybackStatus?
     @ObservationIgnored private var userPaused = false
     @ObservationIgnored private var hiddenPaused = false
@@ -229,8 +233,17 @@ final class VASTPlayerModel {
     }
 
     /// A companion is on screen: its `creativeView`, once per companion.
+    /// A companion is part of its ad: one shown before the ad's first frame is viewed right after the ad's `creativeView`
+    /// (after the impression), never before it.
     func companionDidAppear(_ choice: CompanionChoice, adIndex: Int) {
-        guard !stopped, viewedCompanions.insert([adIndex, choice.companionIndex]).inserted else { return }
+        guard !stopped else { return }
+        if currentItem?.adIndex == adIndex, !currentAdStarted {
+            if !pendingCompanionViews.contains(where: { $0.adIndex == adIndex && $0.choice.companionIndex == choice.companionIndex }) {
+                pendingCompanionViews.append((choice, adIndex))
+            }
+            return
+        }
+        guard viewedCompanions.insert([adIndex, choice.companionIndex]).inserted else { return }
         host?.report(.companionView(adIndex: adIndex, companionIndex: choice.companionIndex))
     }
 
@@ -303,6 +316,8 @@ final class VASTPlayerModel {
 
     private func begin(_ item: VASTPodItem) {
         currentItem = item
+        currentAdStarted = false
+        pendingCompanionViews.removeAll()
         playhead = 0
         duration = item.declaredDuration
         isReady = false
@@ -396,12 +411,18 @@ final class VASTPlayerModel {
         for event in events {
             if event == .creativeView {
                 startedAds += 1
+                currentAdStarted = true
                 if configuration.reportsRendered, !renderedReported {
                     renderedReported = true
                     host?.report(.rendered)
                 }
             }
             host?.report(.video(event, adIndex: item.adIndex))
+        }
+        if currentAdStarted, !pendingCompanionViews.isEmpty {
+            let pending = pendingCompanionViews
+            pendingCompanionViews.removeAll()
+            for (choice, adIndex) in pending { companionDidAppear(choice, adIndex: adIndex) }
         }
     }
 

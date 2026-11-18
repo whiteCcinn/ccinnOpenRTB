@@ -32,6 +32,13 @@ struct RenderedSampleZeroTrafficTests {
             }
             #expect(started, "\(harness.session.phase): \(harness.monitor.liveEntries.map(\.dumpLine))")
             try await Task.sleep(for: .seconds(1))
+            // The renderers' own order: a companion is viewed only after its ad's impression (never before billing).
+            let entries = harness.monitor.liveEntries
+            if let companion = entries.first(where: { $0.trigger.hasPrefix("VAST companion creativeView") }) {
+                let billing = entries.first { $0.category == .billing }?.sequence ?? .max
+                let impression = entries.first { $0.category == .impression }?.sequence ?? .max
+                #expect(billing < companion.sequence && impression < companion.sequence, "\(entries.map(\.dumpLine))")
+            }
             // Every event the Fire menu offers for this ad, then the loss notice.
             for action in FireActions.sections(for: harness.session.prepared).flatMap(\.actions) {
                 harness.session.fireManually(action.event)

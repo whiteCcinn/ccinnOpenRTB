@@ -281,6 +281,30 @@ struct VASTPlayerModelTests {
         #expect(host.navigations.isEmpty, "an image companion never navigates from the player")
     }
 
+    /// A companion is part of its ad: it shows once the ad has started (as players show companions on start), and a
+    /// companion that reports itself shown earlier (an image decoded during the media load) is viewed only after its
+    /// ad's impression and creativeView — never before billing.
+    @Test func aCompanionIsViewedOnlyAfterItsAdStarted() async {
+        let companion = VASTCompanion(id: "c", width: 300, height: 250,
+                                      resources: [.staticResource(url: "https://c.example/c.png", creativeType: "image/png")])
+        let (model, host, engine) = make([RendererFixtures.linearAd(duration: 2, companions: [companion])])
+        model.start()
+        await waitForLoad(engine)
+        #expect(!model.currentAdStarted)
+        let choice = CompanionChoice(companionIndex: 0, companion: companion, resource: .image(url: "https://c.example/c.png"))
+        model.companionDidAppear(choice, adIndex: 0)
+        #expect(!host.events.contains(.companionView(adIndex: 0, companionIndex: 0)), "not before the ad starts")
+        engine.send(.ready(duration: 2))
+        engine.tick(from: 0, to: 0.5)
+        #expect(model.currentAdStarted)
+        let creativeView = host.events.firstIndex(of: .video(.creativeView, adIndex: 0)) ?? .max
+        let companionView = host.events.firstIndex(of: .companionView(adIndex: 0, companionIndex: 0)) ?? .min
+        #expect(creativeView < companionView, "\(host.events)")
+        #expect((host.events.firstIndex(of: .rendered) ?? .max) < companionView)
+        model.companionDidAppear(choice, adIndex: 0)
+        #expect(host.events.filter { $0 == .companionView(adIndex: 0, companionIndex: 0) }.count == 1)
+    }
+
     /// HTML / iframe / script companions open their own click-through; the plan does not navigate for them.
     @Test func htmlCompanionsNavigateToWhatTheyOpened() async {
         let companion = VASTCompanion(id: "h", width: 300, height: 250, resources: [.html("<a href='https://adv.example/companion'>x</a>")],
