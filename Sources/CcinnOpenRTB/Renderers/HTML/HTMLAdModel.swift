@@ -83,7 +83,7 @@ final class HTMLAdModel {
         let environment = MRAIDEnvironment(request: request)
         controller.load(CreativeWebController.Content(document: HTMLDocumentBuilder.document(for: markup), mraid: environment,
                                                       blocksNetwork: blocksNetwork, disableScroll: environment.disableScroll,
-                                                      networkParentID: nil, source: source))
+                                                      networkParentID: request.markupRequestID, source: source))
     }
 
     func setVisibleFraction(_ fraction: Double) {

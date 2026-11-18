@@ -37,6 +37,26 @@ struct HTMLAdModelTests {
         #expect(host.logs.filter { $0.message.hasPrefix("Reloading") }.count == 1, "an unchanged request does not reload")
     }
 
+    /// The creative's own requests are URLs of the markup's document: they hang under the request that delivered it
+    /// (nurl or `display.curl`), and have no parent for inline `adm` (decisions.md, "Network relationships").
+    @Test func theCreativesOwnRequestsHangUnderTheMarkupRequest() async throws {
+        for markupRequestID in [UUID(), nil] {
+            let host = RecordingHost()
+            let model = HTMLAdModel(host: host)
+            defer { model.teardown() }
+            let adm = #"<img src="https://pixel.example/p.gif"><p>ad</p>"#
+            var request = RendererFixtures.request(.html(adm))
+            request.markupRequestID = markupRequestID
+            model.load(markup: adm, request: request, blocksNetwork: true)
+            let blocked = await Wait.until(timeout: .seconds(20)) {
+                host.monitor.liveEntries.contains { $0.category == .creative && $0.url.hasPrefix("https://pixel.example/") }
+            }
+            #expect(blocked, "\(host.monitor.liveEntries.map(\.url))")
+            let creative = host.monitor.liveEntries.filter { $0.category == .creative }
+            #expect(!creative.isEmpty && creative.allSatisfy { $0.parentID == markupRequestID }, "\(creative.map(\.parentID))")
+        }
+    }
+
     @Test func mraidOpenIsAClickThenANavigation() async throws {
         let (model, host, _) = await load("<p>ad</p>")
         defer { model.teardown() }

@@ -187,9 +187,11 @@ final class AdSession: AdRenderingHost {
     /// What the renderer draws; `nil` unless an ad is on the device.
     var renderRequest: RenderRequest? {
         guard phase == .ready, let prepared else { return nil }
-        return RenderRequest(candidate: prepared.candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
+        var candidate = prepared.candidate
+        if let deviceMarkup = prepared.deviceMarkup { candidate.markup = deviceMarkup }
+        return RenderRequest(candidate: candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
                              landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: visibleFraction,
-                             generation: generation)
+                             generation: generation, markupRequestID: prepared.markupEntryID)
     }
 
     /// The selected bid differs from the one on the device (the response was edited or another bid picked).
@@ -514,12 +516,30 @@ final class AdSession: AdRenderingHost {
             break
         }
 
-        prepared = PreparedAd(candidate: candidate, native: native, vast: vast, markupEntryID: markupEntryID, markupFromWinNotice: fromWinNotice)
+        var deviceMarkup: AdMarkup?
+        if markupEntryID == nil, case let .html(adm) = candidate.markup {
+            deviceMarkup = .html(substituteExchangeMacros(in: adm, candidate: candidate, input: input))
+        }
+        prepared = PreparedAd(candidate: candidate, native: native, vast: vast, markupEntryID: markupEntryID, markupFromWinNotice: fromWinNotice,
+                              deviceMarkup: deviceMarkup)
         viewability = ViewabilityController(kind: Self.viewabilityKind(markup: candidate.markup, format: candidate.format))
         lastReportedFraction = visibleFraction
         _ = viewability.visibility(visibleFraction, at: clock.now())
         phase = .ready
         if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: "bid \(candidate.id) › VAST") }
+    }
+
+    /// The exchange's substitution of OpenRTB macros (`${AUCTION_PRICE}` …) in inline HTML `adm` before the device gets it
+    /// (OpenRTB 2.6 §4.4), so the creative's own requests carry the values. Markup fetched by reference is as delivered;
+    /// Native and VAST markup keep their templates, which the tracking plan expands per tracker.
+    private func substituteExchangeMacros(in adm: String, candidate: AdCandidate, input: ParsedInput) -> String {
+        let expanded = services.expandMarkup(adm, macroContext(for: candidate, input: input, adIndex: nil))
+        if !expanded.replaced.isEmpty || !expanded.unknown.isEmpty {
+            var message = "adm: the exchange substituted \(Set(expanded.replaced).sorted().joined(separator: ", "))"
+            if !expanded.unknown.isEmpty { message += "; unknown, left as is: \(Set(expanded.unknown).sorted().joined(separator: ", "))" }
+            log(message, origin: "exchange", outcome: .fired(requests: 0))
+        }
+        return expanded.url
     }
 
     /// Right after a VAST resolution (decisions.md): the Error URLs of `adFailures` once, then — when no ad could be

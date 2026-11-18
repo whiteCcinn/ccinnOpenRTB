@@ -34,6 +34,9 @@ struct RenderRequest: Equatable {
     var visibleFraction: Double
     /// Incremented by the shell to restart playback / reload the creative.
     var generation: Int
+    /// The monitor entry of the request that delivered the markup (the nurl / purl win notice, or AdCOM `display.curl`);
+    /// `nil` for inline `adm`. The parent of the requests the creative makes itself (decisions.md, "Network relationships").
+    var markupRequestID: UUID? = nil
 }
 
 /// What the renderer is playing (VAST pod ad `adIndex`, or a Native video asset with `adIndex` 0). Reported about 4 Hz

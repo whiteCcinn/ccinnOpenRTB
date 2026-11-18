@@ -28,6 +28,9 @@ struct PreparedAd: Equatable, Sendable {
     var markupEntryID: UUID?
     /// The win notice delivered the markup, so it was already sent (or recorded) and `.won` does not send it again.
     var markupFromWinNotice: Bool
+    /// The markup as the device receives it, when the exchange changed it: inline HTML `adm` with the OpenRTB macros
+    /// substituted (OpenRTB 2.6 §4.4). `nil`: `candidate.markup` as is. `candidate` keeps the bid's own markup.
+    var deviceMarkup: AdMarkup? = nil
 }
 
 /// One line of the session's lifecycle log (simulator panel).

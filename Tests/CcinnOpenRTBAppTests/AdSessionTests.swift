@@ -314,6 +314,39 @@ struct AdSessionTests {
         #expect(inline.monitor.liveEntries.filter { $0.category == .navigation }.allSatisfy { $0.parentID == nil })
     }
 
+    /// The renderers learn which request delivered the markup, so the creative's own requests hang under it.
+    @Test func theRenderRequestNamesTheMarkupRequest() async throws {
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")]))
+        curl.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await curl.paste()
+        await curl.renderAndWait()
+        let content = try #require(curl.monitor.liveEntries.first { $0.category == .content })
+        #expect(curl.session.renderRequest?.markupRequestID == content.id)
+
+        let inline = SessionHarness(Fixtures.input([display]))
+        await inline.paste()
+        await inline.renderAndWait()
+        #expect(inline.session.renderRequest != nil)
+        #expect(inline.session.renderRequest?.markupRequestID == nil)
+    }
+
+    /// The exchange substitutes OpenRTB macros in `adm` before the device sees it (OpenRTB 2.6 §4.4), so the HTML creative
+    /// renders with them substituted; markup fetched by reference (`display.curl`) is the device's own fetch, as delivered.
+    @Test func inlineHTMLAdmRendersWithTheExchangesMacrosSubstituted() async {
+        let adm = "<img src='https://p.example/?price=${AUCTION_PRICE}'>"
+        let inline = SessionHarness(Fixtures.input([Fixtures.candidate(.html(adm))]))
+        await inline.paste()
+        await inline.renderAndWait()
+        #expect(inline.session.renderRequest?.candidate.markup == .html("<img src='https://p.example/?price=2.5'>"))
+        #expect(!inline.session.renderIsStale, "substituting macros is not an edit of the response")
+
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")]))
+        curl.transport.respond("https://cdn.example/creative.html", body: adm)
+        await curl.paste()
+        await curl.renderAndWait()
+        #expect(curl.session.renderRequest?.candidate.markup == .html(adm))
+    }
+
     @Test func theShellsPlanOptionsBecomeTheKitsInOnePlace() {
         let markupRequestID = UUID()
         let options = TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: markupRequestID)
