@@ -1,0 +1,137 @@
+import CoreGraphics
+import RTBKit
+import Testing
+@testable import CcinnOpenRTB
+
+@Suite("Ad sizing")
+struct AdSizingTests {
+    private func layout(_ id: String, landscape: Bool = false, folded: Bool = false, spanned: Bool = false) throws -> ScreenLayout {
+        ScreenLayout(device: try #require(DeviceCatalog.device(id: id)), landscape: landscape, folded: folded, spanned: spanned)
+    }
+
+    @Test func bannerThatFitsKeepsItsSize() throws {
+        let size = AdSizing.adSize(bidSize: AdSize(width: 320, height: 50), format: .banner, placement: .inlineBanner,
+                                   layout: try layout("iphone-15-pro"))
+        #expect(size == CGSize(width: 320, height: 50))
+    }
+
+    @Test func bannerWiderThanTheScreenIsScaledDownProportionally() throws {
+        let size = AdSizing.adSize(bidSize: AdSize(width: 728, height: 90), format: .banner, placement: .inlineBanner,
+                                   layout: try layout("iphone-se-3"))
+        #expect(size.width == 375)
+        #expect(size.height == 46) // 90 × 375 / 728 = 46.4
+    }
+
+    @Test func leaderboardFitsOnATabletAndASpannedDualScreen() throws {
+        let leaderboard = AdSize(width: 728, height: 90)
+        #expect(AdSizing.adSize(bidSize: leaderboard, format: .banner, placement: .inlineBanner, layout: try layout("ipad-10"))
+            == CGSize(width: 728, height: 90))
+        #expect(AdSizing.adSize(bidSize: leaderboard, format: .banner, placement: .inlineBanner, layout: try layout("surface-duo", spanned: true))
+            == CGSize(width: 728, height: 90))
+        #expect(AdSizing.adSize(bidSize: leaderboard, format: .banner, placement: .inlineBanner, layout: try layout("surface-duo")).width == 540)
+    }
+
+    @Test func landscapeSafeAreaReducesTheAvailableWidth() throws {
+        // 852 − 2 × 59 = 734 ≥ 728: fits.
+        let size = AdSizing.adSize(bidSize: AdSize(width: 728, height: 90), format: .banner, placement: .inlineBanner,
+                                   layout: try layout("iphone-15-pro", landscape: true))
+        #expect(size == CGSize(width: 728, height: 90))
+    }
+
+    @Test func missingBidSizeUsesFormatDefaults() throws {
+        let phone = try layout("iphone-15-pro")
+        #expect(AdSizing.adSize(bidSize: nil, format: .banner, placement: .inlineBanner, layout: phone) == CGSize(width: 320, height: 50))
+        let video = AdSizing.adSize(bidSize: nil, format: .video, placement: .inFeed, layout: phone)
+        #expect(video.width == 369) // 393 − 2 × 12 feed padding
+        #expect(video.height == 208) // 16:9
+    }
+
+    @Test func zeroOrNegativeBidSizeFallsBackToDefaults() throws {
+        let phone = try layout("iphone-15-pro")
+        #expect(AdSizing.adSize(bidSize: AdSize(width: 0, height: 250), format: .banner, placement: .inlineBanner, layout: phone)
+            == CGSize(width: 320, height: 50))
+        #expect(AdSizing.adSize(bidSize: AdSize(width: -1, height: -1), format: .banner, placement: .inlineBanner, layout: phone)
+            == CGSize(width: 320, height: 50))
+    }
+
+    @Test func fullScreenPlacementsFillTheSafeArea() throws {
+        let phone = try layout("iphone-15-pro")
+        for placement in [Placement.interstitial, .rewarded] {
+            #expect(AdSizing.adSize(bidSize: AdSize(width: 320, height: 480), format: .banner, placement: placement, layout: phone)
+                == CGSize(width: 393, height: 852 - 59 - 34))
+            #expect(AdSizing.fullScreenSlot(in: phone) == CGRect(x: 0, y: 59, width: 393, height: 852 - 59 - 34))
+        }
+        let tv = try layout("google-tv")
+        #expect(AdSizing.adSize(bidSize: AdSize(width: 640, height: 360), format: .video, placement: .ctvInstream, layout: tv)
+            == CGSize(width: 1920, height: 1080))
+    }
+
+    @Test func spannedInterstitialCoversBothScreensAndTheHinge() throws {
+        let size = AdSizing.adSize(bidSize: nil, format: .banner, placement: .interstitial, layout: try layout("surface-duo", spanned: true))
+        #expect(size == CGSize(width: 1114, height: 720 - 24 - 24))
+        let single = AdSizing.adSize(bidSize: nil, format: .banner, placement: .interstitial, layout: try layout("surface-duo"))
+        #expect(single == CGSize(width: 540, height: 720 - 24 - 24))
+    }
+
+    /// The slot a full-screen ad is drawn in, the size it reports (`RenderRequest.adSize`, the placeholder's label) and
+    /// the safe-area rect of the screen in use are one and the same, on every device, orientation and posture.
+    @Test func fullScreenSlotsAreTheSafeAreaRectEverywhere() {
+        for device in DeviceCatalog.all {
+            for landscape in [false, true] {
+                for (folded, spanned) in [(false, false), (true, false), (false, true)] {
+                    let layout = ScreenLayout(device: device, landscape: landscape, folded: folded, spanned: spanned)
+                    let content = layout.contentFrame.size
+                    let insets = layout.safeArea
+                    let safe = CGRect(x: insets.leading, y: insets.top, width: content.width - insets.leading - insets.trailing,
+                                      height: content.height - insets.top - insets.bottom)
+                    let slot = AdSizing.fullScreenSlot(in: layout)
+                    let context = "\(device.id) landscape \(landscape) folded \(folded) spanned \(spanned)"
+                    #expect(slot == safe, "\(context)")
+                    #expect(slot.width > 0 && slot.height > 0, "\(context)")
+                    for placement in Placement.available(on: device) where placement.isFullScreen {
+                        for format in AdFormat.allCases {
+                            #expect(AdSizing.adSize(bidSize: AdSize(width: 320, height: 480), format: format, placement: placement, layout: layout)
+                                == slot.size, "\(context) \(placement.rawValue) \(format)")
+                        }
+                        #expect(AdSizing.slotFrame(placement: placement, adSize: slot.size, layout: layout) == slot, "\(context)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The empty slot's label never sits under a dual-screen hinge: when the slot spans it, the label goes to the part on
+    /// the first screen (slot coordinates).
+    @Test func thePlaceholderLabelAvoidsTheHinge() throws {
+        let spanned = try layout("surface-duo", spanned: true)
+        let slot = AdSizing.fullScreenSlot(in: spanned)
+        #expect(AdSizing.placeholderLabelRect(slot: slot, layout: spanned) == CGRect(x: 0, y: 0, width: 540, height: 672))
+
+        let device = try #require(DeviceCatalog.device(id: "surface-duo"))
+        let landscape = ScreenLayout(device: device, landscape: true, folded: false, spanned: true)
+        let tall = AdSizing.fullScreenSlot(in: landscape)
+        #expect(AdSizing.placeholderLabelRect(slot: tall, layout: landscape) == CGRect(x: 0, y: 0, width: 720, height: 540 - 24))
+
+        for single in [try layout("surface-duo"), try layout("iphone-15-pro")] {
+            let whole = AdSizing.fullScreenSlot(in: single)
+            #expect(AdSizing.placeholderLabelRect(slot: whole, layout: single) == CGRect(origin: .zero, size: whole.size))
+        }
+    }
+
+    @Test func inFeedNativeCardFillsTheColumn() throws {
+        let size = AdSizing.adSize(bidSize: nil, format: .native, placement: .inFeed, layout: try layout("iphone-15-pro"))
+        #expect(size.width == 369)
+        #expect(size.height == (369 / 1.91).rounded() + AdSizing.nativeCardChromeHeight)
+        // Wide screens cap the feed column.
+        let tablet = AdSizing.adSize(bidSize: nil, format: .native, placement: .inFeed, layout: try layout("ipad-pro-11"))
+        #expect(tablet.width == AdSizing.maximumFeedColumnWidth)
+    }
+
+    @Test func tallBannerIsScaledToFitTheHeightInLandscape() throws {
+        // 300×600 half-page on an SE in landscape: 375 pt tall screen.
+        let size = AdSizing.adSize(bidSize: AdSize(width: 300, height: 600), format: .banner, placement: .inlineBanner,
+                                   layout: try layout("iphone-se-3", landscape: true))
+        #expect(size.height <= 375)
+        #expect(abs(size.width / size.height - 0.5) < 0.01)
+    }
+}
