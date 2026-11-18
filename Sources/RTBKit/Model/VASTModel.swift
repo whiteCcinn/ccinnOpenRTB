@@ -61,7 +61,7 @@ public struct VASTMediaFile: Sendable, Hashable {
     public var minBitrate: Int?
     public var maxBitrate: Int?
     public var codec: String?
-    /// `VPAID`, … (unsupported → error 901).
+    /// `VPAID`, … (never run by the simulator: no supported media file, error 403).
     public var apiFramework: String?
     public var scalable: Bool?
     public var maintainAspectRatio: Bool?

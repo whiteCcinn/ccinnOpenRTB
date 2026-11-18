@@ -190,8 +190,9 @@ struct VASTTrackingPlanTests {
 
     // MARK: Errors
 
-    /// Spec scenario "Unsupported media": VPAID only → the Error URLs with `[ERRORCODE]` = 901.
-    @Test func vpaidOnlyFiresErrorURLsWith901() async throws {
+    /// Spec scenario "Unsupported media": VPAID only → the Error URLs with `[ERRORCODE]` = 403 (VAST 4.1 §2.3.6.3: no
+    /// MediaFile this player supports; 901 is a VPAID runtime error, and the simulator never runs VPAID).
+    @Test func vpaidOnlyFiresErrorURLsWith403() async throws {
         let vast = await resolved(VASTSamples.vpaidOnly)
         let ad = try #require(vast.ads.first)
         guard case let .unsupported(code) = VASTMediaSelector.choose(ad.inline.playedLinear?.mediaFiles ?? [], playerWidth: 1280, playerHeight: 720)
@@ -202,7 +203,7 @@ struct VASTTrackingPlanTests {
         let requests = plan(.error(code, adIndex: 0), vast)
         #expect(requests.map(\.template) == ["https://tracker.example/vpaid/error?code=[ERRORCODE]&cb=[CACHEBUSTING]"])
         #expect(requests.map(\.category) == [.error])
-        #expect(requests.map(\.trigger) == ["VAST error 901"])
+        #expect(requests.map(\.trigger) == ["VAST error 403"])
     }
 
     @Test func chainFailureFiresEveryKnownErrorURL() async throws {
@@ -359,7 +360,7 @@ struct VASTTrackingPlanTests {
         let chain = await resolved(F.wrapper(name: "w1", adTagURI: F.dataURL(inner)))
         #expect(plan(.error(.wrapperTimeout, adIndex: nil), chain).map(\.url) == [F.url("w1", "error?code=301"), F.url("w2", "error?code=301")])
         let vpaid = await resolved(VASTSamples.vpaidOnly)
-        #expect(plan(.error(.vpaidError, adIndex: 0), vpaid).map(\.url) == ["https://tracker.example/vpaid/error?code=901&cb=12345678"])
+        #expect(plan(.error(.noSupportedMedia, adIndex: 0), vpaid).map(\.url) == ["https://tracker.example/vpaid/error?code=403&cb=12345678"])
         let noAd = await resolved(VASTSamples.noAd)
         #expect(plan(.error(.noAdsAfterWrapper, adIndex: nil), noAd).map(\.url) == ["https://tracker.example/no-ad/error?code=303&cb=12345678"])
     }

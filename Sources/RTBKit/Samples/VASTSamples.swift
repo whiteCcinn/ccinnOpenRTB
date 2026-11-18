@@ -379,7 +379,8 @@ public enum VASTSamples {
 
     // MARK: - Failures
 
-    /// VAST 3.0 inline ad whose only media file is VPAID JavaScript: the simulator does not run VPAID (error 901).
+    /// VAST 3.0 inline ad whose only media file is VPAID JavaScript: the simulator does not run VPAID, so no media file is
+    /// supported (error 403; 901 is a VPAID runtime error).
     public static let vpaidOnly = """
     <?xml version="1.0" encoding="UTF-8"?>
     <VAST version="3.0">

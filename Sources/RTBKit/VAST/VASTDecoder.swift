@@ -449,16 +449,18 @@ struct VASTDecoder {
                              maintainAspectRatio: booleanAttribute("maintainAspectRatio", of: element, at: path))
     }
 
-    /// Reports InLine media the simulator cannot play: VPAID only (error 901) or nothing AVPlayer supports (error 403).
+    /// Reports InLine media the simulator cannot play (VAST error 403, VAST 4.1 §2.3.6.3), naming the VPAID-only case:
+    /// 901 is a VPAID runtime error, and the simulator never runs VPAID.
     private mutating func checkPlayable(_ files: [VASTMediaFile], at path: String) {
-        let choice = VASTMediaSelector.choose(files, playerWidth: 1280, playerHeight: 720)
-        guard case let .unsupported(code) = choice else { return }
-        if code == .vpaidError {
+        guard case .unsupported = VASTMediaSelector.choose(files, playerWidth: 1280, playerHeight: 720) else { return }
+        if files.allSatisfy({ VASTMediaKind($0) == .vpaid }) {
             report(.warning, "vast.mediaFiles.vpaidOnly",
-                   "Every playable <MediaFile> is VPAID, which the simulator does not run; playback fails with VAST error 901.", path)
+                   "Every <MediaFile> is VPAID, which the simulator does not run; playback fails with VAST error 403 (no supported media file; 901 is a VPAID runtime error).",
+                   path)
         } else {
             report(.warning, "vast.mediaFiles.unplayable",
-                   "No <MediaFile> can be played by AVPlayer (MP4, HLS, QuickTime or audio); playback fails with VAST error 403.", path)
+                   "No <MediaFile> can be played by AVPlayer (progressive MP4, QuickTime or audio, or HLS streaming); playback fails with VAST error 403.",
+                   path)
         }
     }
 

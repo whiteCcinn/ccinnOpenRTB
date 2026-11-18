@@ -22,11 +22,42 @@ struct VASTMediaSelectorTests {
     private let vpaid = VASTMediaFile(url: "https://cdn.example/vpaid.js", delivery: "progressive", type: "application/javascript", width: 1280,
                                       height: 720, apiFramework: "VPAID")
 
-    @Test func progressiveH264BeatsHLSWhichBeatsHEVC() {
+    /// VAST 4.1 §3.9.1 MediaFile `delivery`: "progressive" or "streaming". The player prefers progressive files (H.264
+    /// first, then other codecs it decodes), and uses a streaming file only when it supports the streaming type: HLS
+    /// (`application/x-mpegURL`, `application/vnd.apple.mpegurl`) for AVPlayer.
+    @Test func progressiveBeatsStreamingAndOnlyHLSStreams() {
         let hevc = mp4(1920, 1080, codec: "hvc1.1.6.L93.B0", name: "hevc")
         #expect(chosenURL([webm, hls, hevc, mp4(640, 360)]) == "https://cdn.example/640x360.mp4")
-        #expect(chosenURL([webm, hevc, hls]) == "https://cdn.example/master.m3u8")
-        #expect(chosenURL([webm, hevc]) == "https://cdn.example/hevc.mp4")
+        #expect(chosenURL([webm, hls, hevc]) == "https://cdn.example/hevc.mp4")
+        #expect(chosenURL([webm, hls]) == "https://cdn.example/master.m3u8")
+        let appleHLS = VASTMediaFile(url: "https://cdn.example/apple.m3u8", delivery: "streaming", type: "application/vnd.apple.mpegurl",
+                                     width: 1280, height: 720)
+        #expect(chosenURL([webm, appleHLS]) == "https://cdn.example/apple.m3u8")
+        // A streaming MP4 (an RTMP-style or progressive-only server stream) is not a type AVPlayer streams.
+        let streamedMP4 = VASTMediaFile(url: "https://cdn.example/stream.mp4", delivery: "streaming", type: "video/mp4", width: 1280, height: 720)
+        #expect(VASTMediaSelector.choose([streamedMP4], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
+        #expect(chosenURL([streamedMP4, hls]) == "https://cdn.example/master.m3u8")
+        let streamedAudio = VASTMediaFile(url: "https://cdn.example/radio.mp3", delivery: "streaming", type: "audio/mpeg", bitrate: 128)
+        #expect(VASTMediaSelector.choose([streamedAudio], playerWidth: 0, playerHeight: 0, audioOnly: true) == .unsupported(.noSupportedMedia))
+    }
+
+    /// `MediaFile@width` / `@height` are pixels (VAST 4.1 §3.9.1: "the native width/height of the video file, in pixels").
+    /// The player's size is in points, so it is compared at the device's scale: a 393×221 pt player on a 3× phone needs
+    /// 1179×663 px.
+    @Test func sizesAreComparedInPixelsAtTheDeviceScale() {
+        let files = [mp4(640, 360), mp4(1280, 720), mp4(1920, 1080)]
+        func chosen(_ width: Double, _ height: Double, scale: Double) -> String? {
+            if case let .play(file) = VASTMediaSelector.choose(files, playerWidth: width, playerHeight: height, scale: scale) { return file.url }
+            return nil
+        }
+        #expect(chosen(393, 221, scale: 3) == "https://cdn.example/1280x720.mp4")
+        #expect(chosen(393, 221, scale: 1) == "https://cdn.example/640x360.mp4")
+        #expect(chosen(1920, 1080, scale: 2) == "https://cdn.example/1920x1080.mp4")
+        // An unusable scale counts as 1; an unusable size is unknown (the largest file).
+        #expect(chosen(393, 221, scale: .nan) == "https://cdn.example/640x360.mp4")
+        #expect(chosen(393, 221, scale: -2) == "https://cdn.example/640x360.mp4")
+        #expect(chosen(.infinity, 221, scale: 3) == "https://cdn.example/1920x1080.mp4")
+        #expect(chosen(1e300, 1e300, scale: 3) == "https://cdn.example/1920x1080.mp4")
     }
 
     @Test func smallestFileCoveringThePlayerElseTheLargest() {
@@ -51,11 +82,14 @@ struct VASTMediaSelectorTests {
         #expect(chosenURL([low, high, ranged]) == "https://cdn.example/ranged.mp4")
     }
 
-    @Test func vpaidOnlyIs901AndNothingPlayableIs403() {
-        #expect(VASTMediaSelector.choose([vpaid], playerWidth: 1280, playerHeight: 720) == .unsupported(.vpaidError))
+    /// VAST 4.1 §2.3.6.3: 403 "Couldn't find MediaFile that is supported by this media player, based on the attributes of
+    /// the MediaFile element"; 901 is "General VPAID error", a failure while running a VPAID unit. A player that does not
+    /// run VPAID never starts one, so VPAID-only media is 403.
+    @Test func vpaidOnlyIs403NotTheVPAIDRuntimeError() {
+        #expect(VASTMediaSelector.choose([vpaid], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
         var flashVPAID = vpaid
         flashVPAID.type = "application/x-shockwave-flash"
-        #expect(VASTMediaSelector.choose([vpaid, flashVPAID], playerWidth: 1280, playerHeight: 720) == .unsupported(.vpaidError))
+        #expect(VASTMediaSelector.choose([vpaid, flashVPAID], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
         #expect(VASTMediaSelector.choose([webm], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
         #expect(VASTMediaSelector.choose([vpaid, webm], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
         #expect(VASTMediaSelector.choose([], playerWidth: 1280, playerHeight: 720) == .unsupported(.noSupportedMedia))
@@ -65,7 +99,7 @@ struct VASTMediaSelectorTests {
     @Test func javaScriptMediaWithoutAPIFrameworkCountsAsVPAID() {
         var script = vpaid
         script.apiFramework = nil
-        #expect(VASTMediaSelector.choose([script], playerWidth: 1, playerHeight: 1) == .unsupported(.vpaidError))
+        #expect(VASTMediaSelector.choose([script], playerWidth: 1, playerHeight: 1) == .unsupported(.noSupportedMedia))
     }
 
     @Test func audio() {
@@ -118,6 +152,6 @@ struct VASTMediaSelectorTests {
             return
         }
         #expect(VASTMediaSelector.choose(vpaidInline.playedLinear?.mediaFiles ?? [], playerWidth: 1280, playerHeight: 720)
-            == .unsupported(.vpaidError))
+            == .unsupported(.noSupportedMedia))
     }
 }

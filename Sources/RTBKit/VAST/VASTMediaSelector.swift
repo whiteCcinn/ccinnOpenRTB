@@ -3,42 +3,61 @@ import Foundation
 /// Picks the media file to play (design D6). Owner: kit-vast.
 ///
 /// What AVPlayer can play decides eligibility; preference follows what a mobile/CTV player does:
-/// 1. Video: progressive MP4 with H.264 (or no codec given), then HLS, then other playable files (HEVC MP4, QuickTime,
-///    3GPP), then audio-only files. WebM, Ogg, Flash, DASH and VPAID (JavaScript) are never chosen.
-/// 2. Within the best tier, the smallest file that covers the player (width and height ≥ the player's); when none does, the
-///    largest. Equal sizes: the higher bitrate (`bitrate`, else `maxBitrate`, else `minBitrate`), then document order.
-/// 3. Audio (`audioOnly`): `audio/*` files (and audio HLS), highest bitrate first.
+/// 1. Delivery (VAST 4.1 §3.9.1 `delivery`): progressive files first — MP4 with H.264 (or no codec given), then other
+///    codecs AVPlayer decodes (HEVC MP4, QuickTime, 3GPP) — then streaming, which AVPlayer supports only as HLS
+///    (`application/x-mpegURL`, `application/vnd.apple.mpegurl`), then audio-only files. A streaming file of any other
+///    type (an RTMP-style MP4 or audio stream, DASH), WebM, Ogg, Flash and VPAID (JavaScript) are never chosen.
+/// 2. Within the best tier, the smallest file that covers the player (width and height ≥ the player's, in pixels); when
+///    none does, the largest. Equal sizes: the higher bitrate (`bitrate`, else `maxBitrate`, else `minBitrate`), then
+///    document order.
+/// 3. Audio (`audioOnly`): progressive `audio/*` files, then audio HLS, highest bitrate first.
 ///
-/// Nothing eligible: `.unsupported(.vpaidError)` (901) when every file is VPAID, otherwise `.unsupported(.noSupportedMedia)`
-/// (403).
+/// Nothing eligible: `.unsupported(.noSupportedMedia)` (403, VAST 4.1 §2.3.6.3: no MediaFile "supported by this media
+/// player, based on the attributes of the MediaFile element"), VPAID-only media included: 901 is "General VPAID error", a
+/// failure of a VPAID unit that runs, and the simulator never runs one.
 public enum VASTMediaSelector {
     public enum Choice: Sendable, Hashable {
         case play(VASTMediaFile)
         case unsupported(VASTErrorCode)
     }
 
-    /// `playerWidth` / `playerHeight` are the player's size in the same unit as the `MediaFile` attributes (pixels); a
-    /// non-positive size means unknown and picks the largest file.
+    /// `playerWidth` / `playerHeight` are the player's size in PIXELS, the unit of `MediaFile@width` / `@height` (VAST 4.1
+    /// §3.9.1); a non-positive size means unknown and picks the largest file. A host with a size in points uses
+    /// `choose(_:playerWidth:playerHeight:scale:audioOnly:)`.
     public static func choose(_ files: [VASTMediaFile], playerWidth: Int, playerHeight: Int, audioOnly: Bool = false) -> Choice {
         var candidates: [Candidate] = []
-        var allVPAID = !files.isEmpty
         for (index, file) in files.enumerated() {
-            let kind = VASTMediaKind(file)
-            if kind != .vpaid { allVPAID = false }
-            if let tier = tier(of: kind, audioOnly: audioOnly) {
+            if let tier = tier(of: VASTMediaKind(file), audioOnly: audioOnly) {
                 candidates.append(Candidate(file: file, tier: tier, index: index))
             }
         }
-        guard let bestTier = candidates.map(\.tier).min() else {
-            return .unsupported(allVPAID ? .vpaidError : .noSupportedMedia)
-        }
+        guard let bestTier = candidates.map(\.tier).min() else { return .unsupported(.noSupportedMedia) }
         let best = candidates.filter { $0.tier == bestTier }
         let chosen = audioOnly ? best.max(by: Candidate.lowerBitrate) : bestFit(best, playerWidth: playerWidth, playerHeight: playerHeight)
         guard let chosen else { return .unsupported(.noSupportedMedia) }
         return .play(chosen.file)
     }
 
+    /// The player's size in POINTS and the device's `scale` (pixels per point, `DeviceProfile.scale`): the files are
+    /// compared with `width × scale` by `height × scale` pixels. A non-finite or non-positive `scale` counts as 1; a
+    /// non-finite or non-positive size is unknown (the largest file).
+    public static func choose(_ files: [VASTMediaFile], playerWidth: Double, playerHeight: Double, scale: Double,
+                              audioOnly: Bool = false) -> Choice {
+        let factor = scale.isFinite && scale > 0 ? scale : 1
+        return choose(files, playerWidth: pixels(playerWidth, factor), playerHeight: pixels(playerHeight, factor), audioOnly: audioOnly)
+    }
+
     // MARK: - Private
+
+    /// Points × scale, rounded; 0 (unknown) when not finite or not positive. Capped far beyond any screen, so the
+    /// conversion to `Int` cannot trap.
+    private static func pixels(_ points: Double, _ scale: Double) -> Int {
+        let value = (points * scale).rounded()
+        guard value.isFinite, value > 0 else { return 0 }
+        return Int(min(value, maximumPixels))
+    }
+
+    private static let maximumPixels = 1_000_000.0
 
     private struct Candidate {
         var file: VASTMediaFile
@@ -61,13 +80,13 @@ public enum VASTMediaSelector {
             switch kind {
             case .audio: return 0
             case .hls(audio: true): return 1
-            default: return nil
+            case .progressiveH264, .progressiveOther, .hls(audio: false), .vpaid, .unsupported: return nil
             }
         }
         switch kind {
         case .progressiveH264: return 0
-        case .hls: return 1
-        case .progressiveOther: return 2
+        case .progressiveOther: return 1
+        case .hls: return 2
         case .audio: return 3
         case .vpaid, .unsupported: return nil
         }
@@ -97,36 +116,48 @@ enum VASTMediaKind: Hashable {
     case progressiveOther
     case hls(audio: Bool)
     case audio
-    /// VPAID (any `apiFramework` naming VPAID, or JavaScript media): error 901.
+    /// VPAID (any `apiFramework` naming VPAID, or JavaScript media): never run by the simulator, so never chosen (403).
     case vpaid
     case unsupported
 
+    /// `delivery="streaming"` is playable only as HLS; every other streamed type (an RTMP-style MP4, an audio stream,
+    /// DASH) is unsupported. A missing or `progressive` delivery leaves the type to decide.
     init(_ file: VASTMediaFile) {
+        let kind = Self.kind(byType: file)
+        guard file.delivery?.trimmingCharacters(in: .whitespaces).lowercased() == "streaming" else {
+            self = kind
+            return
+        }
+        switch kind {
+        case .hls, .vpaid: self = kind
+        case .progressiveH264, .progressiveOther, .audio, .unsupported: self = .unsupported
+        }
+    }
+
+    private static func kind(byType file: VASTMediaFile) -> VASTMediaKind {
         if let api = file.apiFramework?.lowercased(), api.contains("vpaid") {
-            self = .vpaid
-            return
+            return .vpaid
         }
-        guard Self.isPlayableScheme(file.url) else {
-            self = .unsupported
-            return
+        guard isPlayableScheme(file.url) else {
+            return .unsupported
         }
-        let type = Self.normalizedType(file.type) ?? Self.inferredType(fromURL: file.url)
+        let type = normalizedType(file.type) ?? inferredType(fromURL: file.url)
         switch type {
         case "video/mp4", "video/x-m4v", "video/m4v":
-            self = Self.codecKind(file.codec)
+            return codecKind(file.codec)
         case "video/quicktime", "video/3gpp", "video/3gpp2":
-            self = Self.codecKind(file.codec) == .unsupported ? .unsupported : .progressiveOther
+            return codecKind(file.codec) == .unsupported ? .unsupported : .progressiveOther
         case "application/x-mpegurl", "application/vnd.apple.mpegurl", "video/mpegurl", "video/x-mpegurl":
-            self = .hls(audio: false)
+            return .hls(audio: false)
         case "audio/mpegurl", "audio/x-mpegurl":
-            self = .hls(audio: true)
+            return .hls(audio: true)
         case "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/x-aac", "audio/mpeg", "audio/mp3", "audio/x-mp3",
              "audio/wav", "audio/x-wav", "audio/wave", "audio/aiff", "audio/x-aiff":
-            self = .audio
+            return .audio
         case "application/javascript", "application/x-javascript", "text/javascript":
-            self = .vpaid
+            return .vpaid
         default:
-            self = .unsupported
+            return .unsupported
         }
     }
 

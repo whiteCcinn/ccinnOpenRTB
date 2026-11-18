@@ -44,7 +44,7 @@ public enum SampleLibrary {
         video("ortb26-vast30-wrapper-chain", "OpenRTB 2.6 · VAST 3.0 wrapper chain (data: URLs)", vast: VASTSamples.wrapperChain30,
               protocol: 6),
         video("ortb26-vast41-ctv-pod", "OpenRTB 2.6 · CTV pod, VAST 4.1 (2 ads)", vast: VASTSamples.pod41, protocol: 11, ctv: true),
-        video("ortb26-vast30-vpaid-only", "OpenRTB 2.6 · VAST 3.0 VPAID only (error 901)", vast: VASTSamples.vpaidOnly, protocol: 3),
+        video("ortb26-vast30-vpaid-only", "OpenRTB 2.6 · VAST 3.0 VPAID only (error 403)", vast: VASTSamples.vpaidOnly, protocol: 3),
         Sample(id: "ortb26-audio-vast40", title: "OpenRTB 2.6 · Audio, VAST 4.0", group: Group.video,
                response: VideoSamples.response(id: "ortb26-audio-vast40", markupType: 3, vast: VASTSamples.audio40, protocol: 7, size: nil),
                request: VideoSamples.audioRequest(id: "ortb26-audio-vast40")),

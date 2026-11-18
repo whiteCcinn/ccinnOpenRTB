@@ -175,7 +175,8 @@ struct RealModeAcceptanceTests {
             }
         }
         if sampleID.contains("vpaid") {
-            #expect(trackers.contains { $0.category == .error && $0.url.contains("code=901") }, "\(listing)")
+            // VAST 4.1 §2.3.6.3: no supported MediaFile is 403 (901 is a VPAID runtime error; VPAID never runs here).
+            #expect(trackers.contains { $0.category == .error && $0.url.contains("code=403") }, "\(listing)")
         }
 
         let audit = NetworkAudit(entries: entries, prepared: prepared)
