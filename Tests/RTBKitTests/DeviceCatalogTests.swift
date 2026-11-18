@@ -191,6 +191,31 @@ struct DeviceCatalogTests {
         #expect(duo.userAgent.contains("(Linux; Android 12; Surface Duo Build/"))
     }
 
+    /// Android phones and foldables at their November 2026 release: Pixels on Android 17 (the November Pixel update),
+    /// the Galaxy S24 and Z Fold5 on One UI 9.0, which is Android 17 (stable from October 2026).
+    @Test func androidPhonesAndFoldablesRunTheirCurrentRelease() throws {
+        for (id, model, build) in [("pixel-8", "Pixel 8", "CP4A.261105.040.A1"), ("pixel-fold", "Pixel Fold", "CP4A.261105.040.A1")] {
+            let pixel = try #require(DeviceCatalog.device(id: id))
+            #expect(pixel.osVersion == "17", "\(id)")
+            #expect(pixel.userAgent.contains("(Linux; Android 17; \(model) Build/\(build); wv)"), "\(id)")
+        }
+        for (id, model) in [("galaxy-s24", "SM-S921B"), ("galaxy-z-fold", "SM-F946B")] {
+            let galaxy = try #require(DeviceCatalog.device(id: id))
+            #expect(galaxy.osVersion == "17", "\(id)")
+            #expect(galaxy.userAgent.contains("(Linux; Android 17; \(model) Build/"), "\(id)")
+        }
+    }
+
+    /// Every Android WebView UA names the device's own Android version, and the WebView build Google Play ships to all of
+    /// them (it updates apart from the OS): Chrome 157 stable, November 2026.
+    @Test func androidWebViewUserAgentsAgreeWithTheDevice() {
+        for device in devices where device.os == "Android" && device.family != .ctv {
+            #expect(device.userAgent.contains("(Linux; Android \(device.osVersion); \(device.model) Build/"), "\(device.id)")
+            #expect(device.userAgent.contains("; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.50 Mobile Safari/537.36"),
+                    "\(device.id)")
+        }
+    }
+
     @Test func iPhoneDuoIsABookFoldableWithAnIPhoneCoverScreen() throws {
         let duo = try #require(DeviceCatalog.device(id: "iphone-duo"))
         #expect(duo.family == .foldable && duo.make == "Apple")

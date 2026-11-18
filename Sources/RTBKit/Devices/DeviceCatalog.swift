@@ -119,24 +119,33 @@ public enum DeviceCatalog {
 
     // MARK: - Android
 
-    /// Android System WebView UA as sent by in-app ad SDKs.
+    /// Android System WebView updates through Google Play apart from the OS, so every Android device runs the current
+    /// stable build: 157.0.8103.50 (Chrome Releases, 9 Nov 2026).
+    private static let androidWebViewVersion = "157.0.8103.50"
+
+    /// Android System WebView UA as sent by in-app ad SDKs (WebView keeps the model and build that Chrome's reduced UA drops).
     private static func androidWebViewUserAgent(android: String, model: String, build: String) -> String {
         "Mozilla/5.0 (Linux; Android \(android); \(model) Build/\(build); wv) AppleWebKit/537.36 (KHTML, like Gecko) "
-            + "Version/4.0 Chrome/129.0.6668.81 Mobile Safari/537.36"
+            + "Version/4.0 Chrome/\(androidWebViewVersion) Mobile Safari/537.36"
     }
 
     private static let androidPhones: [DeviceProfile] = [
         // Google spec: 1080×2400 px at 420 dpi (2.625) → 411.4×914.3 dp; Chrome reports 412×915. Centred punch-hole camera.
         // Corner radius, status bar 28 dp and gesture bar 24 dp: approx.
+        // OS: Android 17, the November 2026 Pixel update, build CP4A.261105.040.A1 (10 Nov 2026, droid-life.com/2026/11/10/
+        // 2026-november-pixel-update-download-install-release; Pixels get each release first).
         DeviceProfile(id: "pixel-8", name: "Pixel 8", family: .androidPhone, screenWidth: 412, screenHeight: 915, scale: 2.625,
-                      cornerRadius: 34, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, os: "Android", osVersion: "14",
+                      cornerRadius: 34, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, os: "Android", osVersion: "17",
                       make: "Google", model: "Pixel 8",
-                      userAgent: androidWebViewUserAgent(android: "14", model: "Pixel 8", build: "AP2A.240905.003"), openRTBDeviceType: 4),
+                      userAgent: androidWebViewUserAgent(android: "17", model: "Pixel 8", build: "CP4A.261105.040.A1"), openRTBDeviceType: 4),
         // Samsung spec: 1080×2340 px; default density 480 dpi (3.0) → 360×780 dp. Centred punch-hole. Corner radius, insets approx.
+        // OS: One UI 9.0 = Android 17, stable from October 2026 (Korea first, US carrier models from about 12 Oct; sammobile.com
+        // "Galaxy S24 stable One UI 9.0 (Android 17) update is now live"). Samsung follows Google by a few months. The UA's
+        // build is the Android 17 base tag (CP2A.260605.016, AOSP 17.0.0); Samsung's own firmware ids are not in the UA.
         DeviceProfile(id: "galaxy-s24", name: "Galaxy S24", family: .androidPhone, screenWidth: 360, screenHeight: 780, scale: 3,
-                      cornerRadius: 30, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, os: "Android", osVersion: "14",
+                      cornerRadius: 30, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, os: "Android", osVersion: "17",
                       make: "Samsung", model: "SM-S921B",
-                      userAgent: androidWebViewUserAgent(android: "14", model: "SM-S921B", build: "UP1A.231005.007"), openRTBDeviceType: 4),
+                      userAgent: androidWebViewUserAgent(android: "17", model: "SM-S921B", build: "CP2A.260605.016"), openRTBDeviceType: 4),
     ]
 
     // MARK: - Foldables
@@ -156,16 +165,19 @@ public enum DeviceCatalog {
         // Galaxy Z Fold5 (Samsung spec): main 2176×1812 px (1812 wide when held as a book), cover 2316×904 px. In points at
         // 2.625: main 690×829, cover 344×882. Approx.: the density is an assumption (Chrome's Fold cover preset is 344×882).
         // Main screen: under-display camera (no visible cutout); cover screen: centred punch-hole.
+        // OS: One UI 9.0 = Android 17, its last major update: Korea 14 Oct, Europe 19 Oct (F946BXXU7HZIJ), US 23 Oct 2026
+        // (sammobile.com "Galaxy Z Fold 5, Z Flip 5 get stable One UI 9.0 (Android 17) update"). UA build as for the S24.
         DeviceProfile(id: "galaxy-z-fold", name: "Galaxy Z Fold5", family: .foldable, screenWidth: 690, screenHeight: 829, scale: 2.625,
                       cornerRadius: 22, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, foldedWidth: 344, foldedHeight: 882,
-                      os: "Android", osVersion: "14", make: "Samsung", model: "SM-F946B",
-                      userAgent: androidWebViewUserAgent(android: "14", model: "SM-F946B", build: "UP1A.231005.007"), openRTBDeviceType: 4),
+                      os: "Android", osVersion: "17", make: "Samsung", model: "SM-F946B",
+                      userAgent: androidWebViewUserAgent(android: "17", model: "SM-F946B", build: "CP2A.260605.016"), openRTBDeviceType: 4),
         // Pixel Fold (Google spec): inner 2208×1840 px (wider than tall when unfolded, hinge vertical), outer 2092×1080 px.
         // In points at 2.625: inner 841×701, cover 411×797. Approx.: density assumed. The inner camera sits in the bezel.
+        // OS: Android 17, the November 2026 Pixel update, build CP4A.261105.040.A1 (same build as the Pixel 8; droid-life.com).
         DeviceProfile(id: "pixel-fold", name: "Pixel Fold", family: .foldable, screenWidth: 841, screenHeight: 701, scale: 2.625,
                       cornerRadius: 24, safeArea: DeviceInsets(top: 28, bottom: 24), cutout: .punchHole, foldedWidth: 411, foldedHeight: 797,
-                      os: "Android", osVersion: "14", make: "Google", model: "Pixel Fold",
-                      userAgent: androidWebViewUserAgent(android: "14", model: "Pixel Fold", build: "AP2A.240905.003"), openRTBDeviceType: 4),
+                      os: "Android", osVersion: "17", make: "Google", model: "Pixel Fold",
+                      userAgent: androidWebViewUserAgent(android: "17", model: "Pixel Fold", build: "CP4A.261105.040.A1"), openRTBDeviceType: 4),
     ]
 
     // MARK: - Dual-screen
