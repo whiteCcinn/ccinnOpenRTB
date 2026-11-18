@@ -186,6 +186,24 @@ struct AdSessionTests {
         #expect(harness.categories == [.win, .loss])
     }
 
+    /// AdTech review: `${AUCTION_LOSS}` was 102 on the win, the billing notice and every tracker of a WON bid. It is 0
+    /// ("Bid Won", OpenRTB 2.5 List 5.25 / 2.6 §5.25) everywhere but the loss notice, and the reason picked for Lose
+    /// applies to that lurl only, never to a later render.
+    @Test func theLossReasonIsZeroOnAWonBidAndOnlyOnTheLossNotice() async {
+        let harness = SessionHarness(Fixtures.input([display]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        #expect(harness.recorder.contexts.map(\.lossReason) == [0, 0], "won and rendered of a won bid")
+        harness.session.lose(LossReason.reason(code: 100))
+        #expect(harness.recorder.contexts.last?.lossReason == 100)
+        await harness.renderAndWait()
+        harness.session.report(.rendered)
+        #expect(harness.recorder.contexts.suffix(2).map(\.lossReason) == [0, 0], "a later render is a won bid again")
+        #expect(LossReason.reason(code: 0) == .bidWon)
+        #expect(!LossReason.lossReasons.contains(.bidWon), "Lose never offers 'bid won'")
+    }
+
     @Test func lifecycleGateKeepsWinAndLossApart() {
         var gate = LifecycleGate()
         #expect(gate.admit(.won) == .admitted)

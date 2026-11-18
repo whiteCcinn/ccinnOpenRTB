@@ -68,16 +68,19 @@ struct MacroSettings: Equatable, Sendable {
     /// - Parameters:
     ///   - transactionID: `[TRANSACTIONID]` of the current render when the request has none.
     ///   - playhead: `[ADPLAYHEAD]` of the ad the event belongs to.
+    ///   - lossCode: the reason of the loss notice being sent; every other URL of the bid carries 0, "Bid Won".
     func context(candidate: AdCandidate, input: ParsedInput, device: DeviceProfile, playerSize: CGSize, transactionID: String,
-                 playhead: Double? = nil) -> MacroContext {
+                 playhead: Double? = nil, lossCode: Int = LossReason.bidWon.code) -> MacroContext {
         func defaults(_ request: BidRequestSummary?) -> MacroContext {
             MacroContext.simulatorDefaults(candidate: candidate, request: request, device: device, playerWidth: Self.points(playerSize.width),
                                            playerHeight: Self.points(playerSize.height), responseID: input.responseID,
                                            responseBidID: input.bidResponseID)
         }
         let base = defaults(input.request)
-        return overlay(on: base, withoutRequest: input.request == nil ? base : defaults(nil), candidate: candidate,
-                       transactionID: transactionID, playhead: playhead)
+        var context = overlay(on: base, withoutRequest: input.request == nil ? base : defaults(nil), candidate: candidate,
+                              transactionID: transactionID, playhead: playhead)
+        context.lossReason = lossCode
+        return context
     }
 
     /// The panel over the kit's defaults (pure).
@@ -132,7 +135,7 @@ struct MacroSettings: Equatable, Sendable {
         if let clearing { context.price = clearing }
         if !encrypted.isEmpty { context.encryptedPrice = encrypted }
         context.marketBidRatio = clearing.flatMap { clearing in candidate.price > 0 ? clearing / candidate.price : nil } ?? base.marketBidRatio
-        context.lossReason = lossReason.code
+        context.lossReason = LossReason.bidWon.code
         context.minimumToWin = Self.price(minimumToWin) ?? base.minimumToWin
         context.adPlayhead = playhead ?? base.adPlayhead
         if deterministic {
@@ -171,8 +174,14 @@ struct LossReason: Hashable, Identifiable, Sendable {
     var id: Int { code }
 
     static let lostToHigherBid = LossReason(code: 102, title: "Lost to higher bid")
+    /// 0, "Bid Won": `${AUCTION_LOSS}` on every URL of a won bid (OpenRTB 2.5 List 5.25).
+    static let bidWon = LossReason(code: 0, title: "Bid won")
+
+    /// The reasons the Lose control and the Macros panel offer (every code but "Bid won").
+    static var lossReasons: [LossReason] { all.filter { $0 != bidWon } }
 
     static let all: [LossReason] = [
+        bidWon,
         LossReason(code: 1, title: "Internal error"),
         LossReason(code: 2, title: "Impression opportunity expired"),
         LossReason(code: 3, title: "Invalid bid response"),

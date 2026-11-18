@@ -27,7 +27,7 @@ struct MacrosPane: View {
                 TextField("Seat ID", text: $session.macros.seatID, prompt: Text(session.selectedCandidate?.seat ?? "the bid's seat"))
                     .help("${AUCTION_SEAT_ID}")
                 Picker("Loss reason", selection: $session.macros.lossReason) {
-                    ForEach(LossReason.all) { reason in
+                    ForEach(LossReason.lossReasons) { reason in
                         Text("\(reason.code) · \(reason.title)").tag(reason)
                     }
                 }

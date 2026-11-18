@@ -195,7 +195,7 @@ private struct LoseMenu: View {
 
     var body: some View {
         Menu {
-            ForEach(LossReason.all) { reason in
+            ForEach(LossReason.lossReasons) { reason in
                 Button("\(reason.code) · \(reason.title)") { session.lose(reason) }
             }
         } label: {

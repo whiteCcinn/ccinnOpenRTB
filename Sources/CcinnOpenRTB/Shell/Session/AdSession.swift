@@ -414,7 +414,7 @@ final class AdSession: AdRenderingHost {
     func lose(_ reason: LossReason) {
         guard let candidate = selectedCandidate else { return }
         startGeneration()
-        macros.lossReason = reason
+        macros.lossReason = reason  // the picker's default for the next Lose; the context carries it on this lurl only
         prepared = PreparedAd(candidate: candidate, native: nil, vast: nil, markupEntryID: nil, markupFromWinNotice: false)
         phase = .lost(reason)
         renderInput = parsed
@@ -661,7 +661,9 @@ final class AdSession: AdRenderingHost {
                 log(event.label, origin: origin, outcome: .contradictsOutcome)
             case .admitted:
                 if index == 0 { firstFired = true }
-                let context = macroContext(for: prepared.candidate, input: input ?? renderInput, adIndex: Self.adIndex(of: event))
+                let lossReason = if case let .loss(reason) = event { reason } else { LossReason.bidWon.code }
+                let context = macroContext(for: prepared.candidate, input: input ?? renderInput, adIndex: Self.adIndex(of: event),
+                                           lossReason: lossReason)
                 let options = TrackingPlanOptions(exchangeSendsWinNotice: macros.exchangeSendsWinNotice && !prepared.markupFromWinNotice,
                                                   markupRequestID: prepared.markupEntryID)
                 let requests = services.trackingRequests(event, prepared.candidate, prepared.native, vast(for: event), context, options)
@@ -714,9 +716,9 @@ final class AdSession: AdRenderingHost {
         monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened)
     }
 
-    func macroContext(for candidate: AdCandidate, input: ParsedInput, adIndex: Int?) -> MacroContext {
+    func macroContext(for candidate: AdCandidate, input: ParsedInput, adIndex: Int?, lossReason: Int = LossReason.bidWon.code) -> MacroContext {
         macros.context(candidate: candidate, input: input, device: device, playerSize: adSize, transactionID: transactionID,
-                       playhead: playback[adIndex ?? currentAdIndex]?.playhead)
+                       playhead: playback[adIndex ?? currentAdIndex]?.playhead, lossCode: lossReason)
     }
 
     // MARK: Viewability timers
