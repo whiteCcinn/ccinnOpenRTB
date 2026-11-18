@@ -10,30 +10,63 @@ public enum JSONValue: Sendable, Hashable {
     case array([JSONValue])
     case object([String: JSONValue])
 
-    public struct ParseError: Error, CustomStringConvertible {
-        public let description: String
+    public struct ParseError: Error, CustomStringConvertible, Sendable, Hashable {
+        public enum Reason: Sendable, Hashable {
+            /// Not well-formed JSON; `detail` says why.
+            case malformed(detail: String)
+            /// An array or object opens deeper than `JSONValue.maxNestingDepth`; `pointer` (RFC 6901) locates the first.
+            case nestedTooDeeply(pointer: String)
+        }
+
+        public let reason: Reason
+
+        public init(reason: Reason) {
+            self.reason = reason
+        }
+
+        public var description: String {
+            switch reason {
+            case let .malformed(detail): "Invalid JSON: \(detail)"
+            case .nestedTooDeeply: "Nested too deeply: more than \(JSONValue.maxNestingDepth) levels of arrays and objects."
+            }
+        }
     }
 
     // MARK: Parsing
 
-    public static func parse(_ text: String) throws -> JSONValue {
+    /// The most arrays and objects open at once that `parse` accepts. JSONSerialization recurses once per level and
+    /// overflows a 512 KB thread stack (Swift concurrency's cooperative pool) at roughly 500 nested objects, so deeper
+    /// input is rejected before Foundation sees it.
+    public static let maxNestingDepth = 128
+
+    public static func parse(_ text: String) throws(ParseError) -> JSONValue {
         try parse(Data(text.utf8))
     }
 
-    public static func parse(_ data: Data) throws -> JSONValue {
+    public static func parse(_ data: Data) throws(ParseError) -> JSONValue {
+        switch data.withUnsafeBytes({ JSONNestingScan.run($0, limit: maxNestingDepth) }) {
+        case .acceptable:
+            break
+        case let .nestedTooDeeply(pointer):
+            throw ParseError(reason: .nestedTooDeeply(pointer: pointer))
+        case let .nulByte(offset):
+            throw ParseError(reason: .malformed(detail: "a NUL byte at offset \(offset); control characters must be escaped."))
+        }
         let object: Any
         do {
             object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
         } catch {
-            throw ParseError(description: "Invalid JSON: \(error.localizedDescription)")
+            throw ParseError(reason: .malformed(detail: error.localizedDescription))
         }
         return try convert(object, depth: 0)
     }
 
-    private static let maxDepth = 128
-
-    private static func convert(_ object: Any, depth: Int) throws -> JSONValue {
-        guard depth <= maxDepth else { throw ParseError(description: "JSON nested deeper than \(maxDepth) levels") }
+    /// `depth` is the number of arrays and objects around `object`. `JSONNestingScan` already bounds it; the guard
+    /// keeps this recursion bounded on its own.
+    private static func convert(_ object: Any, depth: Int) throws(ParseError) -> JSONValue {
+        guard depth <= maxNestingDepth else {
+            throw ParseError(reason: .malformed(detail: "nested deeper than \(maxNestingDepth) levels."))
+        }
         switch object {
         case is NSNull:
             return .null
@@ -52,14 +85,17 @@ public enum JSONValue: Sendable, Hashable {
         case let string as String:
             return .string(string)
         case let array as [Any]:
-            return .array(try array.map { try convert($0, depth: depth + 1) })
+            var values: [JSONValue] = []
+            values.reserveCapacity(array.count)
+            for element in array { values.append(try convert(element, depth: depth + 1)) }
+            return .array(values)
         case let dictionary as [String: Any]:
             var result: [String: JSONValue] = [:]
             result.reserveCapacity(dictionary.count)
             for (key, value) in dictionary { result[key] = try convert(value, depth: depth + 1) }
             return .object(result)
         default:
-            throw ParseError(description: "Unsupported JSON value")
+            throw ParseError(reason: .malformed(detail: "an unsupported value."))
         }
     }
 

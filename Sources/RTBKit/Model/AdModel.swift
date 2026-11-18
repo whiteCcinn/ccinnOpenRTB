@@ -215,11 +215,12 @@ public struct BidRequestSummary: Sendable, Hashable {
         public var nativeHints: NativeRequestHints?
         /// OpenRTB 2.6 `imp.qty.multiplier` (DOOH impressions per ad play), the `${AUCTION_MULTIPLIER}` value.
         public var quantityMultiplier: Double?
-        /// OpenRTB 3.0 `item.qty`.
-        public var itemQuantity: Int?
+        /// OpenRTB 3.0 `item.qty` or `item.qtyflt` (only one may be present), 1 when neither is (`qty`'s default); the
+        /// `${OPENRTB_ITEM_QTY}` value. `nil` for an OpenRTB 2.x impression.
+        public var itemQuantity: Double?
 
         public init(id: String, formats: Set<AdFormat>, size: AdSize? = nil, secure: Bool = false, nativeHints: NativeRequestHints? = nil,
-                    quantityMultiplier: Double? = nil, itemQuantity: Int? = nil) {
+                    quantityMultiplier: Double? = nil, itemQuantity: Double? = nil) {
             self.id = id
             self.formats = formats
             self.size = size
@@ -266,12 +267,23 @@ public struct BidRequestSummary: Sendable, Hashable {
     public var contentURL: String?
     /// `app.storeurl`.
     public var storeURL: String?
+    /// `regs.gdpr` (2.6, AdCOM), else `regs.ext.gdpr` (2.5); `nil` when omitted ("omission indicates unknown").
+    public var gdprApplies: Bool?
+    /// `regs.coppa`; `nil` when omitted.
+    public var coppa: Bool?
+    /// `regs.us_privacy` (2.6), else `regs.ext.us_privacy` (the IAB US Privacy extension).
+    public var usPrivacy: String?
+    /// `regs.gpp`, the Global Privacy Platform string.
+    public var gppString: String?
+    /// `regs.gpp_sid`, the GPP sections that apply, in request order.
+    public var gppSectionIDs: [Int]
 
     public init(id: String, impressions: [Impression], currencies: [String] = [], deviceType: Int? = nil, domain: String? = nil,
                 pageURL: String? = nil, appBundle: String? = nil, ifa: String? = nil, limitAdTracking: Bool? = nil,
                 transactionID: String? = nil, deviceIP: String? = nil, deviceUserAgent: String? = nil, latitude: Double? = nil,
                 longitude: Double? = nil, ifaType: String? = nil, gdprConsent: String? = nil, blockedCategories: [String] = [],
-                contentID: String? = nil, contentURL: String? = nil, storeURL: String? = nil) {
+                contentID: String? = nil, contentURL: String? = nil, storeURL: String? = nil, gdprApplies: Bool? = nil, coppa: Bool? = nil,
+                usPrivacy: String? = nil, gppString: String? = nil, gppSectionIDs: [Int] = []) {
         self.id = id
         self.impressions = impressions
         self.currencies = currencies
@@ -292,6 +304,11 @@ public struct BidRequestSummary: Sendable, Hashable {
         self.contentID = contentID
         self.contentURL = contentURL
         self.storeURL = storeURL
+        self.gdprApplies = gdprApplies
+        self.coppa = coppa
+        self.usPrivacy = usPrivacy
+        self.gppString = gppString
+        self.gppSectionIDs = gppSectionIDs
     }
 }
 
