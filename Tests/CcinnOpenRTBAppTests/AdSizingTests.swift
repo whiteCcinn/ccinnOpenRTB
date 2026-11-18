@@ -100,6 +100,24 @@ struct AdSizingTests {
         }
     }
 
+    /// The empty slot's label never sits under a dual-screen hinge: when the slot spans it, the label goes to the part on
+    /// the first screen (slot coordinates).
+    @Test func thePlaceholderLabelAvoidsTheHinge() throws {
+        let spanned = try layout("surface-duo", spanned: true)
+        let slot = AdSizing.fullScreenSlot(in: spanned)
+        #expect(AdSizing.placeholderLabelRect(slot: slot, layout: spanned) == CGRect(x: 0, y: 0, width: 540, height: 672))
+
+        let device = try #require(DeviceCatalog.device(id: "surface-duo"))
+        let landscape = ScreenLayout(device: device, landscape: true, folded: false, spanned: true)
+        let tall = AdSizing.fullScreenSlot(in: landscape)
+        #expect(AdSizing.placeholderLabelRect(slot: tall, layout: landscape) == CGRect(x: 0, y: 0, width: 720, height: 540 - 24))
+
+        for single in [try layout("surface-duo"), try layout("iphone-15-pro")] {
+            let whole = AdSizing.fullScreenSlot(in: single)
+            #expect(AdSizing.placeholderLabelRect(slot: whole, layout: single) == CGRect(origin: .zero, size: whole.size))
+        }
+    }
+
     @Test func inFeedNativeCardFillsTheColumn() throws {
         let size = AdSizing.adSize(bidSize: nil, format: .native, placement: .inFeed, layout: try layout("iphone-15-pro"))
         #expect(size.width == 369)

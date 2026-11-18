@@ -6,6 +6,8 @@ import SwiftUI
 struct AdSlotView: View {
     let session: AdSession
     let size: CGSize
+    /// Where the placeholder's label goes inside the slot (`nil`: centred); see `AdSizing.placeholderLabelRect`.
+    var labelArea: CGRect?
 
     var body: some View {
         if let request = session.renderRequest {
@@ -14,7 +16,8 @@ struct AdSlotView: View {
                 .clipped()
                 .id(request.generation)
         } else {
-            AdSlotPlaceholder(phase: session.phase, format: session.slotCandidate?.format, size: size, compact: size.height < 90)
+            AdSlotPlaceholder(phase: session.phase, format: session.slotCandidate?.format, size: size, compact: size.height < 90,
+                              labelArea: labelArea)
                 .frame(width: size.width, height: size.height)
         }
     }
@@ -26,16 +29,22 @@ struct AdSlotPlaceholder: View {
     /// The size the slot is drawn at (its label).
     let size: CGSize
     let compact: Bool
+    /// The part of the slot the label is centred in (`nil`: the whole slot).
+    var labelArea: CGRect?
 
     var body: some View {
-        ZStack {
+        let area = labelArea ?? CGRect(origin: .zero, size: size)
+        ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(tint.opacity(0.07))
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .strokeBorder(tint.opacity(0.55), style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
             content
                 .padding(compact ? 4 : 12)
+                .frame(width: max(0, area.width), height: max(0, area.height))
+                .offset(x: area.minX, y: area.minY)
         }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
     @ViewBuilder private var content: some View {

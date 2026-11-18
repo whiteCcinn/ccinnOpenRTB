@@ -71,6 +71,17 @@ enum AdSizing {
         placement.isFullScreen ? fullScreenSlot(in: layout) : CGRect(origin: .zero, size: adSize)
     }
 
+    /// Where the empty slot's label goes, in slot coordinates: the whole slot, or the slot's part on the first screen when
+    /// a dual-screen hinge crosses it (the simulator's own text never sits under the hinge; a creative's may).
+    static func placeholderLabelRect(slot: CGRect, layout: ScreenLayout) -> CGRect {
+        let whole = CGRect(origin: .zero, size: slot.size)
+        let onCanvas = slot.offsetBy(dx: layout.contentFrame.minX, dy: layout.contentFrame.minY)
+        guard let hinge = layout.hinge, onCanvas.intersects(hinge), let first = layout.panes.first else { return whole }
+        let onFirst = onCanvas.intersection(first.frame)
+        guard !onFirst.isNull, onFirst.width >= 1, onFirst.height >= 1 else { return whole }
+        return onFirst.offsetBy(dx: -onCanvas.minX, dy: -onCanvas.minY)
+    }
+
     /// Scales `size` down (never up) to fit `bounds`, keeping its aspect ratio; whole points, at least 1×1.
     static func fit(_ size: CGSize, within bounds: CGSize) -> CGSize {
         guard size.width > 0, size.height > 0 else { return CGSize(width: 1, height: 1) }

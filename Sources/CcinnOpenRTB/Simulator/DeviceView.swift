@@ -268,8 +268,8 @@ private struct FullScreenPlacement<Background: View>: View {
                     .offset(x: slot.minX, y: slot.minY)
             } else {
                 Color.black.opacity(television ? 0.45 : 0.35)
-                // Legible on the dimmed app.
-                AdSlotView(session: session, size: slot.size)
+                // Legible on the dimmed app, and never under a hinge.
+                AdSlotView(session: session, size: slot.size, labelArea: AdSizing.placeholderLabelRect(slot: slot, layout: layout))
                     .frame(width: slot.width, height: slot.height)
                     .offset(x: slot.minX, y: slot.minY)
                     .environment(\.colorScheme, .dark)
