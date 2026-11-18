@@ -262,6 +262,7 @@ final class AdSession: AdRenderingHost {
     /// in-feed, video full screen): it changes when the suggestion for the selected bid changes, or when the placement
     /// cannot show the format. A placement the user picked stands while they edit the same kind of bid.
     private func candidateSelectionChanged() {
+        defer { refreshRealModeConfirmation() }
         if let candidate = selectedCandidate {
             let suggested = Placement.suggested(for: candidate.format, size: candidate.size, on: device)
             let kindChanged = suggested != lastSuggestedPlacement
@@ -298,8 +299,8 @@ final class AdSession: AdRenderingHost {
             guard let self, !Task.isCancelled, revision == self.inputRevision, candidate?.id == self.selectedCandidateID else { return }
             self.inspectedNative = native
             self.inspectedVAST = vast
-            // A confirmation shown before the markup was inspected completes its host list (same confirmation).
-            if self.realModeConfirmation != nil { self.realModeConfirmation?.summary = self.realModeSummary().summary }
+            // A confirmation shown before the markup was inspected is re-prompted with the complete host list.
+            self.refreshRealModeConfirmation()
         }
     }
 
@@ -364,6 +365,7 @@ final class AdSession: AdRenderingHost {
     }
 
     private func geometryChanged() {
+        defer { refreshRealModeConfirmation() }
         if placement == .inFeed { feedOffset = feedGeometry.clamped(feedOffset) }
         visibilityInputsChanged()
     }
@@ -433,6 +435,7 @@ final class AdSession: AdRenderingHost {
         viewability = ViewabilityController(kind: .none)
         lastReportedFraction = nil
         transactionID = UUID().uuidString
+        refreshRealModeConfirmation()
     }
 
     private func prepare(_ original: AdCandidate, input: ParsedInput, token: Int) async {
@@ -813,31 +816,59 @@ final class AdSession: AdRenderingHost {
 
     // MARK: Tracking mode
 
-    /// Asks to switch to Real mode: shows the confirmation listing the selected bid's tracker hosts. The mode does not
-    /// change until `confirmRealMode(_:)`.
+    /// Asks to switch to Real mode: shows the confirmation listing the tracker hosts of the bid it would act on. The mode
+    /// does not change until `confirmRealMode(_:)`.
     func requestRealMode() {
         guard monitor.mode != .real else { return }
-        let (bidLabel, summary) = realModeSummary()
-        realModeConfirmation = RealModeConfirmation(bidLabel: bidLabel, summary: summary)
+        realModeConfirmation = RealModeConfirmation(target: realModeTarget())
     }
 
-    /// The tracker hosts of the bid on the device, else of the selected bid (its inspected Native / VAST markup).
-    private func realModeSummary() -> (bidLabel: String?, summary: TrackerHosts.Summary) {
-        let candidate = prepared?.candidate ?? selectedCandidate
-        let native = prepared?.native ?? (candidate?.id == selectedCandidateID ? inspectedNative : nil)
-        let documents = (prepared?.vast == nil && candidate?.id == selectedCandidateID) ? [inspectedVAST].compactMap { $0 } : []
-        let summary = TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: documents, resolved: prepared?.vast)
-        return (candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") }, summary)
+    /// The bid Real mode is confirmed for: the one on the device while it is the selected bid, else the selected bid.
+    private var realModeCandidate: AdCandidate? {
+        if let prepared, prepared.candidate.id == selectedCandidateID { return prepared.candidate }
+        return selectedCandidate
     }
 
-    /// Enters Real mode, only with the confirmation currently shown.
+    /// The snapshot a confirmation shows and acts on.
+    private func realModeTarget() -> RealModeTarget {
+        let candidate = realModeCandidate
+        let onDevice = candidate != nil && candidate?.id == prepared?.candidate.id
+        let native = onDevice ? prepared?.native : (candidate?.id == selectedCandidateID ? inspectedNative : nil)
+        let resolved = onDevice ? prepared?.vast : nil
+        let documents = (resolved == nil && candidate?.id == selectedCandidateID) ? [inspectedVAST].compactMap { $0 } : []
+        let summary = TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: documents, resolved: resolved)
+        return RealModeTarget(candidateID: candidate?.id, bidLabel: candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") },
+                              summary: summary, inputRevision: inputRevision, generation: generation, deviceID: device.id,
+                              placement: placement, landscape: landscape, folded: folded, spanned: spanned)
+    }
+
+    /// A shown confirmation always describes the current target: anything that changed it re-prompts with a new snapshot.
+    private func refreshRealModeConfirmation() {
+        guard let shown = realModeConfirmation else { return }
+        let target = realModeTarget()
+        guard target != shown.target else { return }
+        realModeConfirmation = RealModeConfirmation(target: target)
+        log("Real mode: what would be confirmed changed; confirm the new list", origin: "mode", outcome: .ignored("re-prompted"))
+    }
+
+    /// Enters Real mode, only with the confirmation currently shown and only if it still describes the current target.
+    /// The ad of another bid on the device is removed (nothing unlisted can send); a bid waiting for its win notice to
+    /// deliver the markup is rendered now — exactly the confirmed one.
     func confirmRealMode(_ confirmation: RealModeConfirmation) {
         guard realModeConfirmation?.id == confirmation.id else { return }
+        guard confirmation.target == realModeTarget() else {
+            refreshRealModeConfirmation()
+            return
+        }
         realModeConfirmation = nil
+        let anotherBidOnTheDevice = prepared.map { $0.candidate.id != confirmation.target.candidateID } ?? false
         monitor.mode = .real
         log("Real mode on: trackers are sent", origin: "mode", outcome: .fired(requests: 0))
-        // The user switched to fetch the markup the win notice delivers: do it now.
-        if case .needsRealMode = phase { render() }
+        if anotherBidOnTheDevice {
+            reset()
+        } else if case .needsRealMode = phase {
+            render()
+        }
     }
 
     func cancelRealMode() {
@@ -870,10 +901,27 @@ enum BannerPosition: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// The Real-mode confirmation: the hosts trackers would go to.
+/// The confirmation before Real mode: an immutable snapshot of what the user is shown and what confirming acts on.
 struct RealModeConfirmation: Identifiable, Equatable, Sendable {
     let id = UUID()
+    let target: RealModeTarget
+    var bidLabel: String? { target.bidLabel }
+    var summary: TrackerHosts.Summary { target.summary }
+}
+
+/// What a Real-mode confirmation covers: the bid (its label and exact host list), the render generation, the device and
+/// placement. Confirming acts on exactly this; anything that differs re-prompts (safety review).
+struct RealModeTarget: Equatable, Sendable {
+    var candidateID: String?
     var bidLabel: String?
     var summary: TrackerHosts.Summary
+    var inputRevision: Int
+    var generation: Int
+    var deviceID: String
+    var placement: Placement
+    var landscape: Bool
+    var folded: Bool
+    var spanned: Bool
 }
 
 /// One line of the renderer console, numbered in arrival order.

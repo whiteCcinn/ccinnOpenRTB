@@ -439,8 +439,8 @@ struct AdSessionTests {
         #expect(harness.session.realModeConfirmation != nil)
     }
 
-    /// The confirmation must not under-report: asked for right after a paste, it completes its host list when the bid's
-    /// markup has been inspected (and stays the same confirmation).
+    /// The confirmation must not under-report: asked for right after a paste, it is re-prompted with the complete host
+    /// list when the bid's markup has been inspected; the earlier one (fewer hosts) can no longer be confirmed.
     @Test func theConfirmationCompletesItsHostListWhenTheInspectionFinishes() async throws {
         let harness = SessionHarness(Fixtures.input([video]))
         await harness.paste()
@@ -448,10 +448,69 @@ struct AdSessionTests {
         let shown = try #require(harness.session.realModeConfirmation)
         for _ in 0..<500 where harness.session.inspectedVAST == nil { try await Task.sleep(for: .milliseconds(1)) }
         let completed = try #require(harness.session.realModeConfirmation)
-        #expect(completed.id == shown.id)
         #expect(completed.summary.hosts.map(\.name).contains("imp.vast.example"))
-        harness.session.confirmRealMode(shown)
+        if completed.id != shown.id {
+            harness.session.confirmRealMode(shown)
+            #expect(harness.session.mode == .simulated, "a list the user did not see the end of is never confirmed")
+        }
+        harness.session.confirmRealMode(completed)
         #expect(harness.session.mode == .real)
+    }
+
+    /// Safety review: the confirmation is an immutable snapshot (the bid, its hosts, the render generation, the device
+    /// and placement) and confirming acts on exactly that. Render bid A (markup from its win notice, so it waits for Real
+    /// mode), select bid B: the sheet lists B, never A; confirming leaves A's win notice unsent and removes A.
+    @Test func theConfirmationListsTheBidItWillActOn() async throws {
+        let a = Fixtures.candidate(.none, id: "0.0", winURL: "https://win.a.example/w")
+        var b = Fixtures.candidate(.html("<p>b</p>"), id: "0.1", winURL: "https://win.b.example/w")
+        b.billingURL = "https://bill.b.example/b"
+        let harness = SessionHarness(Fixtures.input([a, b]))
+        await harness.paste()
+        harness.session.selectedCandidateID = "0.0"
+        await harness.renderAndWait()
+        guard case .needsRealMode = harness.session.phase else {
+            Issue.record("A waits for its win notice: \(harness.session.phase)")
+            return
+        }
+        harness.session.selectedCandidateID = "0.1"
+        harness.session.requestRealMode()
+        let shown = try #require(harness.session.realModeConfirmation)
+        #expect(shown.bidLabel == "bid bid-0.1 · seat seat-a")
+        #expect(!shown.summary.hosts.map(\.name).contains("win.a.example"), "\(shown.summary.hosts.map(\.name))")
+        harness.session.confirmRealMode(shown)
+        await harness.waitUntilSettled()
+        #expect(harness.session.mode == .real)
+        #expect(harness.session.phase == .idle, "the ad of another bid is removed, not rendered behind the user's back")
+        #expect(!harness.transport.requests.contains { $0.url.host == "win.a.example" })
+    }
+
+    /// Anything that changes what would be confirmed while the sheet is open — another bid, device, placement or posture,
+    /// a new render — re-prompts with a new snapshot; confirming the old one does nothing.
+    @Test func changingTheBidDeviceOrPlacementWhileTheSheetIsOpenReprompts() async throws {
+        let a = Fixtures.candidate(.html("<p>a</p>"), id: "0.0")
+        let b = Fixtures.candidate(.html("<p>b</p>"), id: "0.1", winURL: "https://win.b.example/w")
+        let changes: [(String, @MainActor (AdSession) throws -> Void)] = [
+            ("bid", { $0.selectedCandidateID = "0.1" }),
+            ("device", { $0.device = try #require(DeviceCatalog.device(id: "galaxy-s24")) }),
+            ("placement", { $0.placement = .interstitial }),
+            ("orientation", { $0.landscape = true }),
+            ("render", { $0.render() }),
+        ]
+        for (name, change) in changes {
+            let harness = SessionHarness(Fixtures.input([a, b]))
+            await harness.paste()
+            harness.session.selectedCandidateID = "0.0"
+            harness.session.requestRealMode()
+            let shown = try #require(harness.session.realModeConfirmation)
+            try change(harness.session)
+            await harness.waitUntilSettled()
+            let current = try #require(harness.session.realModeConfirmation, "\(name): the sheet stays up")
+            #expect(current.id != shown.id, "\(name): re-prompted")
+            harness.session.confirmRealMode(shown)
+            #expect(harness.session.mode == .simulated, "\(name): the old snapshot is refused")
+            harness.session.confirmRealMode(current)
+            #expect(harness.session.mode == .real, "\(name): the current one is accepted")
+        }
     }
 
     @Test func realModeSendsTrackersWithTheDeviceUserAgent() async throws {
