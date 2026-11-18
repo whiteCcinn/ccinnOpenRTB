@@ -1160,3 +1160,31 @@ struct AdSessionTests {
         #expect(harness.transport.requests.filter { $0.url.host == "win.dsp.example" }.count == 1)
     }
 }
+
+/// Kit review: event labels and index checks number ads from 1; an index at the end of the integer range (a renderer bug
+/// or a forged message) is reported, never a trap.
+@MainActor
+@Suite("Out-of-range event indices")
+struct OutOfRangeEventIndexTests {
+    @Test func labelsNeverOverflow() {
+        let events: [AdLifecycleEvent] = [
+            .video(.start, adIndex: .max), .videoViewability(.viewable, adIndex: .max), .videoClick(adIndex: .max),
+            .companionView(adIndex: .max, companionIndex: .max), .companionClick(adIndex: .max, companionIndex: .max),
+            .iconView(adIndex: .max, iconIndex: .max), .iconClick(adIndex: .max, iconIndex: .max), .error(.linearError, adIndex: .max),
+        ]
+        for event in events { #expect(!event.label.isEmpty) }
+    }
+
+    @Test func theSessionIgnoresThemWithoutTrapping() async {
+        let video = Fixtures.candidate(.vast(.xml("<VAST/>")), format: .video)
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        await harness.renderAndWait()
+        for event: AdLifecycleEvent in [.video(.start, adIndex: .max), .companionView(adIndex: .max, companionIndex: .max),
+                                         .companionClick(adIndex: 0, companionIndex: .max), .iconView(adIndex: 0, iconIndex: .max)] {
+            harness.session.fireManually(event)
+        }
+        harness.session.navigate(to: "https://landing.example/", trigger: "companion", source: "test", vastAdIndex: .max)
+        #expect(harness.session.lifecycleLog.count >= 5)
+    }
+}

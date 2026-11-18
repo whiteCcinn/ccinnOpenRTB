@@ -669,14 +669,14 @@ final class AdSession: AdRenderingHost {
         guard let adIndex = Self.adIndex(of: event) else { return nil }
         guard adIndex >= 0 else { return "negative ad index" }
         guard let vast = vast(for: event) else { return nil }
-        guard let ad = vast.ads[safe: adIndex] else { return "no ad \(adIndex + 1) in the VAST (\(vast.ads.count))" }
+        guard let ad = vast.ads[safe: adIndex] else { return "no ad \(adIndex &+ 1) in the VAST (\(vast.ads.count))" }
         switch event {
         case let .companionView(_, companionIndex), let .companionClick(_, companionIndex):
             let companions = ad.inline.creatives.reduce(0) { $0 + $1.companions.count }
-            guard companionIndex >= 0, companionIndex < companions else { return "no companion \(companionIndex + 1) in ad \(adIndex + 1)" }
+            guard companionIndex >= 0, companionIndex < companions else { return "no companion \(companionIndex &+ 1) in ad \(adIndex &+ 1)" }
             return nil
         case let .iconView(_, iconIndex), let .iconClick(_, iconIndex):
-            guard ad.icons.indices.contains(iconIndex) else { return "no icon \(iconIndex &+ 1) in ad \(adIndex + 1)" }
+            guard ad.icons.indices.contains(iconIndex) else { return "no icon \(iconIndex &+ 1) in ad \(adIndex &+ 1)" }
             return nil
         default:
             return nil
@@ -817,7 +817,7 @@ final class AdSession: AdRenderingHost {
     func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
         guard phase == .ready, let prepared else { return }
         guard let vast = prepared.vast, vastAdIndex >= 0, let ad = vast.ads[safe: vastAdIndex] else {
-            log(trigger, origin: "renderer", outcome: .ignored("no ad \(vastAdIndex + 1) in the bid's VAST"))
+            log(trigger, origin: "renderer", outcome: .ignored("no ad \(vastAdIndex &+ 1) in the bid's VAST"))
             return
         }
         let parent = ad.origin.last.flatMap { vast.chain[safe: $0.hop]?.requestID }
