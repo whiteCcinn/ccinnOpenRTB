@@ -212,6 +212,11 @@ public final class NetworkMonitor {
             entry.delivery = .network
             entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
+            guard DispatchPolicy.Destination(url: url) == .remote else {
+                // data: and ccinn-sample: never touch the network: served in the caller's task, nothing to cancel.
+                return (try await load(stored, permit: permit, userAgent: userAgent, headers: [:], maxBodyBytes: Self.maxContentBytes,
+                                       failOnTruncation: true).get().body, stored.id)
+            }
             let task = startLoad(stored, permit: permit, userAgent: userAgent, maxBodyBytes: Self.maxContentBytes, failOnTruncation: true)
             let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             return (try outcome.get().body, stored.id)
