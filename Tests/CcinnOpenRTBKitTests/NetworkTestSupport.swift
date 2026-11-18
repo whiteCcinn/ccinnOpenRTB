@@ -90,11 +90,18 @@ final class FailingTransport: HTTPTransport {
 }
 
 /// Serves sample assets from small files without generating media.
-struct FakeSamples: SampleMediaProviding {
+///
+/// Owns its temporary directory: it is removed when the last reference goes away (for `makeMonitor`, with the
+/// monitor), so a test needs no cleanup of its own and leaves nothing behind.
+final class FakeSamples: SampleMediaProviding {
     let directory: URL
 
     init() {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-fake-samples-\(UUID().uuidString)")
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: directory)
     }
 
     func fileURL(for asset: SampleAsset) async throws -> URL {
