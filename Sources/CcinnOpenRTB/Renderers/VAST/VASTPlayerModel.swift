@@ -261,7 +261,8 @@ final class VASTPlayerModel {
         }
         guard let opened = url?.trimmingCharacters(in: .whitespacesAndNewlines), !opened.isEmpty else { return }
         let source = items.indices.contains(adIndex) ? items[adIndex].source : configuration.source
-        host?.navigate(to: opened, trigger: "companion creative navigation", source: source + " › Companion \(choice.companionIndex + 1)")
+        host?.navigate(to: opened, trigger: "companion creative navigation", source: source + " › Companion \(choice.companionIndex + 1)",
+                       vastAdIndex: adIndex)
     }
 
     // MARK: Pod

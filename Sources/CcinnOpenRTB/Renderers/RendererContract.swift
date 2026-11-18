@@ -83,6 +83,9 @@ protocol AdRenderingHost: AnyObject {
     func report(_ event: AdLifecycleEvent)
     /// The creative or player wants to open `url` (click-through); the host records it (and opens it only if allowed).
     func navigate(to url: String, trigger: String, source: String)
+    /// A VAST companion's own document (HTML / iframe / script) opened `url`: the URL is in ad `vastAdIndex`'s inline
+    /// document, so the host parents the navigation to the hop that delivered it. The index is untrusted.
+    func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int)
     /// A content fetch through the monitor (images, media, dcourl), recorded as `content`.
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data
     /// Playback state for viewability (VAST and Native video).
@@ -98,6 +101,10 @@ protocol AdRenderingHost: AnyObject {
 
 extension AdRenderingHost {
     var scriptTrackers: [ScriptTracker] { [] }
+
+    func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
+        navigate(to: url, trigger: trigger, source: source)
+    }
 
     func playbackChanged(_ status: PlaybackStatus) {}
 

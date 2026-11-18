@@ -34,6 +34,10 @@ final class RendererHostProxy: AdRenderingHost {
         current?.navigate(to: url, trigger: trigger, source: source)
     }
 
+    func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
+        current?.navigate(to: url, trigger: trigger, source: source, vastAdIndex: vastAdIndex)
+    }
+
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
         guard let session = current else { throw CancellationError() }
         return try await session.fetchContent(url, trigger: trigger, source: source)

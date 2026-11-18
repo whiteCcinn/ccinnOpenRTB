@@ -20,6 +20,8 @@ final class RecordingHost: AdRenderingHost {
     struct Navigation: Equatable {
         var url: String
         var trigger: String
+        /// Set when a VAST companion's own document opened it (`navigate(to:trigger:source:vastAdIndex:)`).
+        var vastAdIndex: Int?
     }
 
     struct NotFound: Error {}
@@ -46,6 +48,10 @@ final class RecordingHost: AdRenderingHost {
     }
 
     func navigate(to url: String, trigger: String, source: String) { navigations.append(Navigation(url: url, trigger: trigger)) }
+
+    func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
+        navigations.append(Navigation(url: url, trigger: trigger, vastAdIndex: vastAdIndex))
+    }
 
     /// Fetch through the monitor (samples, `data:`) instead of `contents`.
     var fetchesThroughMonitor = false

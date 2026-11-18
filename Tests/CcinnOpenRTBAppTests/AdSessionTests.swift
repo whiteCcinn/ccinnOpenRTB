@@ -715,6 +715,10 @@ struct AdSessionTests {
         #expect(host.scriptTrackers == session.scriptTrackers)
         host.navigate(to: "https://landing.example/live", trigger: "mraid.open", source: "creative")
         #expect(harness.monitor.liveEntries.contains { $0.category == .navigation && $0.url == "https://landing.example/live" })
+        // This render has no VAST: a companion navigation reaches the session, which refuses the index.
+        let logged = session.lifecycleLog.count
+        host.navigate(to: "https://landing.example/companion", trigger: "companion creative navigation", source: "VAST", vastAdIndex: 0)
+        #expect(session.lifecycleLog.count == logged + 1)
         #expect(try await host.fetchContent("https://cdn.example/image.png", trigger: "image", source: "Native") == Data("png".utf8))
         host.playbackChanged(status)
         #expect(session.playback[0] == status)
@@ -736,6 +740,9 @@ struct AdSessionTests {
 
         host.report(.closed)
         host.navigate(to: "https://landing.example/stale", trigger: "mraid.open", source: "creative")
+        let logLines = session.lifecycleLog.count
+        host.navigate(to: "https://landing.example/stale-companion", trigger: "companion creative navigation", source: "VAST", vastAdIndex: 0)
+        #expect(session.lifecycleLog.count == logLines)
         await #expect(throws: CancellationError.self) {
             _ = try await host.fetchContent("https://cdn.example/image.png", trigger: "image", source: "Native")
         }
@@ -753,6 +760,27 @@ struct AdSessionTests {
         #expect(session.nativeVideoVAST == nil)
         // The stale proxy's own properties describe its render (same monitor, the device it rendered on): nothing to drop.
         #expect(host.monitor === harness.monitor && host.device == session.device)
+    }
+
+    /// An HTML / iframe / script companion's own navigation is a URL of its ad's inline document: it hangs under the hop
+    /// that delivered that document (here the wrapper chain's second fetch), not under the bid's markup request. An index
+    /// outside the resolved VAST is refused (decisions.md, "Network relationships").
+    @Test func aCompanionsOwnNavigationHangsUnderItsHop() async {
+        let inlineHop = UUID()
+        let ad = ResolvedVASTAd(inline: VASTInline(adSystem: "Acme"), origin: [VASTAdOrigin(hop: 0, ad: 0), VASTAdOrigin(hop: 1, ad: 0)])
+        let resolved = ResolvedVAST(chain: [VASTHop(), VASTHop(url: "https://ads.example/inline.xml", requestID: inlineHop)], ads: [ad])
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.vast(.xml("<VAST/>")), format: .video)]), resolved: resolved)
+        await harness.paste()
+        await harness.renderAndWait()
+        let host: any AdRenderingHost = harness.session.rendererHost
+        host.navigate(to: "https://landing.example/companion", trigger: "companion creative navigation", source: "VAST › Companion 1",
+                      vastAdIndex: 0)
+        let navigations = harness.monitor.liveEntries.filter { $0.category == .navigation }
+        #expect(navigations.map(\.url) == ["https://landing.example/companion"])
+        #expect(navigations.first?.parentID == inlineHop)
+        host.navigate(to: "https://landing.example/other", trigger: "companion creative navigation", source: "VAST", vastAdIndex: 1)
+        host.navigate(to: "https://landing.example/negative", trigger: "companion creative navigation", source: "VAST", vastAdIndex: -1)
+        #expect(harness.monitor.liveEntries.filter { $0.category == .navigation }.count == 1, "indices outside the VAST are refused")
     }
 
     @Test func indicesOutsideTheResolvedVASTNeverReachTheTrackingPlan() async {

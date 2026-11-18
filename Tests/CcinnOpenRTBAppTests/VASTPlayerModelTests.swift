@@ -315,8 +315,8 @@ struct VASTPlayerModelTests {
         let choice = CompanionChoice(companionIndex: 0, companion: companion, resource: .html("<a href='https://adv.example/companion'>x</a>"))
         model.companionClicked(choice, adIndex: 0, url: "https://adv.example/companion")
         #expect(host.events.last == .companionClick(adIndex: 0, companionIndex: 0))
-        #expect(host.navigations == [.init(url: "https://adv.example/companion", trigger: "companion creative navigation")],
-                "exactly one navigation, even to the CompanionClickThrough URL")
+        #expect(host.navigations == [.init(url: "https://adv.example/companion", trigger: "companion creative navigation", vastAdIndex: 0)],
+                "exactly one navigation, even to the CompanionClickThrough URL, under its ad's hop")
         model.companionClicked(choice, adIndex: 0, url: nil)
         #expect(host.navigations.count == 1)
     }

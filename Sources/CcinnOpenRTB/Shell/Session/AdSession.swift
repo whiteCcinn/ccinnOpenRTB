@@ -763,6 +763,19 @@ final class AdSession: AdRenderingHost {
         recordNavigation(url: url, trigger: trigger, source: source, parentID: prepared?.markupEntryID)
     }
 
+    /// A destination a VAST companion's own document opened (HTML / iframe / script companions): its URL is in ad
+    /// `vastAdIndex`'s inline document, so its parent is the hop that delivered that document — the parent of the ad's
+    /// media and companion loads. An index outside the bid's VAST is refused.
+    func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
+        guard phase == .ready, let prepared else { return }
+        guard let vast = prepared.vast, vastAdIndex >= 0, let ad = vast.ads[safe: vastAdIndex] else {
+            log(trigger, origin: "renderer", outcome: .ignored("no ad \(vastAdIndex + 1) in the bid's VAST"))
+            return
+        }
+        let parent = ad.origin.last.flatMap { vast.chain[safe: $0.hop]?.requestID }
+        recordNavigation(url: url, trigger: trigger, source: source, parentID: parent)
+    }
+
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
         try await monitor.fetchContent(url, category: .content, trigger: trigger, source: source, parentID: prepared?.markupEntryID,
                                        userAgent: device.userAgent).data
