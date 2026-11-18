@@ -410,34 +410,79 @@ public struct VASTAdFailure: Sendable, Hashable {
 }
 
 /// An inline ad with every tracker of the wrappers above it merged in (wrapper trackers first, in chain order).
+///
+/// The merged lists are computed views. An ad the resolver produced shares its wrappers' trackers with every other ad
+/// below the same wrapper (one copy per document layer, not per ad), so a wrapper whose response is a large pod costs
+/// memory linear in the input. Reading a list builds it; setting one gives this ad its own copy of every list.
 public struct ResolvedVASTAd: Sendable, Hashable {
     public var inline: VASTInline
     public var sequence: Int?
-    /// Impression URLs of all wrappers and the inline ad.
-    public var impressions: [String]
-    /// Error URLs of all wrappers and the inline ad.
-    public var errors: [String]
-    /// Per inline linear creative: all tracking events (wrappers + inline).
-    public var trackingEvents: [VASTTracking]
-    /// ClickTracking of all wrappers and the inline ad.
-    public var clickTrackings: [String]
-    public var viewableImpression: VASTViewableImpression
-    public var verifications: [VASTVerification]
     /// The documents this ad passed through: outermost wrapper first, the inline ad last.
     public var origin: [VASTAdOrigin]
+    private var trackers: VASTMergedTrackers
+
+    /// Impression URLs of all wrappers and the inline ad.
+    public var impressions: [String] {
+        get { trackers.collect(\.impressions) }
+        set { trackers.modify { $0.impressions = newValue } }
+    }
+
+    /// Error URLs of all wrappers and the inline ad.
+    public var errors: [String] {
+        get { trackers.collect(\.errors) }
+        set { trackers.modify { $0.errors = newValue } }
+    }
+
+    /// Per inline linear creative: all tracking events (wrappers + inline).
+    public var trackingEvents: [VASTTracking] {
+        get { trackers.collect(\.trackingEvents) }
+        set { trackers.modify { $0.trackingEvents = newValue } }
+    }
+
+    /// ClickTracking of all wrappers and the inline ad.
+    public var clickTrackings: [String] {
+        get { trackers.collect(\.clickTrackings) }
+        set { trackers.modify { $0.clickTrackings = newValue } }
+    }
+
+    public var viewableImpression: VASTViewableImpression {
+        get { trackers.viewableImpression }
+        set { trackers.modify { $0.viewableImpression = newValue } }
+    }
+
+    public var verifications: [VASTVerification] {
+        get { trackers.collect(\.verifications) }
+        set { trackers.modify { $0.verifications = newValue } }
+    }
 
     public init(inline: VASTInline, sequence: Int? = nil, impressions: [String] = [], errors: [String] = [], trackingEvents: [VASTTracking] = [],
                 clickTrackings: [String] = [], viewableImpression: VASTViewableImpression = VASTViewableImpression(),
                 verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = []) {
         self.inline = inline
         self.sequence = sequence
-        self.impressions = impressions
-        self.errors = errors
-        self.trackingEvents = trackingEvents
-        self.clickTrackings = clickTrackings
-        self.viewableImpression = viewableImpression
-        self.verifications = verifications
         self.origin = origin
+        trackers = VASTMergedTrackers(lists: VASTTrackerLists(impressions: impressions, errors: errors, trackingEvents: trackingEvents,
+                                                             clickTrackings: clickTrackings, viewableImpression: viewableImpression,
+                                                             verifications: verifications))
+    }
+
+    /// The resolver's ad: `layer` is the inline ad's layer, linked to the wrappers above it.
+    init(inline: VASTInline, sequence: Int?, origin: [VASTAdOrigin], layer: VASTTrackerLayer?) {
+        self.inline = inline
+        self.sequence = sequence
+        self.origin = origin
+        trackers = VASTMergedTrackers(layer: layer)
+    }
+
+    public static func == (lhs: ResolvedVASTAd, rhs: ResolvedVASTAd) -> Bool {
+        lhs.inline == rhs.inline && lhs.sequence == rhs.sequence && lhs.origin == rhs.origin && lhs.trackers.lists == rhs.trackers.lists
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(inline)
+        hasher.combine(sequence)
+        hasher.combine(origin)
+        hasher.combine(trackers.lists)
     }
 }
 
