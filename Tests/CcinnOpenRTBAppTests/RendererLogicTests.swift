@@ -50,12 +50,56 @@ struct HTMLDocumentBuilderTests {
         #expect(document.contains(HTMLDocumentBuilder.dnsPrefetchOff))
     }
 
+    /// A full document keeps its markup; the DNS-prefetch switch goes right after its prolog (doctype, comments), where
+    /// the HTML parser opens the head for it and later merges the creative's own `<html>` and `<head>` into those.
     @Test func keepsAFullDocumentAndOnlyAddsTheDNSSwitch() {
+        let off = HTMLDocumentBuilder.dnsPrefetchOff
         let full = "<!doctype html><HTML lang=en><Head data-x=1><title>x</title></head><body>Ad</body></HTML>"
-        let document = HTMLDocumentBuilder.document(for: full)
-        #expect(document == full.replacingOccurrences(of: "<Head data-x=1>", with: "<Head data-x=1>" + HTMLDocumentBuilder.dnsPrefetchOff))
+        #expect(HTMLDocumentBuilder.document(for: full) == "<!doctype html>" + off + "<HTML lang=en><Head data-x=1><title>x</title></head><body>Ad</body></HTML>")
         let headless = "<html><body><header>h</header></body></html>"
-        #expect(HTMLDocumentBuilder.document(for: headless) == "<html><head>\(HTMLDocumentBuilder.dnsPrefetchOff)</head><body><header>h</header></body></html>")
+        #expect(HTMLDocumentBuilder.document(for: headless) == off + headless)
+    }
+
+    /// Safety review: the switch was placed by a regex, after the first "<head" anywhere — inside a comment, a script's
+    /// string or an attribute value, where it is text and prefetch stays on. It is placed by the parser's own rules now.
+    @Test(arguments: [
+        // A commented-out head before the doctype.
+        ("<!-- <head> --><!DOCTYPE html><html><head><title>t</title></head><body>Ad</body></html>",
+         "<!-- <head> --><!DOCTYPE html>"),
+        // "<head>" inside an attribute value and a script string; no head element at all.
+        (#"<!DOCTYPE html><html><body data-x="<head>"><script>var t = '<head>';</script></body></html>"#, "<!DOCTYPE html>"),
+        // An XML declaration (a bogus comment to the parser), whitespace, a legacy doctype.
+        ("<?xml version=\"1.0\"?>\n<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">\n<html><head></head><body>Ad</body></html>",
+         "<?xml version=\"1.0\"?>\n<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">"),
+        // Abruptly closed comments (<!--> and <!--->) end at once.
+        ("<!--><!---><!DOCTYPE html><html><body>Ad</body></html>", "<!--><!---><!DOCTYPE html>"),
+        // A comment closed with --!> (WHATWG: also ends the comment).
+        ("<!-- a --!><!DOCTYPE html><html></html>", "<!-- a --!><!DOCTYPE html>"),
+    ])
+    func theSwitchFollowsTheDocumentsProlog(markup: String, prolog: String) {
+        let document = HTMLDocumentBuilder.document(for: markup)
+        #expect(document == prolog + HTMLDocumentBuilder.dnsPrefetchOff + markup.dropFirst(prolog.count), "\(document)")
+    }
+
+    /// A fragment whose script merely mentions "<html>" is still a fragment: it gets the wrapper (viewport, margins, switch).
+    @Test func aFragmentThatMentionsHTMLInAScriptIsWrapped() {
+        let fragment = "<div>Ad</div><script>document.title = '<html><head>';</script>"
+        let document = HTMLDocumentBuilder.document(for: fragment)
+        #expect(document.hasPrefix("<!DOCTYPE html>"))
+        #expect(document.contains("<body>\(fragment)</body>"))
+        #expect(HTMLDocumentBuilder.isFullDocument("  \n<!-- c --><html><body>x</body></html>"))
+        #expect(HTMLDocumentBuilder.isFullDocument("<head><title>x</title></head><body>Ad</body>"))
+        #expect(!HTMLDocumentBuilder.isFullDocument("<header>h</header>"))
+        #expect(!HTMLDocumentBuilder.isFullDocument(fragment))
+    }
+
+    /// An unterminated comment or doctype runs to the end of the input: the switch goes first, never into the comment.
+    @Test func anUnterminatedPrologPutsTheSwitchFirst() {
+        for markup in ["<!DOCTYPE html", "<!-- never closed <html><body>Ad</body></html>"] {
+            #expect(HTMLDocumentBuilder.document(for: markup).hasPrefix(HTMLDocumentBuilder.dnsPrefetchOff) ||
+                    !HTMLDocumentBuilder.isFullDocument(markup), "\(markup)")
+        }
+        #expect(HTMLDocumentBuilder.document(for: "<!DOCTYPE html") == HTMLDocumentBuilder.dnsPrefetchOff + "<!DOCTYPE html")
     }
 }
 

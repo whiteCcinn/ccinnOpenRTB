@@ -255,6 +255,26 @@ struct CreativeWebViewTests {
         #expect(server.connectionCount == 0, "the Simulated-mode sandbox let a request out")
     }
 
+    /// Safety review: in WebKit, the DNS-prefetch switch is a meta element of the head — not text in a comment or a
+    /// script — and the document stays in standards mode with its own head content.
+    @Test func theDNSSwitchIsInTheHeadOfTheLoadedDocument() async throws {
+        let adm = """
+        <!-- <head> --><!DOCTYPE html><html lang="en"><head><title>Creative</title></head>
+        <body data-x="<head>"><script>var t = '<head>';</script><div>Ad</div></body></html>
+        """
+        let harness = await load(adm, blocks: true, mraid: false)
+        defer { harness.controller.teardown() }
+        let probe = """
+        var metas = document.querySelectorAll('meta[http-equiv="x-dns-prefetch-control"]');
+        return [metas.length, metas.length ? metas[0].parentElement.tagName : '', document.compatMode, document.title,
+                document.documentElement.lang, document.body.getAttribute('data-x')];
+        """
+        let result = try await harness.evaluate(probe) as? [Any] ?? []
+        #expect(result.count == 6, "\(result)")
+        #expect(result.first as? Int == 1)
+        #expect(result.dropFirst().compactMap { $0 as? String } == ["HEAD", "CSS1Compat", "Creative", "en", "<head>"], "\(result)")
+    }
+
     /// Adversarial: loads no hook reports (preconnect, CSS, fonts, workers, refresh) must still never connect.
     @Test func simulatedModeLetsNothingOutThroughSideChannels() async throws {
         let server = try LoopbackServer()
