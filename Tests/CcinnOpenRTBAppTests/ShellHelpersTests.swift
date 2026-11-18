@@ -268,3 +268,15 @@ struct InspectorTreeTests {
         #expect(InspectorTree.markupSummary(Fixtures.candidate(.none, markupURL: "https://c/m")) == "By reference (display.curl)")
     }
 }
+
+/// The badge says "Rendered" only once the ad rendered (`.rendered`, which fires billing): an ad still loading, or a VAST
+/// ad none of whose media could play (VPAID → 901), is on the device but not rendered.
+@Suite("Phase badge")
+struct PhaseBadgeTests {
+    @Test func renderedOnlyAfterTheAdRendered() {
+        #expect(PhaseBadge.title(for: .ready, rendered: true) == "Rendered")
+        #expect(PhaseBadge.title(for: .ready, rendered: false) == "On the device · not rendered")
+        #expect(PhaseBadge.title(for: .needsRealMode("x"), rendered: false) == "Needs Real mode")
+        #expect(PhaseBadge.title(for: .noBid(reason: 2), rendered: false) == "No bid (nbr 2)")
+    }
+}

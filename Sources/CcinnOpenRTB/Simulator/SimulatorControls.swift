@@ -33,7 +33,7 @@ struct SimulatorControls: View {
                 LoseMenu(session: session)
                 ErrorMenu(session: session)
                 Spacer(minLength: 8)
-                PhaseBadge(phase: session.phase, stale: session.renderIsStale)
+                PhaseBadge(phase: session.phase, rendered: session.hasFired(.rendered), stale: session.renderIsStale)
             }
             .labelStyle(.titleAndIcon)
             .controlSize(.regular)
@@ -257,26 +257,31 @@ private struct ErrorMenu: View {
     ]
 }
 
-/// Where the render is, at a glance.
+/// Where the render is, at a glance. "Rendered" means the ad rendered (`.rendered`, the billing moment), not only that it
+/// is on the device.
 struct PhaseBadge: View {
     let phase: RenderPhase
+    /// The renderer reported `.rendered`.
+    var rendered = false
     var stale = false
 
     var body: some View {
         HStack(spacing: 5) {
             Circle().fill(color).frame(width: 7, height: 7)
-            Text(stale ? "Rendered · selection changed" : title).lineLimit(1)
+            Text(stale ? "On the device · selection changed" : title).lineLimit(1)
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .help(stale ? "The selected bid differs from the one on the device: Render to update" : title)
     }
 
-    private var title: String {
+    private var title: String { Self.title(for: phase, rendered: rendered) }
+
+    nonisolated static func title(for phase: RenderPhase, rendered: Bool) -> String {
         switch phase {
         case .idle: "Idle"
         case let .preparing(message): message
-        case .ready: "Rendered"
+        case .ready: rendered ? "Rendered" : "On the device · not rendered"
         case let .noBid(reason): reason.map { "No bid (nbr \($0))" } ?? "No bid"
         case .needsRealMode: "Needs Real mode"
         case .failed: "Failed"
@@ -289,7 +294,7 @@ struct PhaseBadge: View {
         switch phase {
         case .idle: return .secondary
         case .preparing: return .yellow
-        case .ready: return .green
+        case .ready: return rendered ? .green : .yellow
         case .noBid, .lost: return .gray
         case .needsRealMode: return .orange
         case .failed: return .red
