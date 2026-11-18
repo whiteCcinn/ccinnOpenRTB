@@ -232,9 +232,8 @@ final class VASTPlayerModel {
         items.indices.contains(adIndex) ? items[adIndex].mediaParentID : nil
     }
 
-    /// A companion is on screen: its `creativeView`, once per companion.
-    /// A companion is part of its ad: one shown before the ad's first frame is viewed right after the ad's `creativeView`
-    /// (after the impression), never before it.
+    /// A companion is on screen: its `creativeView`, once per companion. A companion is part of its ad: one shown before
+    /// the ad's first frame is viewed right after the ad's `creativeView` (after the impression), never before it.
     func companionDidAppear(_ choice: CompanionChoice, adIndex: Int) {
         guard !stopped else { return }
         if currentItem?.adIndex == adIndex, !currentAdStarted {
@@ -468,7 +467,7 @@ final class VASTPlayerModel {
         host?.monitor.finishRendererLoad(pending.id, status: status, error: error, mimeType: pending.mimeType)
     }
 
-    /// About 4 Hz while playing (playhead steps of 0.25 s), and at once when play / mute / ad changes.
+    /// The current status at once, unless it is the one reported last (before events, for `[ADPLAYHEAD]`).
     private func reportStatusIfChanged() {
         guard let item = currentItem else { return }
         let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)
@@ -477,6 +476,7 @@ final class VASTPlayerModel {
         host?.playbackChanged(status)
     }
 
+    /// About 4 Hz while playing (playhead steps of 0.25 s), and at once when play / mute / ad changes.
     private func reportStatus(force: Bool) {
         guard let item = currentItem else { return }
         let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)

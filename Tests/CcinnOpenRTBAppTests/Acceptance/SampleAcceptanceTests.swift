@@ -98,6 +98,36 @@ struct SampleAcceptanceTests {
         }
     }
 
+    /// The vast-ads spec's skippable scenario on the built-in VAST 3.0 sample (`skipoffset` 00:00:05), through the session
+    /// and the real player model: skipped at 6 s, `start`, `firstQuartile` and `skip` fire; `midpoint` and `complete` never.
+    @Test func skippingAt6sFiresStartFirstQuartileAndSkipOnly() async throws {
+        let harness = AcceptanceSession(transport: CountingTransport())
+        try await harness.render(#require(SampleLibrary.sample(id: "ortb26-vast30-skippable")))
+        let request = try #require(harness.session.renderRequest)
+        let vast = try #require(request.vast)
+        #expect(vast.ads.first?.inline.creatives.compactMap(\.linear).first?.skipOffset == .seconds(5))
+        let engine = FakeEngine()
+        let model = VASTPlayerModel(vast: vast, configuration: VASTPlayerConfiguration(request: request, role: .ad(audioOnly: false),
+                                                                                       playerSize: request.adSize),
+                                    host: harness.session.rendererHost, engine: engine, chooseMedia: VASTMediaSelector.choose)
+        defer { model.teardown() }
+        model.start()
+        #expect(await Wait.until(timeout: .seconds(60)) { !engine.loaded.isEmpty })
+        engine.send(.ready(duration: 15))
+        engine.tick(from: 0, to: 6, step: 0.25)
+        model.skip()
+        engine.tick(from: 6, to: 15, step: 0.25)
+        engine.send(.ended)
+        await harness.monitor.waitUntilIdle()
+        let triggers = harness.monitor.liveEntries.map(\.trigger)
+        for fired in ["VAST start", "VAST firstQuartile", "VAST skip"] {
+            #expect(triggers.contains(fired), "\(fired) missing: \(triggers)")
+        }
+        for never in ["VAST midpoint", "VAST thirdQuartile", "VAST complete"] {
+            #expect(!triggers.contains(never), "\(never) fired after the skip: \(triggers)")
+        }
+    }
+
     /// VPAID-only VAST is never executed: error 901 for the ad, no billing and no impression.
     @Test func vpaidOnlyReports901AndNeverRenders() async throws {
         let harness = AcceptanceSession(transport: CountingTransport())

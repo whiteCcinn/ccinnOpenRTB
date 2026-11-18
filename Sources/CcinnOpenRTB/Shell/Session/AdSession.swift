@@ -534,11 +534,10 @@ final class AdSession: AdRenderingHost {
     /// Native and VAST markup keep their templates, which the tracking plan expands per tracker.
     private func substituteExchangeMacros(in adm: String, candidate: AdCandidate, input: ParsedInput) -> String {
         let expanded = services.expandMarkup(adm, macroContext(for: candidate, input: input, adIndex: nil))
-        if !expanded.replaced.isEmpty || !expanded.unknown.isEmpty {
-            var message = "adm: the exchange substituted \(Set(expanded.replaced).sorted().joined(separator: ", "))"
-            if !expanded.unknown.isEmpty { message += "; unknown, left as is: \(Set(expanded.unknown).sorted().joined(separator: ", "))" }
-            log(message, origin: "exchange", outcome: .fired(requests: 0))
-        }
+        var notes: [String] = []
+        if !expanded.replaced.isEmpty { notes.append("substituted " + Set(expanded.replaced).sorted().joined(separator: ", ")) }
+        if !expanded.unknown.isEmpty { notes.append("unknown, left as is: " + Set(expanded.unknown).sorted().joined(separator: ", ")) }
+        if !notes.isEmpty { log("adm macros: " + notes.joined(separator: "; "), origin: "exchange", outcome: .fired(requests: 0)) }
         return expanded.url
     }
 
