@@ -253,7 +253,9 @@ struct OpenRTB3Decoder {
         return .none
     }
 
-    /// `display.event[]`.
+    /// `display.event[]`: AdCOM 1.0 Event objects (`type`, `method`, `api`, `url`, `cdata`, `ext`). For method 2
+    /// (JavaScript) `url` is the script's URL. `jstrk` is not an Event field: it belongs to EventSpec, the request object
+    /// listing supported trackers, so it is reported and never read.
     private mutating func events(_ display: JSONObjectReader, secure: Bool) -> [AdcomEvent] {
         var result: [AdcomEvent] = []
         for (_, event) in display.objects("event", log: &log) ?? [] {
@@ -272,16 +274,19 @@ struct OpenRTB3Decoder {
                 log.warning("adcom.event.method.invalid", "Method \(method) is not 1 (image pixel), 2 (JavaScript) or 500+.",
                             at: event.pointer.appending("method"))
             }
-            let url = event.nonBlankString("url", log: &log)
-            let script = url == nil ? event.nonBlankString("jstrk", log: &log) : nil
-            if url == nil, script == nil {
+            if event.has("jstrk") {
+                log.warning("adcom.event.jstrk",
+                            "`jstrk` belongs to AdCOM EventSpec (the request); an Event carries a JavaScript tracker's URL in `url` (method 2). It is ignored.",
+                            at: event.pointer.appending("jstrk"))
+            }
+            guard let url = event.nonBlankString("url", log: &log) else {
                 log.warning("adcom.event.url.missing", "An image or JavaScript event needs `url`; it was skipped.", at: event.pointer.appending("url"))
                 continue
             }
-            if secure, let url, URLRules.isHTTP(url) {
+            if secure, URLRules.isHTTP(url) {
                 ResponseChecks.insecure(url, isTracker: true, at: event.pointer.appending("url"), log: &log)
             }
-            result.append(AdcomEvent(type: type, method: method, url: url, script: script))
+            result.append(AdcomEvent(type: type, method: method, url: url))
         }
         return result
     }

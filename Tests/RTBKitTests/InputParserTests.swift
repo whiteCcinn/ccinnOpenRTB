@@ -417,7 +417,17 @@ struct OpenRTB3Tests {
         #expect(issue("adcom.event.type.invalid", in: input)?.path == "/openrtb/response/seatbid/0/bid/0/media/ad/display/event/0/type")
         #expect(issue("adcom.event.method.invalid", in: input) != nil)
         #expect(issue("adcom.event.incomplete", in: input) != nil)
-        #expect(input.candidates.first?.adcomEvents.last == AdcomEvent(type: 2, method: 2, script: "<script>t()</script>"))
+    }
+
+    /// AdCOM 1.0 Event (a response object) has `type`, `method`, `api`, `url`, `cdata` and `ext`; for method 2
+    /// (JavaScript) `url` is the script's URL. `jstrk` belongs to EventSpec, the request object that says which trackers
+    /// are supported, so an event carrying only `jstrk` has no URL: it is skipped and both mistakes are reported.
+    @Test func adcomEventJavaScriptIsAURLAndJstrkIsNotRead() throws {
+        let json = #"{"openrtb":{"ver":"3.0","domainver":"1.0","response":{"id":"r","seatbid":[{"bid":[{"item":"1","price":1,"media":{"ad":{"id":"a","display":{"adm":"<p/>","event":[{"type":2,"method":2,"url":"https://t.example/t.js"},{"type":2,"method":2,"jstrk":"<script>t()</script>"}]}}}}]}]}}}"#
+        let input = InputParser.parse(json)
+        #expect(input.candidates.first?.adcomEvents == [AdcomEvent(type: 2, method: 2, url: "https://t.example/t.js")])
+        #expect(issue("adcom.event.jstrk", in: input)?.path == "/openrtb/response/seatbid/0/bid/0/media/ad/display/event/1/jstrk")
+        #expect(issue("adcom.event.url.missing", in: input)?.path == "/openrtb/response/seatbid/0/bid/0/media/ad/display/event/1/url")
     }
 
     @Test func mediaMissing() {

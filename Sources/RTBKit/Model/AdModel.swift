@@ -72,8 +72,10 @@ public struct AdcomEvent: Sendable, Hashable {
     public var type: Int
     /// AdCOM event tracking method: 1 image pixel, 2 JavaScript.
     public var method: Int
+    /// The pixel's URL (method 1), or the JavaScript tracker's URL (method 2).
     public var url: String?
-    /// JavaScript tracker markup when `method == 2` and `url` is absent.
+    /// Inline JavaScript tracker markup. AdCOM 1.0 Event has no such field (`jstrk` belongs to the request's EventSpec), so
+    /// the decoder never sets it; it exists for hosts that build events by hand.
     public var script: String?
 
     public init(type: Int, method: Int, url: String? = nil, script: String? = nil) {
