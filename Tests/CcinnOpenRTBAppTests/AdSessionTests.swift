@@ -484,6 +484,22 @@ struct AdSessionTests {
         #expect(!harness.transport.requests.contains { $0.url.host == "win.a.example" })
     }
 
+    /// Safety review: the sheet must list a Native video asset's VAST trackers. Asking for Real mode resolves the video
+    /// tag (content, allowed in Simulated mode) and re-prompts with its hosts.
+    @Test func theConfirmationResolvesANativeVideoTagAndListsItsTrackers() async throws {
+        let native = NativeAd(version: "1.2", assets: [NativeAsset(id: 4, content: .video(vastTag: "https://tags.video.example/vast"))],
+                              link: AdLink(url: "https://landing.example/"))
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.native("{}"), format: .native)]), native: native)
+        await harness.paste()
+        for _ in 0..<500 where harness.session.inspectedNative == nil { try await Task.sleep(for: .milliseconds(1)) }
+        harness.session.requestRealMode()
+        let listed = await Wait.until(timeout: .seconds(5)) {
+            harness.session.realModeConfirmation?.summary.hosts.map(\.name).contains("imp.vast.example") == true
+        }
+        #expect(listed, "\(String(describing: harness.session.realModeConfirmation?.summary))")
+        #expect(harness.recorder.resolutions == [.url("https://tags.video.example/vast")])
+    }
+
     /// Anything that changes what would be confirmed while the sheet is open — another bid, device, placement or posture,
     /// a new render — re-prompts with a new snapshot; confirming the old one does nothing.
     @Test func changingTheBidDeviceOrPlacementWhileTheSheetIsOpenReprompts() async throws {

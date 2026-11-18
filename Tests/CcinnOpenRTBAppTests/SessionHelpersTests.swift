@@ -22,7 +22,45 @@ struct TrackerHostsTests {
                                               "win.dsp.example"])
         #expect(summary.hosts.first { $0.name == "click.example" }?.count == 2)
         #expect(summary.hosts.first { $0.name == "view.adcom.example" }?.kinds == ["impression"])
-        #expect(summary.notes.isEmpty)
+        #expect(summary.notes.contains { $0.contains("the creative's own scripts") }, "scripts may make requests no list can know")
+    }
+
+    /// Safety review: an unquoted `<script src=…>` in a jstracker gave no host and no note. Script markup is tokenised
+    /// as HTML (quoted, unquoted and entity-encoded attribute values; any resource element), and whatever scripts may
+    /// load at run time is said explicitly.
+    @Test func trackerMarkupIsTokenisedAsHTML() {
+        let markup = """
+        <SCRIPT src=https://unquoted.example/t.js async></SCRIPT>
+        <img data-src="https://not-a-src.example/x" src='https://single.example/p.gif?a=1&amp;b=2'>
+        <iframe src="https:&#x2F;&#x2F;entity.example&#47;f.html"></iframe>
+        <script>var u = "src=https://in-script.example/never-parsed";</script>
+        <link rel=preload href=//protocol.example/s.css>
+        """
+        let sources = TrackerHosts.scriptSources(markup)
+        #expect(sources == ["https://unquoted.example/t.js", "https://single.example/p.gif?a=1&b=2", "https://entity.example/f.html",
+                            "//protocol.example/s.css"], "\(sources)")
+        #expect(TrackerHosts.scriptSources("https://bare.example/t.js") == ["https://bare.example/t.js"])
+        #expect(TrackerHosts.scriptSources("<script src=\"unterminated") == [])
+        #expect(TrackerHosts.scriptSources("<img src=>").isEmpty)
+    }
+
+    /// Safety review: a Native video asset's VAST trackers were missing from the sheet. Inline vasttag XML is listed
+    /// from the document; a tag URL from its resolution, or with an explicit note while it is not resolved.
+    @Test func nativeVideoVASTTrackersAreListed() {
+        let candidate = Fixtures.candidate(.native("{}"), format: .native)
+        let xml = "<VAST version=\"3.0\"><Ad><InLine><AdSystem>s</AdSystem><AdTitle>t</AdTitle><Impression>https://imp.video.example/i</Impression>"
+            + "<Creatives></Creatives></InLine></Ad></VAST>"
+        let inline = NativeAd(assets: [NativeAsset(id: 4, content: .video(vastTag: xml))], link: AdLink(url: "https://l.example"))
+        #expect(TrackerHosts.summary(candidate: candidate, native: inline, vastDocuments: [], resolved: nil).hosts.map(\.name)
+            .contains("imp.video.example"))
+
+        let byURL = NativeAd(assets: [NativeAsset(id: 4, content: .video(vastTag: "https://tags.video.example/vast"))], link: AdLink(url: "https://l.example"))
+        let unresolved = TrackerHosts.summary(candidate: candidate, native: byURL, vastDocuments: [], resolved: nil)
+        #expect(unresolved.notes.contains { $0.contains("tags.video.example") }, "\(unresolved.notes)")
+        let resolved = TrackerHosts.summary(candidate: candidate, native: byURL, vastDocuments: [], resolved: nil,
+                                            nativeVideo: Fixtures.vast(ads: 1))
+        #expect(resolved.hosts.map(\.name).contains("imp.vast.example"))
+        #expect(!resolved.notes.contains { $0.contains("tags.video.example") })
     }
 
     @Test func unresolvedVASTTagsAndWinNoticeMarkupAreNoted() {

@@ -114,6 +114,9 @@ final class AdSession: AdRenderingHost {
     @ObservationIgnored private var transactionID = UUID().uuidString
     /// The Native video VAST resolution of the current generation, shared by every caller asking for the same source.
     @ObservationIgnored private var nativeVideoResolution: (source: VASTSource, task: Task<ResolvedVAST, Never>)?
+    /// A Native video tag resolved for the Real-mode confirmation (content, allowed in Simulated mode), so the sheet can
+    /// list its trackers before the ad plays.
+    @ObservationIgnored private var reviewedNativeVideo: (candidateID: String, revision: Int, source: VASTSource, resolved: ResolvedVAST?)?
     @ObservationIgnored private var logSequence = 0
     @ObservationIgnored private var consoleSequence = 0
     /// Set while a device change adjusts the placement (one context change, not two).
@@ -821,6 +824,37 @@ final class AdSession: AdRenderingHost {
     func requestRealMode() {
         guard monitor.mode != .real else { return }
         realModeConfirmation = RealModeConfirmation(target: realModeTarget())
+        reviewNativeVideoIfNeeded()
+    }
+
+    /// The Native ad Real mode would be confirmed for: the one on the device, else the inspected one.
+    private var realModeNative: NativeAd? {
+        let candidate = realModeCandidate
+        if candidate != nil, candidate?.id == prepared?.candidate.id { return prepared?.native }
+        return candidate?.id == selectedCandidateID ? inspectedNative : nil
+    }
+
+    /// Resolves the Native video tag of the bid under review once, then re-prompts with its trackers.
+    private func reviewNativeVideoIfNeeded() {
+        guard realModeConfirmation != nil, let candidateID = realModeCandidate?.id, let native = realModeNative,
+              let source = native.assets.lazy.compactMap(\.vastSource).first, case .url = source else { return }
+        if candidateID == prepared?.candidate.id, nativeVideoVAST != nil { return }
+        if let reviewed = reviewedNativeVideo, reviewed.candidateID == candidateID, reviewed.revision == inputRevision, reviewed.source == source {
+            return
+        }
+        let revision = inputRevision
+        reviewedNativeVideo = (candidateID, revision, source, nil)
+        let parent = candidateID == prepared?.candidate.id ? prepared?.markupEntryID : nil
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidateID) › native video (Real-mode review)",
+                                         rootParentID: parent)
+        let resolve = services.resolveVAST
+        Task { [weak self] in
+            let resolved = await resolve(source, fetcher, parent)
+            guard let self, let pending = self.reviewedNativeVideo, pending.candidateID == candidateID, pending.revision == revision,
+                  pending.source == source else { return }
+            self.reviewedNativeVideo = (candidateID, revision, source, resolved)
+            self.refreshRealModeConfirmation()
+        }
     }
 
     /// The bid Real mode is confirmed for: the one on the device while it is the selected bid, else the selected bid.
@@ -833,10 +867,13 @@ final class AdSession: AdRenderingHost {
     private func realModeTarget() -> RealModeTarget {
         let candidate = realModeCandidate
         let onDevice = candidate != nil && candidate?.id == prepared?.candidate.id
-        let native = onDevice ? prepared?.native : (candidate?.id == selectedCandidateID ? inspectedNative : nil)
+        let native = realModeNative
         let resolved = onDevice ? prepared?.vast : nil
         let documents = (resolved == nil && candidate?.id == selectedCandidateID) ? [inspectedVAST].compactMap { $0 } : []
-        let summary = TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: documents, resolved: resolved)
+        let reviewed = reviewedNativeVideo.flatMap { $0.candidateID == candidate?.id && $0.revision == inputRevision ? $0.resolved : nil }
+        let nativeVideo = (onDevice ? nativeVideoVAST : nil) ?? reviewed
+        let summary = TrackerHosts.summary(candidate: candidate, native: native, vastDocuments: documents, resolved: resolved,
+                                           nativeVideo: nativeVideo)
         return RealModeTarget(candidateID: candidate?.id, bidLabel: candidate.map { "bid \($0.bidID)" + ($0.seat.map { " · seat \($0)" } ?? "") },
                               summary: summary, inputRevision: inputRevision, generation: generation, deviceID: device.id,
                               placement: placement, landscape: landscape, folded: folded, spanned: spanned)
@@ -846,6 +883,7 @@ final class AdSession: AdRenderingHost {
     private func refreshRealModeConfirmation() {
         guard let shown = realModeConfirmation else { return }
         let target = realModeTarget()
+        defer { reviewNativeVideoIfNeeded() }
         guard target != shown.target else { return }
         realModeConfirmation = RealModeConfirmation(target: target)
         log("Real mode: what would be confirmed changed; confirm the new list", origin: "mode", outcome: .ignored("re-prompted"))

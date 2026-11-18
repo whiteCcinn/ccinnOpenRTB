@@ -26,16 +26,38 @@ enum TrackerHosts {
         var url: String
     }
 
-    static func summary(candidate: AdCandidate?, native: NativeAd?, vastDocuments: [VASTDocument], resolved: ResolvedVAST?) -> Summary {
+    /// The note for requests no list can know in advance: what scripts and creatives load at run time.
+    static let scriptsNote = "Plus requests the creative's own scripts may make: script trackers and HTML creatives load what their code decides at run time, which cannot be listed in advance."
+
+    static func summary(candidate: AdCandidate?, native: NativeAd?, vastDocuments: [VASTDocument], resolved: ResolvedVAST?,
+                        nativeVideo: ResolvedVAST? = nil) -> Summary {
         guard let candidate else { return Summary(hosts: [], notes: ["No bid is selected."]) }
         var templates = auctionTemplates(candidate)
-        if let native { templates += nativeTemplates(native) }
+        var notes: [String] = []
+        if let native {
+            templates += nativeTemplates(native)
+            // The video asset's VAST: its resolution, else the inline document, else a note.
+            if let nativeVideo {
+                templates += resolvedTemplates(nativeVideo)
+            } else if let source = native.assets.lazy.compactMap(\.vastSource).first {
+                switch source {
+                case let .xml(xml):
+                    if let document = VASTParser.parse(xml).document {
+                        templates += documentTemplates(document)
+                        if hasWrapper(document) {
+                            notes.append("Trackers in the Native video's VAST wrappers are fetched when the video plays and are not listed yet.")
+                        }
+                    }
+                case let .url(url):
+                    notes.append("The Native video's VAST tag at \(URLText.host(url) ?? url) is being fetched; its trackers are listed once it is resolved.")
+                }
+            }
+        }
         if let resolved {
             templates += resolvedTemplates(resolved)
         } else {
             for document in vastDocuments { templates += documentTemplates(document) }
         }
-        var notes: [String] = []
         switch candidate.markup {
         case let .vast(.url(url)) where resolved == nil:
             notes.append("The VAST tag at \(URLText.host(url) ?? url) is fetched when the ad renders; its trackers are not listed yet.")
@@ -53,7 +75,14 @@ enum TrackerHosts {
         if case .html = candidate.markup {
             notes.append("Trackers inside the HTML creative are loaded by the creative itself (blocked in Simulated mode unless allowed).")
         }
+        let hasScripts = templates.contains { $0.kind == "script" } || native?.jsTracker != nil
+            || candidate.adcomEvents.contains { $0.method == 2 }
+        if hasScripts || isHTML(candidate.markup) { notes.append(scriptsNote) }
         return Summary(hosts: hosts(of: templates), notes: notes)
+    }
+
+    private static func isHTML(_ markup: AdMarkup) -> Bool {
+        if case .html = markup { true } else { false }
     }
 
     /// Groups templates by host; hosts sorted by name. Templates without a host (relative, `data:`) are skipped.
@@ -177,24 +206,12 @@ enum TrackerHosts {
         }
     }
 
-    /// `src` URLs of `<script>` / `<img>` tags in tracker markup (Native `jstracker`, AdCOM JavaScript events); a bare URL
-    /// counts as its own source.
+    /// The resource URLs of tracker markup (Native `jstracker`, AdCOM JavaScript events), read as HTML: `src` / `href` /
+    /// `data` / `poster` of resource elements, with quoted, unquoted and character-reference-encoded values; a bare URL
+    /// counts as its own source. What scripts load at run time is not here (see `scriptsNote`).
     static func scriptSources(_ markup: String) -> [String] {
         let trimmed = markup.trimmingCharacters(in: .whitespacesAndNewlines)
         if host(of: trimmed) != nil, !trimmed.contains("<") { return [trimmed] }
-        var result: [String] = []
-        var rest = trimmed[...]
-        while let range = rest.range(of: "src", options: .caseInsensitive) {
-            rest = rest[range.upperBound...]
-            let afterEquals = rest.drop { $0 == " " }
-            guard afterEquals.first == "=" else { continue }
-            let value = afterEquals.dropFirst().drop { $0 == " " }
-            guard let quote = value.first, quote == "\"" || quote == "'" else { continue }
-            let body = value.dropFirst()
-            guard let end = body.firstIndex(of: quote) else { break }
-            result.append(String(body[..<end]))
-            rest = body[end...]
-        }
-        return result
+        return HTMLResourceScanner.resourceURLs(in: trimmed)
     }
 }
