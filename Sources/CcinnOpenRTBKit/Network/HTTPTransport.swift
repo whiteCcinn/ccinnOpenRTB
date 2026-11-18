@@ -5,15 +5,19 @@ public struct HTTPRequest: Sendable, Hashable {
     public var url: URL
     public var method: String
     public var headers: [String: String]
+    /// The request body (a composed POST); `nil` sends none.
+    public var body: Data?
     /// Total time allowed for this hop, in seconds.
     public var timeout: TimeInterval
     /// The transport stops reading the body after this many bytes and reports `truncated`.
     public var maxBodyBytes: Int
 
-    public init(url: URL, method: String = "GET", headers: [String: String] = [:], timeout: TimeInterval = 15, maxBodyBytes: Int) {
+    public init(url: URL, method: String = "GET", headers: [String: String] = [:], body: Data? = nil, timeout: TimeInterval = 15,
+                maxBodyBytes: Int) {
         self.url = url
         self.method = method
         self.headers = headers
+        self.body = body
         self.timeout = timeout
         self.maxBodyBytes = max(0, maxBodyBytes)
     }

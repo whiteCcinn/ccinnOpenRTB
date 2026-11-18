@@ -82,6 +82,7 @@ struct NetworkMonitorView: View {
             Divider()
             NetworkStatusBar(monitor: monitor, all: all, visible: visible.count)
         }
+        .environment(\.shownNetworkMonitor, monitor)
         .searchable(text: $model.filter.text, placement: .toolbar, prompt: "Filter URL, trigger, source, status")
         .toolbar { toolbar(all: all) }
         .navigationTitle("Network")
@@ -195,7 +196,7 @@ struct NetworkMonitorView: View {
             do {
                 // Encoding thousands of entries happens off the main actor.
                 try await Task.detached(priority: .userInitiated) {
-                    let data = try HARExporter.data(entries: snapshot.entries, bodies: snapshot.bodies)
+                    let data = try HARExporter.data(entries: snapshot.entries, bodies: snapshot.bodies, requestBodies: snapshot.requestBodies)
                     try data.write(to: url, options: .atomic)
                 }.value
             } catch {

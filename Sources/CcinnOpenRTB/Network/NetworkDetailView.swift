@@ -29,6 +29,7 @@ struct NetworkDetailView: View {
                         KeyValueGrid(rows: HTTPHeaders.sorted(entry.requestHeaders).map { ($0.name, $0.value) })
                     }
                 }
+                requestBodySection
                 if !entry.responseHeaders.isEmpty {
                     section("Response Headers") { KeyValueGrid(rows: HTTPHeaders.sorted(entry.responseHeaders).map { ($0.name, $0.value) }) }
                 }
@@ -55,7 +56,7 @@ struct NetworkDetailView: View {
             Text(entry.source).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
                 Button("Copy URL", systemImage: "link") { Pasteboard.copy(entry.url) }
-                Button("Copy as curl", systemImage: "terminal") { Pasteboard.copy(CurlCommand.make(for: entry)) }
+                Button("Copy as curl", systemImage: "terminal") { Pasteboard.copy(CurlCommand.make(for: entry, body: monitor.requestBody(for: entry.id))) }
             }
             .controlSize(.small)
             if let message = NetworkCells.failureMessage(entry) {
@@ -76,6 +77,7 @@ struct NetworkDetailView: View {
         rows.append(("Duration", entry.state == .pending ? "pending" : Format.duration(seconds: entry.duration)))
         rows.append(("Mode", "\(entry.delivery.label) · session \(entry.sessionMode == .real ? "Real" : "Simulated")"))
         rows.append(("Method", entry.method))
+        if let bytes = entry.requestBodyBytes { rows.append(("Request body", Format.bytes(bytes))) }
         if let bytes = entry.responseBytes { rows.append(("Size", Format.bytes(bytes))) }
         if let mime = entry.mimeType { rows.append(("Type", mime)) }
         if let timings = entry.timings {
@@ -136,6 +138,23 @@ struct NetworkDetailView: View {
                     if children.count > 200 {
                         Text("…and \(children.count - 200) more").font(.caption).foregroundStyle(.secondary)
                     }
+                }
+            }
+        }
+    }
+
+    /// The body a composed request (the Client tab) sent with this hop.
+    @ViewBuilder
+    private var requestBodySection: some View {
+        if let bytes = entry.requestBodyBytes {
+            if let body = monitor.requestBody(for: entry.id), !body.isEmpty {
+                section("Request Body") {
+                    ResponsePreview(data: body, mimeType: HTTPHeaders.mimeType(fromContentType: HTTPHeaders.value("Content-Type", in: entry.requestHeaders)),
+                                    contentType: HTTPHeaders.value("Content-Type", in: entry.requestHeaders))
+                }
+            } else {
+                section("Request Body") {
+                    Text(bytes == 0 ? "Empty" : "\(Format.bytes(bytes)) (not kept for preview)").font(.callout).foregroundStyle(.secondary)
                 }
             }
         }

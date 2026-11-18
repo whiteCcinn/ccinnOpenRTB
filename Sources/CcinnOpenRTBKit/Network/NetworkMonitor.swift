@@ -73,7 +73,9 @@ public final class NetworkMonitor {
     private var isOffline = false
 
     @ObservationIgnored private var log: NetworkLog
-    @ObservationIgnored private var bodies = ResponseBodyStore()
+    @ObservationIgnored private var bodies = BodyStore()
+    /// Request bodies of composed requests (a POST from the Client tab), per hop that sent one.
+    @ObservationIgnored private var requestBodies = BodyStore()
     @ObservationIgnored private let transport: any HTTPTransport
     @ObservationIgnored private let clock: any NetworkClock
     @ObservationIgnored private let samples: any SampleMediaProviding
@@ -123,6 +125,9 @@ public final class NetworkMonitor {
     /// The stored response body (≤ 512 KiB per entry, 32 MiB overall) for previews.
     public func responseBody(for id: UUID) -> Data? { bodies.body(for: id) }
 
+    /// The body a composed request sent with this hop (same limits as response bodies); `nil` when it sent none.
+    public func requestBody(for id: UUID) -> Data? { requestBodies.body(for: id) }
+
     /// Requests the monitor is still loading (trackers and content).
     public var inFlightCount: Int { activeLoads.count }
 
@@ -171,7 +176,7 @@ public final class NetworkMonitor {
             let stored = append(entry)
             let isTracker = request.category.isTracker
             let limit = isTracker ? Self.maxTrackerBodyBytes : Self.maxContentBytes
-            startLoad(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: !isTracker)
+            startLoad(stored, permit: permit, spec: LoadSpec(userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: !isTracker))
             return stored.id
         }
     }
@@ -204,15 +209,74 @@ public final class NetworkMonitor {
             entry.delivery = .network
             entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
+            let spec = LoadSpec(userAgent: userAgent, maxBodyBytes: Self.maxContentBytes, failOnTruncation: true)
             guard DispatchPolicy.Destination(url: url) == .remote else {
                 // data: and ccinn-sample: never touch the network: served in the caller's task, nothing to cancel.
-                return (try await load(stored, permit: permit, userAgent: userAgent, headers: [:], maxBodyBytes: Self.maxContentBytes,
-                                       failOnTruncation: true).get().body, stored.id)
+                return (try await load(stored, permit: permit, spec: spec).get().body, stored.id)
             }
-            let task = startLoad(stored, permit: permit, userAgent: userAgent, maxBodyBytes: Self.maxContentBytes, failOnTruncation: true)
+            let task = startLoad(stored, permit: permit, spec: spec)
             let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             return (try outcome.get().body, stored.id)
         }
+    }
+
+    // MARK: Composed requests
+
+    /// Sends a request the user composed (the Client tab), recorded as a `.bidRequest` root entry with its method, headers
+    /// and body. It is no tracker: sent in Simulated and Real mode, recorded and not sent when Offline (`offline`), and
+    /// only Offline, `clear()` or the caller's cancellation stop it. Only `http(s)` URLs with a host are sent. The user's
+    /// headers replace the monitor's own whatever their case; GET and HEAD carry no body. Redirects are followed by hand
+    /// (`RedirectRule`). Any final status is a result; a transport failure, a timeout, a body over `maxContentBytes` or a
+    /// cancellation throws a `NetworkMonitorError`.
+    public func send(_ request: ComposedRequest, userAgent: String) async throws -> ComposedResponse {
+        let method = request.wireMethod
+        let body = request.wireBody
+        let startedAt = clock.now()
+        var record = NetworkEntry(sequence: 0, startedAt: startedAt, category: .bidRequest, trigger: request.trigger, source: request.source,
+                                  template: request.url, url: request.url, method: method, state: .pending,
+                                  requestHeaders: HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: request.headers),
+                                  sessionMode: mode, requestBodyBytes: body?.count)
+        /// Records the request as refused (never sent) and returns why.
+        func refused(_ error: NetworkMonitorError) -> NetworkMonitorError {
+            record.state = .failed(error.errorDescription ?? "Not sent")
+            record.finishedAt = startedAt
+            record.delivery = .simulated
+            record.note = "Not sent"
+            appendComposed(record, body: body)
+            return error
+        }
+        let scheme = URLText.scheme(request.url)
+        guard scheme == "http" || scheme == "https" else { throw refused(.unsupportedScheme(scheme ?? "")) }
+        guard let requestURL = URLText.requestURL(request.url), requestURL.host?.isEmpty == false else { throw refused(.invalidURL(request.url)) }
+        switch DispatchPolicy.action(for: .bidRequest, isScript: false, mode: mode, offline: offline) {
+        case let .record(state, delivery, note):
+            record.state = state
+            record.delivery = delivery
+            record.note = note
+            let stored = appendComposed(record, body: body)
+            throw delivery == .offline ? NetworkMonitorError.offline(entryID: stored.id) : NetworkMonitorError.notFetchable(entryID: stored.id)
+        case .renderer:
+            record.state = .simulated
+            let stored = appendComposed(record, body: body)
+            throw NetworkMonitorError.notFetchable(entryID: stored.id)
+        case let .send(permit):
+            record.delivery = .network
+            let stored = appendComposed(record, body: body)
+            let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: Self.maxContentBytes,
+                                failOnTruncation: true, acceptsAnyStatus: true)
+            let task = startLoad(stored, permit: permit, spec: spec)
+            let loaded = try await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }.get()
+            return ComposedResponse(status: loaded.status, headers: loaded.headers, body: loaded.body, url: loaded.url ?? requestURL, entryID: stored.id,
+                                    responseEntryID: loaded.entryID, duration: max(0, clock.now().timeIntervalSince(startedAt)),
+                                    timings: entry(id: loaded.entryID)?.timings)
+        }
+    }
+
+    @discardableResult
+    private func appendComposed(_ record: NetworkEntry, body: Data?) -> NetworkEntry {
+        let stored = append(record)
+        if let body { requestBodies.store(body, for: stored.id) }
+        return stored
     }
 
     /// Prepares media for a player (AVPlayer): `ccinn-sample://` becomes the generated local file and `data:` a temporary
@@ -315,8 +379,8 @@ public final class NetworkMonitor {
         case let .send(permit):
             entry.delivery = .network
             let stored = append(entry)
-            let task = startLoad(stored, permit: permit, userAgent: part.userAgent, headers: headers, maxBodyBytes: part.maxBodyBytes,
-                                 failOnTruncation: false)
+            let task = startLoad(stored, permit: permit,
+                                 spec: LoadSpec(userAgent: part.userAgent, headers: headers, maxBodyBytes: part.maxBodyBytes, failOnTruncation: false))
             let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
             return (stored.id, result)
         }
@@ -391,6 +455,7 @@ public final class NetworkMonitor {
         rendererLoads.removeAll()
         log.removeAll()
         bodies.removeAll()
+        requestBodies.removeAll()
         dirty = true
         flush()
     }
@@ -398,26 +463,25 @@ public final class NetworkMonitor {
     /// HAR 1.2 export of the current entries.
     public func harData() -> Data {
         let snapshot = harSnapshot()
-        return (try? HARExporter.data(entries: snapshot.entries, bodies: snapshot.bodies)) ?? Data()
+        return (try? HARExporter.data(entries: snapshot.entries, bodies: snapshot.bodies, requestBodies: snapshot.requestBodies)) ?? Data()
     }
 
-    /// The entries and stored bodies, to encode HAR off the main actor with `HARExporter.data`.
-    public func harSnapshot() -> (entries: [NetworkEntry], bodies: [UUID: Data]) {
+    /// The entries and stored response and request bodies, to encode HAR off the main actor with `HARExporter.data`.
+    public func harSnapshot() -> (entries: [NetworkEntry], bodies: [UUID: Data], requestBodies: [UUID: Data]) {
         let entries = log.entries
-        return (entries, bodies.bodies(for: entries.map(\.id)))
+        let ids = entries.map(\.id)
+        return (entries, bodies.bodies(for: ids), requestBodies.bodies(for: ids))
     }
 
     // MARK: Loading
 
     /// Starts `load` in its own task, registered in `activeLoads` so a mode switch, Offline or `clear()` can cancel it.
     @discardableResult
-    private func startLoad(_ root: NetworkEntry, permit: SendPermit, userAgent: String, headers: [String: String] = [:], maxBodyBytes: Int,
-                           failOnTruncation: Bool) -> Task<Result<LoadedResponse, NetworkMonitorError>, Never> {
+    private func startLoad(_ root: NetworkEntry, permit: SendPermit, spec: LoadSpec) -> Task<Result<LoadedResponse, NetworkMonitorError>, Never> {
         // Inherits the main actor: the body cannot start before the registration below.
         let task = Task { [weak self] () -> Result<LoadedResponse, NetworkMonitorError> in
             guard let self else { return .failure(.cleared) }
-            return await self.load(root, permit: permit, userAgent: userAgent, headers: headers, maxBodyBytes: maxBodyBytes,
-                                   failOnTruncation: failOnTruncation)
+            return await self.load(root, permit: permit, spec: spec)
         }
         activeLoads[root.id] = ActiveLoad(task: task, isTracker: root.category.isTracker, currentEntryID: root.id)
         return task
@@ -446,10 +510,13 @@ public final class NetworkMonitor {
 
     /// Loads `root` and follows redirects by hand: one recorded child entry per hop, at most `maxRedirects`, loops
     /// refused. The dispatch policy is asked again, against the current mode and Offline, right before every hop is
-    /// sent, so a tracker is never sent after a switch to Simulated mode, not even its first hop. `headers` are added to
-    /// the monitor's own (e.g. `Range`).
-    private func load(_ root: NetworkEntry, permit _: SendPermit, userAgent: String, headers extraHeaders: [String: String], maxBodyBytes: Int,
-                      failOnTruncation: Bool) async -> Result<LoadedResponse, NetworkMonitorError> {
+    /// sent, so a tracker is never sent after a switch to Simulated mode, not even its first hop. `spec.headers` replace
+    /// the monitor's own (e.g. `Range`, a composed request's headers); each redirect hop's method, body and headers follow
+    /// `RedirectRule`.
+    private func load(_ root: NetworkEntry, permit _: SendPermit, spec: LoadSpec) async -> Result<LoadedResponse, NetworkMonitorError> {
+        let userAgent = spec.userAgent
+        let maxBodyBytes = spec.maxBodyBytes
+        var hopRequest = RedirectRule.Hop(method: spec.method, body: spec.body, headers: spec.headers)
         defer {
             activeLoads[root.id] = nil
             cancelledLoads[root.id] = nil
@@ -485,8 +552,9 @@ public final class NetworkMonitor {
             }
             visited.insert(requestURL.absoluteString)
 
-            let headers = requestHeaders(userAgent: userAgent).merging(extraHeaders) { _, extra in extra }
-            let request = HTTPRequest(url: requestURL, headers: headers, timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
+            let headers = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: hopRequest.headers)
+            let request = HTTPRequest(url: requestURL, method: hopRequest.method, headers: headers, body: hopRequest.body,
+                                      timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
             update(currentID) { $0.requestHeaders = headers }
             activeLoads[root.id]?.isSending = true
             let response: HTTPResponse
@@ -509,10 +577,12 @@ public final class NetworkMonitor {
                 let next = URL(string: location, relativeTo: requestURL)?.absoluteURL ?? URLText.requestURL(location)
                 let nextURL = next?.absoluteString ?? location
                 let nextScheme = URLText.scheme(nextURL)
+                let nextRequest = next.map { RedirectRule.next(after: hopRequest, status: response.status, from: requestURL, to: $0) } ?? hopRequest
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
-                                       source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL, state: .pending,
-                                       isScript: root.isScript, requestHeaders: requestHeaders(userAgent: userAgent),
-                                       redirectLocation: location, delivery: .network, sessionMode: mode)
+                                       source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL,
+                                       method: nextRequest.method, state: .pending, isScript: root.isScript,
+                                       requestHeaders: requestHeaders(userAgent: userAgent), redirectLocation: location, delivery: .network,
+                                       sessionMode: mode, requestBodyBytes: nextRequest.body?.count)
                 let stop: NetworkMonitorError? = if next == nil {
                     .invalidURL(location)
                 } else if hops >= Self.maxRedirects {
@@ -535,19 +605,23 @@ public final class NetworkMonitor {
                 }
                 hops += 1
                 hop.note = "Redirect hop \(hops)"
-                hop.requestHeaders = requestHeaders(userAgent: userAgent).merging(extraHeaders) { _, extra in extra }
+                hop.requestHeaders = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: nextRequest.headers)
                 currentID = append(hop).id
+                if let body = nextRequest.body { requestBodies.store(body, for: currentID) }
+                hopRequest = nextRequest
                 activeLoads[root.id]?.currentEntryID = currentID
                 currentURL = nextURL
                 continue
             }
 
-            if response.truncated, failOnTruncation {
+            if response.truncated, spec.failOnTruncation {
                 let error = NetworkMonitorError.tooLarge(limit: maxBodyBytes)
                 update(currentID) { $0.state = .failed(error.errorDescription ?? "Too large") }
                 return .failure(error)
             }
-            guard (200..<300).contains(response.status) else { return .failure(.httpStatus(response.status, entryID: currentID)) }
+            guard spec.acceptsAnyStatus || (200..<300).contains(response.status) else {
+                return .failure(.httpStatus(response.status, entryID: currentID))
+            }
             return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
                                            entryID: currentID, truncated: response.truncated))
         }
@@ -774,6 +848,20 @@ public final class NetworkMonitor {
         }.value
     }
 
+}
+
+/// How one load is sent, and what counts as its result.
+struct LoadSpec: Sendable {
+    var userAgent: String
+    /// On top of the monitor's own headers, replacing any of the same name (`Range`; a composed request's headers).
+    var headers: [String: String] = [:]
+    var method = "GET"
+    var body: Data?
+    var maxBodyBytes: Int
+    /// A body longer than `maxBodyBytes` fails the load (content) instead of being kept truncated (trackers, media parts).
+    var failOnTruncation: Bool
+    /// Every final status is a result (a composed request); otherwise a status outside 2xx fails the load.
+    var acceptsAnyStatus = false
 }
 
 /// What a load produced: the response of its final hop.

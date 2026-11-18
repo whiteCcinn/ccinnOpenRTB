@@ -54,9 +54,9 @@ public struct SystemNetworkClock: NetworkClock {
     public func now() -> Date { Date() }
 }
 
-/// Response bodies kept for the details preview and HAR export: at most `maxBodyBytes` per entry and
-/// `totalBudget` overall, oldest dropped first.
-struct ResponseBodyStore: Sendable {
+/// Bodies kept for the details preview, curl and HAR export (one store for responses, one for request bodies): at most
+/// `maxBodyBytes` per entry and `totalBudget` overall, oldest dropped first.
+struct BodyStore: Sendable {
     let maxBodyBytes: Int
     let totalBudget: Int
     private var bodies: [UUID: Data] = [:]

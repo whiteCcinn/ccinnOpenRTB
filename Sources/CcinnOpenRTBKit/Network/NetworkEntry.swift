@@ -87,13 +87,17 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
     public var note: String?
     /// Transport timing breakdown, when the transport reported one (HAR `timings`).
     public var timings: HTTPTimings?
+    /// The size of the request body, when the request has one (a composed POST); the body itself is kept by the monitor
+    /// (`NetworkMonitor.requestBody(for:)`) up to its preview limit.
+    public var requestBodyBytes: Int?
 
     public init(id: UUID = UUID(), parentID: UUID? = nil, sequence: Int, startedAt: Date = Date(), finishedAt: Date? = nil,
                 category: TrackerCategory, trigger: String, source: String, template: String, url: String, method: String = "GET",
                 state: NetworkEntryState, replacedMacros: [String] = [], unknownMacros: [String] = [], isScript: Bool = false,
                 requestHeaders: [String: String] = [:], responseHeaders: [String: String] = [:], responseBytes: Int? = nil,
                 mimeType: String? = nil, redirectLocation: String? = nil, delivery: NetworkDelivery = .simulated,
-                sessionMode: TrackingMode = .simulated, note: String? = nil, timings: HTTPTimings? = nil, requestHeadersAsSent: Bool = false) {
+                sessionMode: TrackingMode = .simulated, note: String? = nil, timings: HTTPTimings? = nil, requestHeadersAsSent: Bool = false,
+                requestBodyBytes: Int? = nil) {
         self.id = id
         self.parentID = parentID
         self.sequence = sequence
@@ -119,6 +123,7 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
         self.sessionMode = sessionMode
         self.note = note
         self.timings = timings
+        self.requestBodyBytes = requestBodyBytes
     }
 
     /// Seconds from start to finish; `nil` while pending or for entries that never ran.
@@ -148,6 +153,22 @@ public enum HTTPHeaders {
         if let exact = headers[name] { return exact }
         let lowered = name.lowercased()
         return headers.first { $0.key.lowercased() == lowered }?.value
+    }
+
+    /// `base` with `overrides` applied: an override replaces a base header of the same name in any case, so the result
+    /// never holds two spellings of one header (URLSession would pick one of them at random).
+    public static func merged(_ base: [String: String], overriddenBy overrides: [String: String]) -> [String: String] {
+        guard !overrides.isEmpty else { return base }
+        var merged = removing(overrides.keys, from: base)
+        for (name, value) in overrides { merged[name] = value }
+        return merged
+    }
+
+    /// `headers` without the ones named in `names`, compared case-insensitively.
+    public static func removing(_ names: some Sequence<String>, from headers: [String: String]) -> [String: String] {
+        let lowered = Set(names.map { $0.lowercased() })
+        guard !lowered.isEmpty else { return headers }
+        return headers.filter { !lowered.contains($0.key.lowercased()) }
     }
 
     /// Headers in a stable order (by name) for display and export.

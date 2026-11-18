@@ -58,17 +58,25 @@ enum NetworkCells {
 struct NetworkContextMenu: View {
     let ids: Set<UUID>
     let entries: [NetworkEntry]
+    @Environment(\.shownNetworkMonitor) private var monitor
 
     var body: some View {
         let selected = entries.filter { ids.contains($0.id) }
         Button(selected.count > 1 ? "Copy URLs" : "Copy URL") { Pasteboard.copy(selected.map(\.url).joined(separator: "\n")) }
             .disabled(selected.isEmpty)
-        Button("Copy as curl") { Pasteboard.copy(selected.map(CurlCommand.make(for:)).joined(separator: "\n")) }
-            .disabled(selected.isEmpty)
+        Button("Copy as curl") {
+            Pasteboard.copy(selected.map { CurlCommand.make(for: $0, body: monitor?.requestBody(for: $0.id)) }.joined(separator: "\n"))
+        }
+        .disabled(selected.isEmpty)
         if selected.count == 1, let entry = selected.first, entry.template != entry.url {
             Button("Copy Template") { Pasteboard.copy(entry.template) }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The monitor whose entries the Network window shows (its request bodies, for Copy as curl).
+    @Entry var shownNetworkMonitor: NetworkMonitor?
 }
 
 /// The real-time list.

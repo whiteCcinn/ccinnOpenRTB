@@ -54,6 +54,7 @@ public final class URLSessionTransport: HTTPTransport {
         var urlRequest = URLRequest(url: try Self.wireURL(request.url), cachePolicy: .reloadIgnoringLocalCacheData,
                                     timeoutInterval: max(1, request.timeout))
         urlRequest.httpMethod = request.method
+        urlRequest.httpBody = request.body
         urlRequest.httpShouldHandleCookies = false
         for (name, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: name) }
         let task = session.dataTask(with: urlRequest)

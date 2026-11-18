@@ -10,25 +10,28 @@ public enum HARExporter {
     /// Bodies longer than this are exported without `content.text`.
     public static let maxBodyTextBytes = 512 * 1024
 
-    public static func data(entries: [NetworkEntry], bodies: [UUID: Data] = [:], creatorVersion: String = AppInfo.version) throws -> Data {
-        let document = document(entries: entries, bodies: bodies, creatorVersion: creatorVersion)
+    /// `bodies` are response bodies, `requestBodies` the bodies of requests that sent one (`postData`), both by entry id.
+    public static func data(entries: [NetworkEntry], bodies: [UUID: Data] = [:], requestBodies: [UUID: Data] = [:],
+                            creatorVersion: String = AppInfo.version) throws -> Data {
+        let document = document(entries: entries, bodies: bodies, requestBodies: requestBodies, creatorVersion: creatorVersion)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(document)
     }
 
-    static func document(entries: [NetworkEntry], bodies: [UUID: Data], creatorVersion: String) -> HARDocument {
+    static func document(entries: [NetworkEntry], bodies: [UUID: Data], requestBodies: [UUID: Data] = [:], creatorVersion: String) -> HARDocument {
         let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
         let known = Set(entries.map(\.id))
         return HARDocument(log: HARLog(
             version: "1.2",
             creator: HARCreator(name: AppInfo.productName, version: creatorVersion),
             pages: [],
-            entries: entries.map { entry($0, body: bodies[$0.id], known: known, dateStyle: dateStyle) }
+            entries: entries.map { entry($0, body: bodies[$0.id], requestBody: requestBodies[$0.id], known: known, dateStyle: dateStyle) }
         ))
     }
 
-    private static func entry(_ entry: NetworkEntry, body: Data?, known: Set<UUID>, dateStyle: Date.ISO8601FormatStyle) -> HAREntry {
+    private static func entry(_ entry: NetworkEntry, body: Data?, requestBody: Data?, known: Set<UUID>,
+                              dateStyle: Date.ISO8601FormatStyle) -> HAREntry {
         let timings = harTimings(for: entry)
         let sent = entry.delivery == .network
         let status = entry.status ?? 0
@@ -54,7 +57,8 @@ public enum HARExporter {
                 headers: HTTPHeaders.sorted(entry.requestHeaders).map { HARNameValue(name: $0.name, value: $0.value) },
                 queryString: URLText.queryItems(entry.url).map { HARNameValue(name: $0.name, value: $0.value) },
                 headersSize: -1,
-                bodySize: entry.method.uppercased() == "GET" ? 0 : -1
+                bodySize: entry.requestBodyBytes ?? (entry.method.uppercased() == "GET" ? 0 : -1),
+                postData: postData(entry, body: requestBody)
             ),
             response: HARResponse(
                 status: status,
@@ -88,6 +92,16 @@ public enum HARExporter {
                 error: error
             )
         )
+    }
+
+    /// HAR `postData` for a request that sent a body: its text (base64 is not part of HAR 1.2 `postData`, so a body that is
+    /// not UTF-8 is exported decoded, with replacement characters) and the request's `Content-Type`.
+    private static func postData(_ entry: NetworkEntry, body: Data?) -> HARPostData? {
+        guard let body, entry.requestBodyBytes != nil else { return nil }
+        let mimeType = HTTPHeaders.value("Content-Type", in: entry.requestHeaders) ?? ""
+        let text = body.count <= maxBodyTextBytes
+            ? TextDecoding.string(from: body, charset: HTTPHeaders.charset(fromContentType: mimeType)) : ""
+        return HARPostData(mimeType: mimeType, text: text)
     }
 
     /// Transport timings when known; otherwise the measured duration as `wait`; zero for entries that never ran.
@@ -165,6 +179,12 @@ struct HARRequest: Codable, Sendable {
     var queryString: [HARNameValue]
     var headersSize: Int
     var bodySize: Int
+    var postData: HARPostData?
+}
+
+struct HARPostData: Codable, Sendable {
+    var mimeType: String
+    var text: String
 }
 
 struct HARResponse: Codable, Sendable {

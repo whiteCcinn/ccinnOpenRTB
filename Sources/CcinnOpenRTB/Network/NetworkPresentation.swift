@@ -20,7 +20,13 @@ enum NetworkPresentation {
                                  help: "Content: fetched to render the ad in Simulated and Real mode, recorded and not sent when Offline (not a tracker)")
         }
         return CategoryLabel(text: Theme.label(for: entry.category), systemImage: Theme.icon(for: entry.category), category: entry.category,
-                             isContent: false, help: entry.category.isTracker ? "Tracker: sent only in Real mode" : Theme.label(for: entry.category))
+                             isContent: false, help: help(for: entry.category))
+    }
+
+    private static func help(for category: TrackerCategory) -> String {
+        if category.isTracker { return "Tracker: sent only in Real mode" }
+        if category == .bidRequest { return "Bid request: sent from the Client tab in Simulated and Real mode, recorded and not sent when Offline" }
+        return Theme.label(for: category)
     }
 
     /// The session's network state, for the window's subtitle and status bar.

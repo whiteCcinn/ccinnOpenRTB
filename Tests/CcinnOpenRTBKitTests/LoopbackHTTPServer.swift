@@ -12,6 +12,8 @@ final class LoopbackHTTPServer: Sendable {
         var path: String
         /// Header names lowercased.
         var headers: [String: String]
+        /// The body, read up to its `Content-Length`.
+        var body = Data()
 
         func header(_ name: String) -> String? { headers[name.lowercased()] }
     }
@@ -103,7 +105,15 @@ final class LoopbackHTTPServer: Sendable {
                 }
                 return
             }
-            let request = parse(String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self))
+            var head = parse(String(decoding: buffer[..<headerEnd.lowerBound], as: UTF8.self))
+            let length = max(0, Int(head.header("Content-Length") ?? "") ?? 0)
+            let received = buffer.count - headerEnd.upperBound
+            if received < length, !complete, error == nil {
+                receive(connection, buffer: buffer, queue: queue, handler: handler, captured: captured)
+                return
+            }
+            head.body = Data(buffer[headerEnd.upperBound...].prefix(length))
+            let request = head
             captured.withLock { $0.append(request) }
             let response = handler(request)
             let send: @Sendable () -> Void = {

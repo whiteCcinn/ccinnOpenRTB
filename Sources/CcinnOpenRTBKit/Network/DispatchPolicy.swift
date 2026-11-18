@@ -51,6 +51,7 @@ enum DispatchPolicy {
     /// - Trackers obey the mode: Simulated records, Real sends (script trackers are injected by the renderer).
     /// - Content is fetched in both modes (it is needed to render the ad), except remote content when `offline`.
     /// - Offline is Simulated tracking plus offline content: trackers are recorded whatever `mode` says.
+    /// - A bid request the user sends (the Client tab) is no tracker: sent in either mode, recorded and not sent when Offline.
     /// - Navigation and creative requests are never sent by the monitor.
     static func action(for category: TrackerCategory, isScript: Bool, mode: TrackingMode, offline: Bool = false,
                        destination: Destination = .remote) -> DispatchAction {
@@ -62,7 +63,10 @@ enum DispatchPolicy {
         case .content:
             if offline, destination == .remote { return .record(.blocked, .offline, note: offlineNote) }
             return .send(SendPermit(category: category, mode: mode))
-        default:
+        case .bidRequest:
+            if offline { return .record(.blocked, .offline, note: offlineNote) }
+            return .send(SendPermit(category: category, mode: mode))
+        case .win, .billing, .loss, .impression, .viewability, .event, .click, .error, .verification:
             switch (offline ? .simulated : mode, isScript) {
             case (.simulated, false): return .record(.simulated, .simulated, note: simulatedNote)
             case (.simulated, true): return .record(.simulated, .simulated, note: scriptSimulatedNote)
