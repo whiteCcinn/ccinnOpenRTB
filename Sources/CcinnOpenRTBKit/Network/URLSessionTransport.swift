@@ -79,6 +79,7 @@ final class Exchange: Sendable {
         /// The task was cancelled because an authentication challenge was refused; `response` is the challenge's.
         var challengeRefused = false
         var timings: HTTPTimings?
+        var sentHeaders: [String: String]?
         /// The task finished before `start` stored the continuation.
         var outcome: Result<HTTPResponse, any Error>?
     }
@@ -133,10 +134,16 @@ final class Exchange: Sendable {
         }
     }
 
+    /// Timings, and the request headers as sent (`transaction.request` is the request CFNetwork put on the wire).
     func collect(_ metrics: URLSessionTaskMetrics) {
-        guard let transaction = metrics.transactionMetrics.last else { return }
+        guard let transaction = metrics.transactionMetrics.last(where: { $0.resourceFetchType == .networkLoad }) ?? metrics.transactionMetrics.last
+        else { return }
         let timings = Self.timings(transaction, interval: metrics.taskInterval)
-        state.withLockUnchecked { $0.timings = timings }
+        let sentHeaders = transaction.request.allHTTPHeaderFields
+        state.withLockUnchecked { state in
+            state.timings = timings
+            state.sentHeaders = sentHeaders
+        }
     }
 
     func complete(_ error: (any Error)?) {
@@ -144,7 +151,7 @@ final class Exchange: Sendable {
             let outcome: Result<HTTPResponse, any Error>
             if let response = state.response, error == nil || state.truncated || state.challengeRefused {
                 outcome = .success(HTTPResponse(status: response.statusCode, headers: Self.headers(response), body: state.body,
-                                                truncated: state.truncated, timings: state.timings))
+                                                truncated: state.truncated, timings: state.timings, sentHeaders: state.sentHeaders))
             } else {
                 outcome = .failure(error ?? URLError(.badServerResponse))
             }

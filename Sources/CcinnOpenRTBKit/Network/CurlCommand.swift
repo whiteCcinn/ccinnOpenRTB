@@ -6,6 +6,8 @@ import Foundation
 /// - `--globoff` stops curl from treating VAST `[MACROS]` and `{…}` as URL globs.
 /// - The URL is passed with `--url`, so a value starting with `-` is never read as an option.
 /// - Control characters (which a shell argument cannot carry safely) are percent-encoded.
+/// - The headers are the entry's, as sent on the wire when the transport reported them; with an `Accept-Encoding`
+///   header, `--compressed` makes curl decode the compressed body it asked for (as browsers' "Copy as cURL" do).
 public enum CurlCommand {
     public static func make(url: String, method: String = "GET", headers: [String: String] = [:]) -> String {
         var parts = ["curl", "--globoff"]
@@ -14,6 +16,7 @@ public enum CurlCommand {
         for header in HTTPHeaders.sorted(headers) {
             parts += ["-H", quote("\(header.name): \(header.value)")]
         }
+        if HTTPHeaders.value("Accept-Encoding", in: headers) != nil { parts.append("--compressed") }
         parts += ["--url", quote(url)]
         return parts.joined(separator: " ")
     }

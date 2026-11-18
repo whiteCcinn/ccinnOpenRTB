@@ -59,13 +59,18 @@ public struct HTTPResponse: Sendable, Hashable {
     /// The body was longer than `maxBodyBytes`; reading stopped there.
     public var truncated: Bool
     public var timings: HTTPTimings?
+    /// The request headers exactly as they went over the wire, when the transport knows them: the ones the monitor set
+    /// plus those the HTTP stack added (`Host`, `Accept-Encoding`, `Connection`, …).
+    public var sentHeaders: [String: String]?
 
-    public init(status: Int, headers: [String: String] = [:], body: Data = Data(), truncated: Bool = false, timings: HTTPTimings? = nil) {
+    public init(status: Int, headers: [String: String] = [:], body: Data = Data(), truncated: Bool = false, timings: HTTPTimings? = nil,
+                sentHeaders: [String: String]? = nil) {
         self.status = status
         self.headers = headers
         self.body = body
         self.truncated = truncated
         self.timings = timings
+        self.sentHeaders = sentHeaders
     }
 
     public var mimeType: String? { HTTPHeaders.mimeType(fromContentType: HTTPHeaders.value("Content-Type", in: headers)) }

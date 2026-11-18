@@ -21,6 +21,8 @@ public final class NetworkMonitor {
     public static let maxContentBytes = 32 << 20
     /// Tracker bodies are read up to this size and then truncated (the size read is still recorded).
     public static let maxTrackerBodyBytes = 1 << 20
+    /// What an en-US iPhone sends.
+    public nonisolated static let defaultAcceptLanguage = "en-US,en;q=0.9"
 
     /// The published (coalesced) entries, in sequence order.
     public private(set) var entries: [NetworkEntry] = []
@@ -29,6 +31,9 @@ public final class NetworkMonitor {
     public var allowCreativeNetwork = false
     /// Seconds allowed for each request hop (Settings ▸ Network ▸ Request timeout); used clamped to 0.1…300.
     public var requestTimeout: TimeInterval = 15
+    /// `Accept-Language` of every request the monitor sends, set explicitly so the Mac's locale never leaks through
+    /// CFNetwork's default. The simulated device's language when the session knows it; `defaultAcceptLanguage` otherwise.
+    public var acceptLanguage: String = NetworkMonitor.defaultAcceptLanguage
 
     @ObservationIgnored private var log: NetworkLog
     @ObservationIgnored private var bodies = ResponseBodyStore()
@@ -102,13 +107,13 @@ public final class NetworkMonitor {
         case let .renderer(note):
             entry.delivery = .renderer
             entry.note = note
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             rendererLoads.insert(stored.id)
             return stored.id
         case let .send(permit):
             entry.delivery = .network
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             let isTracker = request.category.isTracker
             let limit = isTracker ? Self.maxTrackerBodyBytes : Self.maxContentBytes
@@ -147,7 +152,7 @@ public final class NetworkMonitor {
             throw NetworkMonitorError.notFetchable(entryID: stored.id)
         case let .send(permit):
             entry.delivery = .network
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             let limit = Self.maxContentBytes
             let outcome = await load(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: true)
@@ -200,7 +205,7 @@ public final class NetworkMonitor {
         case "http"?, "https"?:
             entry.delivery = .renderer
             entry.note = "Streamed by the player"
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             guard let playable = URLText.requestURL(url) else {
                 finish(stored.id, failure: .invalidURL(url), token: token)
@@ -320,7 +325,7 @@ public final class NetworkMonitor {
             }
             visited.insert(requestURL.absoluteString)
 
-            let request = HTTPRequest(url: requestURL, headers: Self.requestHeaders(userAgent: userAgent),
+            let request = HTTPRequest(url: requestURL, headers: requestHeaders(userAgent: userAgent),
                                       timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
             let response: HTTPResponse
             do {
@@ -340,7 +345,7 @@ public final class NetworkMonitor {
                 let nextScheme = URLText.scheme(nextURL)
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
                                        source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL, state: .pending,
-                                       isScript: root.isScript, requestHeaders: Self.requestHeaders(userAgent: userAgent),
+                                       isScript: root.isScript, requestHeaders: requestHeaders(userAgent: userAgent),
                                        redirectLocation: location, delivery: .network, sessionMode: mode)
                 let stop: NetworkMonitorError? = if next == nil {
                     .invalidURL(location)
@@ -405,6 +410,10 @@ public final class NetworkMonitor {
             entry.responseBytes = response.body.count
             entry.mimeType = response.mimeType
             entry.timings = response.timings
+            if let sent = response.sentHeaders {
+                entry.requestHeaders = sent
+                entry.requestHeadersAsSent = true
+            }
             if response.truncated {
                 let limit = ByteCountFormatter.string(fromByteCount: Int64(maxBodyBytes), countStyle: .binary)
                 entry.note = Self.joined(entry.note, "Body truncated at \(limit)")
@@ -513,11 +522,23 @@ public final class NetworkMonitor {
     nonisolated static let sampleNote = "Local sample (generated on first use)"
     nonisolated static let dataURLNote = "data: URL decoded locally"
 
-    nonisolated static func requestHeaders(userAgent: String) -> [String: String] {
+    /// The headers the monitor sets on a request (the HTTP stack adds `Host`, `Accept-Encoding` and `Connection`).
+    func requestHeaders(userAgent: String) -> [String: String] {
+        Self.requestHeaders(userAgent: userAgent, language: acceptLanguage)
+    }
+
+    nonisolated static func requestHeaders(userAgent: String, language: String) -> [String: String] {
         var headers = ["Accept": "*/*"]
-        let agent = userAgent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !agent.isEmpty, !agent.contains(where: { $0 == "\r" || $0 == "\n" }) { headers["User-Agent"] = agent }
+        if let agent = headerValue(userAgent) { headers["User-Agent"] = agent }
+        headers["Accept-Language"] = headerValue(language) ?? defaultAcceptLanguage
         return headers
+    }
+
+    /// `value` trimmed, or `nil` when empty or when it could split the header (CR, LF).
+    nonisolated static func headerValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0 == "\r" || $0 == "\n" }) else { return nil }
+        return trimmed
     }
 
     nonisolated static func isRedirect(_ status: Int) -> Bool {
