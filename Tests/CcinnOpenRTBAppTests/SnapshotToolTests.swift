@@ -72,6 +72,42 @@ struct SnapshotToolTests {
         #expect(video.subviews.isEmpty, "the capture leaves the view tree as it was")
     }
 
+    /// A sheet (the Real-mode confirmation listing the tracker hosts) is a window of its own: the capture draws it where it
+    /// sits on its parent, so `--snapshot --mode real` shows the confirmation.
+    @Test func anAttachedSheetIsInTheCapture() async throws {
+        let parentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        parentView.wantsLayer = true
+        parentView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 400, height: 300), styleMask: [.titled], backing: .buffered,
+                              defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = parentView
+        window.orderFrontRegardless()
+        let sheetView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 120))
+        sheetView.wantsLayer = true
+        sheetView.layer?.backgroundColor = NSColor.systemRed.cgColor
+        let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        sheet.isReleasedWhenClosed = false
+        sheet.contentView = sheetView
+        window.beginSheet(sheet, completionHandler: nil)
+        defer {
+            window.endSheet(sheet)
+            window.orderOut(nil)
+        }
+        #expect(await Wait.until(timeout: .seconds(5)) { window.attachedSheet === sheet && sheet.isVisible })
+        try await Task.sleep(for: .milliseconds(600))  // the sheet's slide-in
+
+        let data = try #require(await SnapshotTool.render(window))
+        let bitmap = try #require(NSBitmapImageRep(data: data))
+        let relative = CGPoint(x: sheet.frame.midX - window.frame.minX, y: sheet.frame.midY - window.frame.minY)
+        let scale = Double(bitmap.pixelsWide) / window.frame.width
+        // NSBitmapImageRep rows count from the top.
+        let pixel = try #require(bitmap.colorAt(x: Int(relative.x * scale), y: bitmap.pixelsHigh - Int(relative.y * scale))?.usingColorSpace(.sRGB))
+        #expect(pixel.redComponent > 0.8 && pixel.blueComponent < 0.4, "the sheet, not its parent: \(pixel)")
+        let corner = try #require(bitmap.colorAt(x: 4, y: bitmap.pixelsHigh - 4)?.usingColorSpace(.sRGB))
+        #expect(corner.blueComponent > corner.redComponent, "the parent around it: \(corner)")
+    }
+
     @Test func aWindowWithoutVideoIsCapturedAsAppKitDrawsIt() async throws {
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 60))
         view.wantsLayer = true

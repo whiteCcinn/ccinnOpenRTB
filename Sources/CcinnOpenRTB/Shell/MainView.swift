@@ -49,7 +49,18 @@ enum LaunchCoordinator {
         try? await Task.sleep(for: .seconds(options.snapshotDelay))
         if let path = options.snapshotPath { await SnapshotTool.captureMainWindow(to: URL(fileURLWithPath: path)) }
         if let path = options.harPath { await exportNetwork(of: session.monitor, to: URL(fileURLWithPath: path)) }
-        if options.quitAfterSnapshot { NSApp.terminate(nil) }
+        guard options.quitAfterSnapshot else { return }
+        prepareToQuit(session)
+        // Let the confirmation sheet go away: a window with a sheet does not terminate.
+        for _ in 0..<40 where NSApp.windows.contains(where: { $0.attachedSheet != nil }) {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Before a scripted quit: a pending Real-mode confirmation is cancelled (Simulated mode stays).
+    static func prepareToQuit(_ session: AdSession) {
+        if session.realModeConfirmation != nil { session.cancelRealMode() }
     }
 
     /// Writes `monitor`'s log as HAR 1.2 once nothing is in flight.
@@ -85,8 +96,8 @@ enum SnapshotTool {
         return candidates.first { $0.contentView != nil }
     }
 
-    /// `window` as PNG data, after pending layout and display, with the current video frames in place. The view tree is
-    /// left as it was.
+    /// `window` as PNG data, after pending layout and display, with the current video frames in place and its sheets
+    /// drawn over it. The view tree is left as it was.
     static func render(_ window: NSWindow) async -> Data? {
         guard let view = window.contentView?.superview ?? window.contentView else { return nil }
         let frames = await VideoFrameCapture.frames(in: view)
@@ -99,11 +110,40 @@ enum SnapshotTool {
             return imageView
         }
         defer { standIns.forEach { $0.removeFromSuperview() } }
+        guard let bitmap = cache(window), let base = bitmap.cgImage else { return nil }
+        // Sheets (the Real-mode confirmation) are windows of their own, drawn where they sit on the parent.
+        let sheets = window.sheets.filter(\.isVisible).compactMap { sheet in cache(sheet)?.cgImage.map { (sheet.frame, $0) } }
+        guard !sheets.isEmpty, let composed = compose(base, over: window.frame, sheets: sheets) else {
+            return bitmap.representation(using: .png, properties: [:])
+        }
+        return NSBitmapImageRep(cgImage: composed).representation(using: .png, properties: [:])
+    }
+
+    /// The whole window (frame view included) as AppKit draws it, after pending layout and display.
+    private static func cache(_ window: NSWindow) -> NSBitmapImageRep? {
+        guard let view = window.contentView?.superview ?? window.contentView else { return nil }
         window.layoutIfNeeded()
         window.displayIfNeeded()
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
         view.cacheDisplay(in: view.bounds, to: bitmap)
-        return bitmap.representation(using: .png, properties: [:])
+        return bitmap
+    }
+
+    /// `base` (the window, in pixels) with each sheet drawn at its frame relative to the window (screen points; both
+    /// count y up from the bottom, as Core Graphics does).
+    private static func compose(_ base: CGImage, over frame: NSRect, sheets: [(frame: NSRect, image: CGImage)]) -> CGImage? {
+        guard frame.width > 0, frame.height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: base.width, height: base.height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let scaleX = CGFloat(base.width) / frame.width
+        let scaleY = CGFloat(base.height) / frame.height
+        context.draw(base, in: CGRect(x: 0, y: 0, width: base.width, height: base.height))
+        for sheet in sheets {
+            let rect = CGRect(x: (sheet.frame.minX - frame.minX) * scaleX, y: (sheet.frame.minY - frame.minY) * scaleY,
+                              width: sheet.frame.width * scaleX, height: sheet.frame.height * scaleY)
+            context.draw(sheet.image, in: rect)
+        }
+        return context.makeImage()
     }
 }
 

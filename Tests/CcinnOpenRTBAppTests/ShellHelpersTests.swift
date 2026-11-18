@@ -64,6 +64,19 @@ struct LaunchOptionsTests {
         #expect(LaunchOptions(arguments: ["app", "--export-har", "/tmp/b.har"]).isEmpty == false)
     }
 
+    /// `--mode real --quit-after-snapshot`: the confirmation sheet would keep the app from quitting; quitting cancels it,
+    /// which keeps Simulated mode (the command line never switches Real mode on).
+    @MainActor
+    @Test func quittingAfterASnapshotCancelsAPendingConfirmation() async {
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.html("<p>ad</p>"))]))
+        await harness.paste()
+        harness.session.requestRealMode()
+        #expect(harness.session.realModeConfirmation != nil)
+        LaunchCoordinator.prepareToQuit(harness.session)
+        #expect(harness.session.realModeConfirmation == nil)
+        #expect(harness.session.mode == .simulated)
+    }
+
     /// `--export-har <file>` writes the window's network log (HAR 1.2 with the `_ccinn` relationships) after the
     /// snapshot, for checks of the real app.
     @MainActor
