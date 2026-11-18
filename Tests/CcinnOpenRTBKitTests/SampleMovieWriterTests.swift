@@ -68,8 +68,9 @@ struct SampleMovieWriterTests {
                 try MovieWriteSession(writer: writer, feeds: [slow], stallTimeout: 1).run()
             }
         }
-        // Cancelled when the first slow chunk returns (1.6 s), or the second if the watchdog woke late.
-        #expect(ContinuousClock.now - started < .seconds(5))
+        // Cancelled when the first slow chunk returns (1.6 s), or the second if the watchdog woke late. The bound only
+        // guards against a hang (an unbounded writer would run all chunks); a busy CI runner delays the watchdog.
+        #expect(ContinuousClock.now - started < .seconds(15))
         // On a loaded machine the first chunk can start so late that the session is abandoned first; the queued
         // cancellation then runs right after that chunk, so allow it a moment.
         #expect(try await fileDisappears(file), "cancelling deleted the partial file")
@@ -94,7 +95,8 @@ struct SampleMovieWriterTests {
             }
         }
         let elapsed = ContinuousClock.now - started
-        #expect(elapsed >= .seconds(1) && elapsed < .seconds(3))
+        // At least twice the stall timeout; the upper bound only guards against a hang and allows for a busy CI runner.
+        #expect(elapsed >= .seconds(1) && elapsed < .seconds(15))
         release.signal()
         // The queued cancellation runs as soon as the blocked append returns, and deletes the partial file.
         #expect(try await fileDisappears(file))

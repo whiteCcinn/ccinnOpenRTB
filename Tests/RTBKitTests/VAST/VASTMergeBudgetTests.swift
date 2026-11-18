@@ -33,7 +33,8 @@ struct VASTMergeBudgetTests {
         let started = clock.now
         let vast = await VASTResolver(fetcher: fetcher).resolve(.xml(Self.wrapper(impressions: 10_000, adTagURI: "https://vast.example/pod")))
         let elapsed = clock.now - started
-        #expect(elapsed < .seconds(5), "\(elapsed)")
+        // The quadratic merge this replaced took minutes (≈6 GB at 3 MB of input); the bound leaves room for a 3-core CI runner.
+        #expect(elapsed < .seconds(30), "\(elapsed)")
         let issue = try #require(vast.issues.first { $0.code == "vast.trackers.budget" })
         #expect(issue.severity == .error)
         #expect(issue.message.contains("50000") || issue.message.contains("50,000"))

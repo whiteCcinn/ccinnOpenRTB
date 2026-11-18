@@ -30,6 +30,15 @@ struct OfflineZeroTrafficTests {
             let size = harness.session.adSize
             window = WindowHarness(AdSlotView(session: harness.session, size: size), size: size)
             try await Task.sleep(for: .seconds(2))
+            if original.response.contains(SampleURL.scheme + "://") {
+                // WebKit can take longer than 2 s to start on a busy CI runner: wait (bounded) until the content the
+                // sample carries has been met, so the zero-connection check below measures real attempts.
+                let deadline = ContinuousClock.now + .seconds(20)
+                while ContinuousClock.now < deadline,
+                      !harness.monitor.liveEntries.contains(where: { $0.delivery == .offline || $0.delivery == .blocked }) {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            }
             for action in FireActions.sections(for: harness.session.prepared).flatMap(\.actions) {
                 harness.session.fireManually(action.event)
             }
