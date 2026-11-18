@@ -9,7 +9,7 @@ import Foundation
 /// | `.won` | win notice (`nurl` / `purl`), unless `options.exchangeSendsWinNotice` is off |
 /// | `.rendered` | `burl`; AdCOM events type 1 (loaded), then type 2 (impression); Native `imptrackers`, `eventtrackers` event 1, `jstracker` |
 /// | `.viewable(level)` | AdCOM events 3 / 4 / 5; Native `eventtrackers` 2 / 3 / 4 |
-/// | `.click(assetID)` | Native: asset link `clicktrackers`, ad link `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
+/// | `.click(assetID)` | Native: the clicked asset's own link, else the ad's main link (Native 1.2 §5.4) — its `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
 /// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` (every other event is a won bid: `${AUCTION_LOSS}` = 0, "Bid Won") |
 /// | `.closed` | nothing |
 /// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |

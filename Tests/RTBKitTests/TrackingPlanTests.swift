@@ -237,12 +237,26 @@ struct TrackingPlanNativeTests {
         ])
     }
 
+    /// Native 1.2 §5.4 Asset Response `link`: "Link object for call to actions. The link object applies if the asset item
+    /// is activated (clicked). If there is no link object on the asset, the parent link object on the bid response
+    /// applies." An asset's own link overrides the main one entirely: only its clicktrackers fire, and it is the
+    /// destination.
     @Test func clickOnAnAssetWithItsOwnLink() {
-        // Asset link clicktrackers, then the ad link's, then one navigation to the asset's url.
         #expect(TrackingFixtures.plan(.click(assetID: 7), Self.candidate, native: Self.native12) == [
             PlannedRequest(.click, "click", "bid 1.2 › native › asset 7 › link › clicktrackers[0]", "https://t.example/asset-click"),
-            PlannedRequest(.click, "click", "bid 1.2 › native › link › clicktrackers[0]", "https://t.example/click"),
             PlannedRequest(.navigation, "click", "bid 1.2 › native › asset 7 › link", "https://landing.example/asset"),
+        ])
+    }
+
+    /// The override is the whole link object: an asset link without a usable `url` (invalid, Native 1.2 §5.7 "url":
+    /// required) has no destination of its own, so the click fires its trackers and navigates nowhere — neither the main
+    /// link's clicktrackers nor its url or fallback apply.
+    @Test func anAssetLinkOverridesTheMainLinkEvenWithoutAURL() {
+        let native = NativeAd(assets: [NativeAsset(id: 3, content: .title(text: "T"),
+                                                   link: AdLink(url: " ", clickTrackers: ["https://t.example/asset-only"]))],
+                              link: AdLink(url: "https://landing.example/", clickTrackers: ["https://t.example/main"], fallback: "https://fb.example/"))
+        #expect(TrackingFixtures.plan(.click(assetID: 3), Self.candidate, native: native) == [
+            PlannedRequest(.click, "click", "bid 1.2 › native › asset 3 › link › clicktrackers[0]", "https://t.example/asset-only"),
         ])
     }
 
@@ -386,8 +400,9 @@ struct TrackingPlanParentTests {
         #expect(rendered.map(\.category) == [.billing, .impression])
         #expect(rendered.map(\.parentID) == [nil, Self.winNoticeRequest])
         #expect(Self.plan(.viewable(.mrc50), Self.nativeByWinNotice, native: native, options: options).map(\.parentID) == [Self.winNoticeRequest])
+        // Asset 7 has its own link, which overrides the main one (Native 1.2 §5.4): its one clicktracker, then the navigation.
         let click = Self.plan(.click(assetID: 7), Self.nativeByWinNotice, native: native, options: options)
-        #expect(click.map(\.category) == [.click, .click, .navigation])
+        #expect(click.map(\.category) == [.click, .navigation])
         #expect(click.allSatisfy { $0.parentID == Self.winNoticeRequest })
         let loss = Self.plan(.loss(reason: 102), Self.nativeByWinNotice, native: native, options: options)
         #expect(loss.map(\.category) == [.loss])
