@@ -265,9 +265,11 @@ struct DeviceCatalogTests {
         #expect(try #require(DeviceCatalog.device(id: "iphone-se-3")).safeArea.bottom == 0)
     }
 
-    @Test func defaultDeviceIsACurrentIPhone() {
+    /// New windows and new Client requests simulate the iPhone 18 Pro (bid-client B7).
+    @Test func defaultDeviceIsTheIPhone18Pro() throws {
         #expect(DeviceCatalog.defaultDevice.family == .iPhone)
-        #expect(DeviceCatalog.defaultDevice.id == "iphone-17-pro")
+        #expect(DeviceCatalog.defaultDevice.id == "iphone-18-pro")
+        #expect(DeviceCatalog.defaultDevice == (try #require(DeviceCatalog.device(id: "iphone-18-pro"))))
     }
 
     @Test func profilesRoundTripThroughCodableWithAndWithoutTheCoverInsets() throws {

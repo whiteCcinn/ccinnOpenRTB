@@ -43,7 +43,8 @@ public enum DeviceCatalog {
         return devices.isEmpty ? nil : Group(family: family, devices: devices)
     }
 
-    public static var defaultDevice: DeviceProfile { iPhone17Pro }
+    /// What a new window simulates, and the device a new Client request goes out as.
+    public static var defaultDevice: DeviceProfile { iPhone18Pro }
 
     public static func device(id: String) -> DeviceProfile? { all.first { $0.id == id } }
 
@@ -67,6 +68,12 @@ public enum DeviceCatalog {
     // Apple: 6.3" 2622×1206 px @3x → 402×874 pt. Dynamic Island; UIKit safe area 62/34 pt (landscape 62 on both sides);
     // display corner radius 62 pt.
     private static let iPhone17Pro = iPhone("iphone-17-pro", "iPhone 17 Pro", model: "iPhone18,1", width: 402, height: 874, scale: 3,
+                                            cornerRadius: 62, safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland)
+
+    // September 2026. Apple: 6.3" 2622×1206 px @3x → 402×874 pt, the 17 Pro size. The Dynamic Island is narrower (Face ID
+    // moved under the display: the simulator draws it smaller); safe area approx.: the 17 Pro's 62/34 pt (Apple kept the
+    // bezels).
+    private static let iPhone18Pro = iPhone("iphone-18-pro", "iPhone 18 Pro", model: "iPhone19,1", width: 402, height: 874, scale: 3,
                                             cornerRadius: 62, safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland)
 
     private static let iPhones: [DeviceProfile] = [
@@ -109,11 +116,8 @@ public enum DeviceCatalog {
         // Apple: 6.9" 2868×1320 px @3x → 440×956 pt. Safe area 62/34 pt.
         iPhone("iphone-17-pro-max", "iPhone 17 Pro Max", model: "iPhone18,2", width: 440, height: 956, scale: 3, cornerRadius: 62,
                safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
-        // September 2026. Apple: 6.3" 2622×1206 px @3x → 402×874 pt and 6.9" 2868×1320 px @3x → 440×956 pt, the 17 Pro
-        // sizes. The Dynamic Island is narrower (Face ID moved under the display: the simulator draws it smaller); safe
-        // area approx.: the 17 Pro's 62/34 pt (Apple kept the bezels).
-        iPhone("iphone-18-pro", "iPhone 18 Pro", model: "iPhone19,1", width: 402, height: 874, scale: 3, cornerRadius: 62,
-               safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
+        iPhone18Pro,
+        // September 2026. Apple: 6.9" 2868×1320 px @3x → 440×956 pt, the 17 Pro Max size; island and safe area as the 18 Pro.
         iPhone("iphone-18-pro-max", "iPhone 18 Pro Max", model: "iPhone19,2", width: 440, height: 956, scale: 3, cornerRadius: 62,
                safeArea: DeviceInsets(top: 62, bottom: 34), cutout: .dynamicIsland),
     ]

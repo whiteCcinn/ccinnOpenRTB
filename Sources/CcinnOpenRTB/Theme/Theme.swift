@@ -32,6 +32,7 @@ enum Theme {
         case .verification: .adaptive(light: .hex(0x7E22CE), dark: .hex(0xC084FC))
         case .content: .adaptive(light: .hex(0x92400E), dark: .hex(0xFBBF24))
         case .creative: .adaptive(light: .hex(0x047857), dark: .hex(0x6EE7B7))
+        case .bidRequest: .adaptive(light: .hex(0x334155), dark: .hex(0xCBD5E1))
         }
         return Color(nsColor: color)
     }
@@ -50,6 +51,7 @@ enum Theme {
         case .verification: "checkmark.seal"
         case .content: "doc.richtext"
         case .creative: "paintbrush"
+        case .bidRequest: "paperplane"
         }
     }
 
@@ -67,6 +69,7 @@ enum Theme {
         case .verification: "Verification"
         case .content: "Content"
         case .creative: "Creative"
+        case .bidRequest: "Bid request"
         }
     }
 

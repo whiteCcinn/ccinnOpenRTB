@@ -220,9 +220,15 @@ public struct BidRequestSummary: Sendable, Hashable {
         /// OpenRTB 3.0 `item.qty` or `item.qtyflt` (only one may be present), 1 when neither is (`qty`'s default); the
         /// `${OPENRTB_ITEM_QTY}` value. `nil` for an OpenRTB 2.x impression.
         public var itemQuantity: Double?
+        /// The ad is shown full screen: OpenRTB 2.x `imp.instl`, 2.6 `video.plcmt` 3 ("Interstitial"), AdCOM
+        /// `display.instl`.
+        public var isInterstitial: Bool
+        /// The user is rewarded for viewing it: OpenRTB 2.6 `imp.rwdd`, the pre-2.6 extensions `imp.ext.is_rewarded_inventory`
+        /// and `imp.ext.prebid.is_rewarded_inventory`, AdCOM `placement.reward`.
+        public var isRewarded: Bool
 
         public init(id: String, formats: Set<AdFormat>, size: AdSize? = nil, secure: Bool = false, nativeHints: NativeRequestHints? = nil,
-                    quantityMultiplier: Double? = nil, itemQuantity: Double? = nil) {
+                    quantityMultiplier: Double? = nil, itemQuantity: Double? = nil, isInterstitial: Bool = false, isRewarded: Bool = false) {
             self.id = id
             self.formats = formats
             self.size = size
@@ -230,6 +236,8 @@ public struct BidRequestSummary: Sendable, Hashable {
             self.nativeHints = nativeHints
             self.quantityMultiplier = quantityMultiplier
             self.itemQuantity = itemQuantity
+            self.isInterstitial = isInterstitial
+            self.isRewarded = isRewarded
         }
     }
 

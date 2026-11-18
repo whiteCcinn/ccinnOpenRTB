@@ -50,7 +50,8 @@ enum BidRequestReader {
                 formats.insert(.banner)
                 size = adSize(banner, log: &log) ?? firstSize(banner, arrayKey: "format", log: &log)
             }
-            if let video = imp.object("video", log: &log) {
+            let video = imp.object("video", log: &log)
+            if let video {
                 formats.insert(.video)
                 size = size ?? adSize(video, log: &log)
             }
@@ -60,9 +61,13 @@ enum BidRequestReader {
                 formats.insert(.native)
                 nativeHints = nativeRequestHints(native, log: &log)
             }
+            // 2.6 `video.plcmt` 3 is "Interstitial"; `rwdd` is 2.6, older requests carry the reward in an extension.
+            let interstitial = (imp.flag("instl", log: &log) ?? false) || video?.int("plcmt", log: &log) == Self.interstitialVideoPlacement
+            let rewarded = (imp.flag("rwdd", log: &log) ?? false) || rewardedExtension(of: imp)
             impressions.append(BidRequestSummary.Impression(id: impID, formats: formats, size: size, secure: imp.flag("secure", log: &log) ?? false,
                                                             nativeHints: nativeHints,
-                                                            quantityMultiplier: imp.object("qty", log: &log)?.double("multiplier", log: &log)))
+                                                            quantityMultiplier: imp.object("qty", log: &log)?.double("multiplier", log: &log),
+                                                            isInterstitial: interstitial, isRewarded: rewarded))
         }
         let device = request.object("device", log: &log)
         var facts = RequestFacts(id: id, impressions: impressions, log: log)
@@ -80,6 +85,28 @@ enum BidRequestReader {
         facts.readRegs(request.object("regs", log: &facts.log))
         log = facts.log
         return facts.summary
+    }
+
+    /// OpenRTB 2.6 List: Plcmt Subtypes – Video, 3 = "Interstitial".
+    static let interstitialVideoPlacement = 3
+
+    /// The reward signal of requests older than 2.6 `rwdd`: Google's `imp.ext.is_rewarded_inventory` (a boolean) or Prebid's
+    /// `imp.ext.prebid.is_rewarded_inventory` (an integer). Extensions are free-form, so they are read, never validated.
+    private static func rewardedExtension(of imp: JSONObjectReader) -> Bool {
+        guard case let .object(ext)? = imp.raw("ext") else { return false }
+        if isSet(ext["is_rewarded_inventory"]) { return true }
+        guard case let .object(prebid)? = ext["prebid"] else { return false }
+        return isSet(prebid["is_rewarded_inventory"])
+    }
+
+    /// `true`, or a non-zero number.
+    private static func isSet(_ value: JSONValue?) -> Bool {
+        switch value {
+        case let .bool(flag)?: flag
+        case let .int(number)?: number != 0
+        case let .double(number)?: number.isFinite && number != 0
+        default: false
+        }
     }
 
     /// `imp.native.request` is a JSON string; an object is accepted with a warning.
@@ -113,7 +140,9 @@ enum BidRequestReader {
             var size: AdSize?
             var nativeHints: NativeRequestHints?
             let placement = item.object("spec", log: &log)?.object("placement", log: &log)
+            var interstitial = false
             if let display = placement?.object("display", log: &log) {
+                interstitial = display.flag("instl", log: &log) ?? false
                 size = adSize(display, log: &log) ?? firstSize(display, arrayKey: "displayfmt", log: &log)
                 if let nativeFormat = display.object("nativefmt", log: &log) {
                     formats.insert(.native)
@@ -129,7 +158,8 @@ enum BidRequestReader {
             if placement?.has("audio") == true { formats.insert(.audio) }
             impressions.append(BidRequestSummary.Impression(id: itemID, formats: formats, size: size,
                                                             secure: placement?.flag("secure", log: &log) ?? false, nativeHints: nativeHints,
-                                                            itemQuantity: itemQuantity(item, log: &log)))
+                                                            itemQuantity: itemQuantity(item, log: &log), isInterstitial: interstitial,
+                                                            isRewarded: placement?.flag("reward", log: &log) ?? false))
         }
         let context = request.object("context", log: &log)
         let device = context?.object("device", log: &log)
