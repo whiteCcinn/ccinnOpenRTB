@@ -47,7 +47,11 @@ struct MacrosPane: View {
             MacroEntriesSection(title: "Custom macros", footer: "${KEY} values; they override the bid's own bid.macro values.",
                                 keyPrompt: "KEY", entries: $session.macros.customMacros)
             MacroEntriesSection(title: "Request values (fallbacks)",
-                                footer: "Used for bracketed VAST macros when the pasted bid request does not supply them.",
+                                footer: """
+                                Bracketed VAST macros the pasted bid request does not supply; they replace the simulator's own \
+                                defaults. List macros such as [BLOCKEDADCATEGORIES], [REGULATIONS] or [VASTVERSIONS] take \
+                                comma-separated items (gdpr,coppa).
+                                """,
                                 keyPrompt: "[NAME]", entries: $session.macros.requestValues)
         }
         .formStyle(.grouped)

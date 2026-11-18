@@ -44,7 +44,16 @@ struct MacroSettings: Equatable, Sendable {
         MacroEntry(key: "[IFA]", value: "6D92078A-8246-4BA4-AE5B-76104861E7DC"),
         MacroEntry(key: "[IFATYPE]", value: "idfa"),
         MacroEntry(key: "[LIMITADTRACKING]", value: "0"),
-        MacroEntry(key: "[REGULATIONS]", value: "gdpr:0"),
+    ]
+
+    /// VAST 4.1/4.2 §6.2 macros of type `Array<T>` (and the `number,number` pairs `[LATLONG]`, `[PLAYERSIZE]`, `[CLICKPOS]`):
+    /// a panel value is split at commas into `MacroContext.customLists`, so the expander percent-encodes each item and
+    /// keeps the commas literal (§6.1). `[REGULATIONS]` has no default: it is `Array<string>` (`gdpr`, `coppa`, …) and
+    /// stays unknown unless the request or the user supplies it.
+    static let listMacroKeys: Set<String> = [
+        "[ADCATEGORIES]", "[APIFRAMEWORKS]", "[BLOCKEDADCATEGORIES]", "[CLICKPOS]", "[EXTENSIONS]", "[INVENTORYSTATE]", "[LATLONG]",
+        "[MEDIAMIME]", "[PLAYERCAPABILITIES]", "[PLAYERSIZE]", "[PLAYERSTATE]", "[REGULATIONS]", "[UNIVERSALADID]", "[VASTVERSIONS]",
+        "[VERIFICATIONVENDORS]",
     ]
 
     /// Parses a price typed with either decimal separator; `nil` when empty or not a finite, non-negative number.
@@ -55,24 +64,55 @@ struct MacroSettings: Equatable, Sendable {
     }
 
     /// The macro context for one tracker batch: `MacroContext.simulatorDefaults` (the bid, the pasted request, the
-    /// response ids, the device and the player size), then the panel.
-    ///
-    /// Precedence for request-derived VAST values (`[DOMAIN]`, `[IFA]`, …): the pasted request, else the panel's fallback.
-    /// `[TRANSACTIONID]` is the request's `source.tid`, else one per render (fixed in deterministic mode). Explicit
-    /// `${KEY}` macros override the bid's own `bid.macro` values. Empty panel fields are unset.
+    /// response ids, the device and the player size), then the panel (`overlay`).
     /// - Parameters:
     ///   - transactionID: `[TRANSACTIONID]` of the current render when the request has none.
     ///   - playhead: `[ADPLAYHEAD]` of the ad the event belongs to.
     func context(candidate: AdCandidate, input: ParsedInput, device: DeviceProfile, playerSize: CGSize, transactionID: String,
                  playhead: Double? = nil) -> MacroContext {
-        var context = MacroContext.simulatorDefaults(candidate: candidate, request: input.request, device: device,
-                                                     playerWidth: Self.points(playerSize.width), playerHeight: Self.points(playerSize.height),
-                                                     responseID: input.responseID, responseBidID: input.bidResponseID)
+        func defaults(_ request: BidRequestSummary?) -> MacroContext {
+            MacroContext.simulatorDefaults(candidate: candidate, request: request, device: device, playerWidth: Self.points(playerSize.width),
+                                           playerHeight: Self.points(playerSize.height), responseID: input.responseID,
+                                           responseBidID: input.bidResponseID)
+        }
+        let base = defaults(input.request)
+        return overlay(on: base, withoutRequest: input.request == nil ? base : defaults(nil), candidate: candidate,
+                       transactionID: transactionID, playhead: playhead)
+    }
+
+    /// The panel over the kit's defaults (pure).
+    ///
+    /// - Request values (`[DOMAIN]`, `[BLOCKEDADCATEGORIES]`, …): the pasted request wins; otherwise the panel's value
+    ///   replaces the simulator's own default (one `withoutRequest` has too, such as the player's `[VASTVERSIONS]`). List
+    ///   macros (`listMacroKeys`) go to `customLists`, one item per comma; scalars to `custom`.
+    /// - `[TRANSACTIONID]` is the request's `source.tid`, else one per render (fixed in deterministic mode).
+    /// - `${KEY}` macros override the bid's own `bid.macro` values.
+    /// - Auction fields: a typed value replaces the default; an empty (or unreadable) field keeps it — including
+    ///   `${AUCTION_MBR}`, which is clearing price ÷ bid price only when a clearing price is typed.
+    /// - Parameters:
+    ///   - base: `simulatorDefaults` with the pasted request.
+    ///   - withoutRequest: `simulatorDefaults` without it: a value that differs (or exists only in `base`) came from the
+    ///     request.
+    func overlay(on base: MacroContext, withoutRequest: MacroContext, candidate: AdCandidate, transactionID: String,
+                 playhead: Double? = nil) -> MacroContext {
+        var context = base
+        func suppliedByRequest(_ key: String) -> Bool {
+            base.custom[key] != withoutRequest.custom[key] || base.customLists[key] != withoutRequest.customLists[key]
+        }
         for entry in requestValues {
-            let key = entry.key.trimmingCharacters(in: .whitespaces)
-            guard !key.isEmpty, !entry.value.isEmpty else { continue }
-            let bracketed = Self.bracketedKey(key)
-            if context.custom[bracketed]?.isEmpty ?? true { context.custom[bracketed] = entry.value }
+            let trimmed = entry.key.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !entry.value.isEmpty else { continue }
+            let key = Self.bracketedKey(trimmed)
+            guard !suppliedByRequest(key) else { continue }
+            if Self.listMacroKeys.contains(key) {
+                let items = Self.listItems(entry.value)
+                guard !items.isEmpty else { continue }
+                context.customLists[key] = items
+                context.custom[key] = nil
+            } else {
+                context.custom[key] = entry.value
+                context.customLists[key] = nil
+            }
         }
         if context.custom["[TRANSACTIONID]"]?.isEmpty ?? true {
             context.custom["[TRANSACTIONID]"] = deterministic ? Self.deterministicTransactionID : transactionID
@@ -90,14 +130,21 @@ struct MacroSettings: Equatable, Sendable {
         if !auction.isEmpty { context.auctionID = auction }
         if !seat.isEmpty { context.seatID = seat }
         if let clearing { context.price = clearing }
-        context.encryptedPrice = encrypted.isEmpty ? nil : encrypted
-        context.marketBidRatio = clearing.flatMap { clearing in candidate.price > 0 ? clearing / candidate.price : nil }
+        if !encrypted.isEmpty { context.encryptedPrice = encrypted }
+        context.marketBidRatio = clearing.flatMap { clearing in candidate.price > 0 ? clearing / candidate.price : nil } ?? base.marketBidRatio
         context.lossReason = lossReason.code
-        context.minimumToWin = Self.price(minimumToWin)
-        context.adPlayhead = playhead
-        context.timestamp = deterministic ? Self.deterministicTimestamp : nil
-        context.cacheBuster = deterministic ? Self.deterministicCacheBuster : nil
+        context.minimumToWin = Self.price(minimumToWin) ?? base.minimumToWin
+        context.adPlayhead = playhead ?? base.adPlayhead
+        if deterministic {
+            context.timestamp = Self.deterministicTimestamp
+            context.cacheBuster = Self.deterministicCacheBuster
+        }
         return context
+    }
+
+    /// `" IAB25 , IAB26,,"` → `["IAB25", "IAB26"]`.
+    static func listItems(_ value: String) -> [String] {
+        value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
     /// `${KEY}` / `KEY` → `KEY`.
