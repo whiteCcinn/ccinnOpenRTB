@@ -97,6 +97,60 @@ struct SampleMediaGenerationTests {
         #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date == modified)
     }
 
+    /// Several app processes can generate the same files at the same moment; independent `SampleMedia` instances share
+    /// nothing but the directory, like processes. Every request succeeds, one file per asset remains, and no
+    /// temporary file is left behind.
+    @Test(.timeLimit(.minutes(2)))
+    func instancesSharingADirectoryEachGetTheSameFiles() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let instances = (0..<4).map { _ in SampleMedia(directory: directory) }
+        let urls = try await withThrowingTaskGroup(of: URL.self) { group in
+            for media in instances {
+                group.addTask { try await media.fileURL(for: .video) }
+                group.addTask { try await media.fileURL(for: .audio) }
+            }
+            return try await group.reduce(into: Set<URL>()) { $0.insert($1) }
+        }
+        #expect(urls == [directory.appendingPathComponent("sample-15s.mp4"), directory.appendingPathComponent("sample-15s.m4a")])
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        #expect(files == ["sample-15s.m4a", "sample-15s.mp4"], "no temporary files are left behind")
+    }
+
+    /// A process that crashes while generating leaves its workspace behind. Creating a `SampleMedia` removes those that
+    /// are over an hour old (no generation runs that long), including the files older builds wrote next to the samples,
+    /// and nothing else: a workspace another process is using right now, or a sample however old, stays.
+    @Test func staleWorkspacesAreSweptWhenCreated() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = FileManager.default
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let twoHoursAgo = Date().addingTimeInterval(-2 * 3_600)
+
+        func make(_ name: String, isDirectory: Bool, modified: Date? = nil) throws {
+            let url = directory.appendingPathComponent(name)
+            if isDirectory {
+                try manager.createDirectory(at: url, withIntermediateDirectories: false)
+                try Data("partial".utf8).write(to: url.appendingPathComponent("sample-15s.mp4"))
+            } else {
+                try Data("partial".utf8).write(to: url)
+            }
+            if let modified { try manager.setAttributes([.modificationDate: modified], ofItemAtPath: url.path) }
+        }
+        try make(".tmp-\(UUID().uuidString)", isDirectory: true, modified: twoHoursAgo)  // crashed generation
+        try make(".tmp-\(UUID().uuidString)-sample-15s.mp4", isDirectory: false, modified: twoHoursAgo)  // older builds
+        try make(".tmp-\(UUID().uuidString)-sample-15s.mp4.sb-f10320fd-AbCdEf", isDirectory: false, modified: twoHoursAgo)
+        let fresh = ".tmp-\(UUID().uuidString)"
+        try make(fresh, isDirectory: true)  // another process is generating right now
+        try make("sample-15s.m4a", isDirectory: false, modified: twoHoursAgo)  // a generated sample
+        try make("tmp-notes", isDirectory: false, modified: twoHoursAgo)  // not a workspace
+
+        let media = SampleMedia(directory: directory)
+        await media.startupSweep.value
+        let left = try manager.contentsOfDirectory(atPath: directory.path).sorted()
+        #expect(left == [fresh, "sample-15s.m4a", "tmp-notes"].sorted())
+    }
+
     @Test func audioIsFifteenSecondsOfAAC() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
