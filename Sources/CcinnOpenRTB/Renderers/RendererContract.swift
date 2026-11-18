@@ -111,6 +111,6 @@ struct AdView: View {
     let host: any AdRenderingHost
 
     var body: some View {
-        Rectangle().fill(.quaternary).overlay(Text("Ad"))
+        RendererRoot(request: request, host: host)
     }
 }
