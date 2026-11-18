@@ -330,8 +330,12 @@ public struct VASTAdOrigin: Sendable, Hashable {
 
 /// One hop of a wrapper chain.
 public struct VASTHop: Sendable, Hashable {
-    /// `nil` for the document the bid carried inline.
+    /// The URL actually requested: `template` with its VAST `[…]` macros expanded when the resolver has a macro context
+    /// (VAST 4.1 §6.1/§6.2); `nil` for the document the bid carried inline.
     public var url: String?
+    /// The request URI as written (the `VASTAdTagURI`, or the pasted / `curl` tag URL), before macro expansion; `nil` for
+    /// the document the bid carried inline.
+    public var template: String?
     public var document: VASTDocument?
     public var error: VASTErrorCode?
     /// The fetcher's request id (network monitor entry); `nil` for markup carried in the bid.
@@ -340,8 +344,9 @@ public struct VASTHop: Sendable, Hashable {
     public var parent: VASTAdOrigin?
 
     public init(url: String? = nil, document: VASTDocument? = nil, error: VASTErrorCode? = nil, requestID: UUID? = nil,
-                parent: VASTAdOrigin? = nil) {
+                parent: VASTAdOrigin? = nil, template: String? = nil) {
         self.url = url
+        self.template = template
         self.document = document
         self.error = error
         self.requestID = requestID
@@ -424,4 +429,13 @@ public struct ResolvedVAST: Sendable, Hashable {
 public protocol VASTFetcher: Sendable {
     /// `parentRequestID` links the fetch to the wrapper that asked for it in the network monitor.
     func fetchVAST(_ url: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?)
+    /// The resolver's call: `url` is the URL to request (VAST macros expanded), `template` the URI as written, so a fetcher
+    /// that records requests can show both. The default forwards to `fetchVAST(_:parentRequestID:)`.
+    func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?)
+}
+
+public extension VASTFetcher {
+    func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
+        try await fetchVAST(url, parentRequestID: parentRequestID)
+    }
 }

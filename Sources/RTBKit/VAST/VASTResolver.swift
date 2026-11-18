@@ -27,8 +27,11 @@ public struct VASTResolver: Sendable {
     public var maxDepth: Int
     /// `imp.secure = 1`: non-HTTPS URLs are warnings instead of notes.
     public var requireSecure: Bool
-    /// When set, VAST macros in http(s) tag URIs (`[CACHEBUSTING]`, `[TIMESTAMP]`, …) are expanded before fetching, as a
-    /// player does. `data:` URIs are never expanded: their payload is a VAST document with its own macros.
+    /// When set, VAST macros in http(s) request URIs — a Wrapper's `VASTAdTagURI`, a pasted or AdCOM `curl` tag URL — are
+    /// expanded before fetching, as a player does (VAST 4.1 §6.1/§6.2: `[CACHEBUSTING]`, `[TIMESTAMP]`, `[PLAYERSIZE]`, …).
+    /// Only VAST `[…]` macros: OpenRTB `${…}` is the exchange's and stays literal. `data:` URIs are never expanded: their
+    /// payload is a VAST document with its own macros. `nil`: URIs are requested as written. Each hop keeps both forms
+    /// (`VASTHop.template`, `VASTHop.url`), and the fetcher receives both (`fetchVAST(_:template:parentRequestID:)`).
     public var macroContext: MacroContext?
     /// Upper bound on fetches for one resolution (pods of wrappers fan out); further wrappers fail with 302.
     public var maxFetches: Int
@@ -73,14 +76,15 @@ private struct VASTResolution {
             // With a parent, a request (the win notice, `curl`) delivered the markup: the exchange never substituted it.
             parsed = parse(xml, hop: 0, served: parentRequestID != nil)
         case let .url(rawURL):
-            let url = expandedTagURI(rawURL.trimmingCharacters(in: .whitespacesAndNewlines))
+            let template = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = expandedTagURI(template)
             fetchCount += 1
             do {
-                let response = try await resolver.fetcher.fetchVAST(url, parentRequestID: parentRequestID)
-                chain.append(VASTHop(url: url, requestID: response.requestID))
+                let response = try await resolver.fetcher.fetchVAST(url, template: template, parentRequestID: parentRequestID)
+                chain.append(VASTHop(url: url, requestID: response.requestID, template: template))
                 parsed = parse(response.body, hop: 0, served: true)
             } catch {
-                chain.append(VASTHop(url: url, error: .wrapperTimeout))
+                chain.append(VASTHop(url: url, error: .wrapperTimeout, template: template))
                 report(.error, "vast.tag.fetch.failed", "The VAST tag could not be loaded: \(Self.describe(error)) (VAST error 301).", "VAST")
                 return finish(.failed(Failure(code: .wrapperTimeout)))
             }
@@ -239,7 +243,8 @@ private struct VASTResolution {
                    "More than \(resolver.maxFetches) VAST fetches for one response: this wrapper is not followed (VAST error 302).", wrapperPath)
             return failed(.wrapperLimit)
         }
-        let url = expandedTagURI(wrapper.adTagURI)
+        let template = wrapper.adTagURI
+        let url = expandedTagURI(template)
         guard VASTURLCheck.scheme(of: url) != nil, !url.contains(where: \.isWhitespace) else {
             report(.error, "vast.wrapper.adTagURI.invalid", "The VASTAdTagURI is not an absolute URL, so it cannot be fetched (VAST error 300).",
                    wrapperPath + "/VASTAdTagURI")
@@ -250,11 +255,11 @@ private struct VASTResolution {
         let hop = chain.count
         let body: String
         do {
-            let response = try await resolver.fetcher.fetchVAST(url, parentRequestID: requestID(ofHop: origin.hop))
-            chain.append(VASTHop(url: url, requestID: response.requestID, parent: origin))
+            let response = try await resolver.fetcher.fetchVAST(url, template: template, parentRequestID: requestID(ofHop: origin.hop))
+            chain.append(VASTHop(url: url, requestID: response.requestID, parent: origin, template: template))
             body = response.body
         } catch {
-            chain.append(VASTHop(url: url, error: .wrapperTimeout, parent: origin))
+            chain.append(VASTHop(url: url, error: .wrapperTimeout, parent: origin, template: template))
             report(.error, "vast.wrapper.fetch.failed", "The VASTAdTagURI could not be loaded: \(Self.describe(error)) (VAST error 301).",
                    wrapperPath + "/VASTAdTagURI")
             return failed(.wrapperTimeout)
@@ -342,11 +347,12 @@ private struct VASTResolution {
         chain.indices.contains(hop) ? chain[hop].requestID : nil
     }
 
+    /// The URL to request for a request URI: VAST `[…]` macros expanded in http(s) URIs when there is a context.
     private func expandedTagURI(_ uri: String) -> String {
         guard let context = resolver.macroContext, let scheme = VASTURLCheck.scheme(of: uri), scheme == "http" || scheme == "https" else {
             return uri
         }
-        return MacroExpander.expand(uri, context: context).url
+        return MacroExpander.expandVAST(uri, context: context).url
     }
 
     // MARK: Issues

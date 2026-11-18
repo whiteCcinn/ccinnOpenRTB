@@ -473,9 +473,9 @@ struct VASTResolverTests {
         #expect(result.chain == [
             VASTHop(url: nil, document: VASTParser.parse(outer).document, requestID: root, parent: nil),
             VASTHop(url: F.dataURL(middle), document: VASTParser.parse(middle).document, requestID: calls[0].requestID,
-                    parent: VASTAdOrigin(hop: 0, ad: 0)),
+                    parent: VASTAdOrigin(hop: 0, ad: 0), template: F.dataURL(middle)),
             VASTHop(url: F.dataURL(pod), document: VASTParser.parse(pod).document, requestID: calls[1].requestID,
-                    parent: VASTAdOrigin(hop: 1, ad: 0)),
+                    parent: VASTAdOrigin(hop: 1, ad: 0), template: F.dataURL(pod)),
         ])
         #expect(result.failure == nil && result.adFailures.isEmpty)
         #expect(result.ads.map(\.inline.adTitle) == ["p1", "p2"])
