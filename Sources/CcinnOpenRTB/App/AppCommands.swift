@@ -29,6 +29,13 @@ struct AppCommands: Commands {
                 .keyboardShortcut("0", modifiers: .command)
                 .disabled(session == nil)
             Divider()
+            Picker("Network Mode", selection: Binding(get: { session?.sessionMode ?? .simulated }, set: { session?.choose($0) })) {
+                ForEach(SessionMode.allCases) { mode in
+                    Text(mode == .real ? mode.title + "…" : mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+            .disabled(session == nil)
             if session?.mode == .real {
                 Button("Switch to Simulated Mode") { session?.useSimulatedMode() }
                     .keyboardShortcut("m", modifiers: [.command, .shift])

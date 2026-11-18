@@ -78,27 +78,33 @@ struct PlacementPicker: View {
     }
 }
 
-/// Simulated / Real. Real asks first (`requestRealMode`), and is unmistakably red while on.
+/// Offline · Simulated · Real. Real asks first (`requestRealMode`), and is unmistakably red while on; each mode's tooltip
+/// says what it loads and sends.
 struct TrackingModeSwitch: View {
     let session: AdSession
 
     var body: some View {
         HStack(spacing: 8) {
-            Picker("Tracking", selection: Binding(get: { session.mode }, set: { mode in
-                switch mode {
-                case .real: session.requestRealMode()
-                case .simulated: session.useSimulatedMode()
+            Picker("Network", selection: Binding(get: { session.sessionMode }, set: { session.choose($0) })) {
+                ForEach(SessionMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.systemImage).tag(mode).help(mode.help)
                 }
-            })) {
-                Label("Simulated", systemImage: "shield.lefthalf.filled").tag(TrackingMode.simulated)
-                Label("Real", systemImage: "dot.radiowaves.left.and.right").tag(TrackingMode.real)
             }
             .pickerStyle(.segmented)
             .labelStyle(.titleAndIcon)
             .fixedSize()
-            .help(session.mode == .real
-                ? "Real mode: trackers are sent to their servers. Switch back to Simulated to stop."
-                : "Simulated mode: trackers are recorded, nothing is sent. Real asks for confirmation first.")
+            .help(SessionMode.allCases.map(\.help).joined(separator: "\n"))
+            .accessibilityValue(session.sessionMode.help)
+            if session.sessionMode == .offline {
+                Text("OFFLINE")
+                    .font(.caption.weight(.heavy))
+                    .tracking(1)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.gray, in: Capsule())
+                    .accessibilityLabel("Offline: nothing is loaded or sent")
+            }
             if session.mode == .real {
                 Text("REAL")
                     .font(.caption.weight(.heavy))

@@ -77,6 +77,9 @@ final class VASTPlayerModel {
 
     @ObservationIgnored private let engine: any PlaybackEngine
     @ObservationIgnored private weak var host: (any AdRenderingHost)?
+
+    /// The session is Offline: content from the network is not loaded (read in view bodies, so it updates with the monitor).
+    var contentIsOffline: Bool { host?.monitor.offline ?? false }
     @ObservationIgnored private let chooseMedia: VASTMediaChooser
     @ObservationIgnored private var tracker: VASTPlaybackTracker?
     @ObservationIgnored private var runTask: Task<Void, Never>?

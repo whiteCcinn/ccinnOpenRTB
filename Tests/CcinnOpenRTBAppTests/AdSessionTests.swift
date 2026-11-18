@@ -599,6 +599,51 @@ struct AdSessionTests {
         #expect(harness.transport.requests.allSatisfy { $0.headers["User-Agent"] == tablet.userAgent })
     }
 
+    // MARK: Offline
+
+    /// Safety review: Offline is the third mode — Simulated tracking with no content loaded from the network either.
+    /// Opt-in (Simulated stays the default); Real leaves it, and choosing it from Real ends Real at once.
+    @Test func offlineIsAModeOfItsOwn() async throws {
+        let harness = SessionHarness(Fixtures.input([display]))
+        #expect(harness.session.sessionMode == .simulated, "Simulated is the default")
+        harness.session.choose(.offline)
+        #expect(harness.session.sessionMode == .offline)
+        #expect(harness.monitor.offline && harness.monitor.mode == .simulated)
+        #expect(harness.session.lifecycleLog.last?.label.hasPrefix("Offline") == true)
+
+        harness.session.choose(.simulated)
+        #expect(harness.session.sessionMode == .simulated && !harness.monitor.offline)
+
+        harness.session.choose(.offline)
+        harness.session.choose(.real)
+        #expect(harness.session.sessionMode == .offline, "Real only asks")
+        let confirmation = try #require(harness.session.realModeConfirmation)
+        harness.session.confirmRealMode(confirmation)
+        #expect(harness.session.sessionMode == .real && !harness.monitor.offline)
+
+        harness.session.choose(.offline)
+        #expect(harness.session.sessionMode == .offline && harness.monitor.mode == .simulated)
+        #expect(harness.session.realModeConfirmation == nil)
+    }
+
+    /// Offline, content from the network is recorded and not loaded: the render shows the reason instead of the ad.
+    @Test func offlineRecordsContentAndLoadsNothing() async throws {
+        let candidate = Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")
+        let harness = SessionHarness(Fixtures.input([candidate]))
+        harness.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await harness.paste()
+        harness.session.choose(.offline)
+        await harness.renderAndWait()
+        #expect(harness.transport.requests.isEmpty)
+        let content = try #require(harness.monitor.liveEntries.first { $0.category == .content })
+        #expect(content.delivery == .offline)
+        guard case let .failed(message) = harness.session.phase else {
+            Issue.record("expected the render to say why: \(harness.session.phase)")
+            return
+        }
+        #expect(message.contains("Offline"), "\(message)")
+    }
+
     // MARK: Replays
 
     /// AdTech review: rendering again re-fires the auction's win, billing and impressions. It stays possible as a simulator

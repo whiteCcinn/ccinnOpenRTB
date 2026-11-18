@@ -4,7 +4,7 @@ import RTBKit
 
 /// Launch arguments for automated checks (app-shell's set; kit-network owns `--demo-network` / `--snapshot-network`):
 ///
-///     --sample <id>  --device <id>  --placement <name>  --mode simulated|real
+///     --sample <id>  --device <id>  --placement <name>  --mode offline|simulated|real
 ///     --landscape  --folded  --spanned  --visibility <0…1>  --zoom fit|<scale>  --no-render
 ///     --snapshot <file.png> [--snapshot-delay <s>] [--quit-after-snapshot]  --open-network  --export-har <file.har>
 ///
@@ -18,7 +18,7 @@ struct LaunchOptions: Equatable {
     var sampleID: String?
     var deviceID: String?
     var placement: Placement?
-    var mode: TrackingMode?
+    var mode: SessionMode?
     var landscape = false
     var folded = false
     var spanned = false
@@ -44,7 +44,7 @@ struct LaunchOptions: Equatable {
         sampleID = value("--sample")
         deviceID = value("--device")
         placement = value("--placement").flatMap(Self.placement(named:))
-        mode = value("--mode").flatMap { TrackingMode(rawValue: $0.lowercased()) }
+        mode = value("--mode").flatMap { SessionMode(rawValue: $0.lowercased()) }
         landscape = flag("--landscape")
         folded = flag("--folded")
         spanned = flag("--spanned")
@@ -93,11 +93,7 @@ struct LaunchOptions: Equatable {
         if let placement { session.placement = placement }
         if let visibility { session.setVisibleFraction(visibility) }
         if let zoom { session.zoom = zoom }
-        switch mode {
-        case .real?: session.requestRealMode()
-        case .simulated?: session.useSimulatedMode()
-        case nil: break
-        }
+        if let mode { session.choose(mode) }
         if renders, loaded { session.render() }
     }
 }

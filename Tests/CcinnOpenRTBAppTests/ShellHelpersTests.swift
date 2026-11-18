@@ -122,6 +122,26 @@ struct LaunchOptionsTests {
         #expect(harness.session.realModeConfirmation != nil)
     }
 
+    /// `--mode offline` starts the window Offline (snapshot runs that must load nothing).
+    @MainActor
+    @Test func offlineFromTheCommandLine() async {
+        let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.html("<p>"))]))
+        let options = LaunchOptions(arguments: ["app", "--mode", "offline", "--no-render"])
+        #expect(options.mode == .offline)
+        await options.apply(to: harness.session, samples: [])
+        #expect(harness.session.sessionMode == .offline)
+        #expect(harness.monitor.offline)
+    }
+
+    /// The toolbar's three modes and what each one's tooltip promises (safety review wording).
+    @Test func eachModeSaysWhatItLoadsAndSends() {
+        #expect(SessionMode.allCases == [.offline, .simulated, .real])
+        #expect(SessionMode.allCases.map(\.title) == ["Offline", "Simulated", "Real"])
+        #expect(SessionMode.simulated.help == "Simulated: trackers and notices are never sent; ad content loads from the markup's URLs")
+        #expect(SessionMode.offline.help == "Offline: nothing is loaded or sent; only data: URLs and built-in samples render, the rest shows a placeholder")
+        #expect(SessionMode.real.help == "Real: trackers and notices are sent to their servers (asks for confirmation first)")
+    }
+
     @MainActor
     @Test func applyingSetsUpTheSessionAndRendersTheSample() async throws {
         let harness = SessionHarness(Fixtures.input([Fixtures.candidate(.html("<p>"))]))

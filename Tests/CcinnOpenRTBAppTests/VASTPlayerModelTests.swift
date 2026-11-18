@@ -321,3 +321,19 @@ struct VASTPlayerModelTests {
         #expect(host.navigations.count == 1)
     }
 }
+
+/// Safety review (Offline): when nothing played because the session is Offline, the player says so — not a bare
+/// "VAST error 301" that reads like the ad server's fault.
+@Suite("Player messages")
+struct PlayerMessageTests {
+    @Test func offlineExplainsWhyNothingPlayed() {
+        let offline = VASTPlayerMessages.nothingPlayed(lastError: .wrapperTimeout, offline: true)
+        #expect(offline.title == "Offline")
+        #expect(offline.detail.contains("not loaded") && offline.detail.contains("Simulated") && offline.detail.contains("301"))
+        let online = VASTPlayerMessages.nothingPlayed(lastError: .noSupportedMedia, offline: false)
+        #expect(online.title == "VAST error 403")
+        #expect(online.detail == "No media file this player can play.")
+        #expect(VASTPlayerMessages.nothingPlayed(lastError: nil, offline: false).title == "Nothing to play")
+        #expect(VASTPlayerMessages.nothingPlayed(lastError: nil, offline: true).title == "Offline")
+    }
+}

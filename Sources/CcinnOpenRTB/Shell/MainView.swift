@@ -9,6 +9,8 @@ import SwiftUI
 struct MainView: View {
     @State private var session = AdSession()
     @Environment(\.openWindow) private var openWindow
+    /// Offline is remembered per window (Real never is: every session starts Simulated unless it was Offline).
+    @SceneStorage("ccinn.session.offline") private var remembersOffline = false
 
     var body: some View {
         HSplitView {
@@ -26,6 +28,8 @@ struct MainView: View {
         .navigationTitle("CcinnOpenRTB")
         .providesNetworkMonitor(session.monitor)
         .focusedSceneValue(\.adSession, session)
+        .onAppear { if remembersOffline { session.choose(.offline) } }
+        .onChange(of: session.sessionMode) { _, mode in remembersOffline = mode == .offline }
         .task { await LaunchCoordinator.run(session: session, openNetworkWindow: { openWindow(id: NetworkWindowScene.windowID) }) }
     }
 }

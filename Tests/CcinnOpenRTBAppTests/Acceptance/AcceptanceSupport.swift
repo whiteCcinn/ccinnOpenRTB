@@ -24,8 +24,18 @@ enum SampleCopies {
         return copy
     }
 
-    /// `text` with the sample hosts replaced by `base` (`http://127.0.0.1:<port>`), recursively inside base64 `data:` URLs.
-    static func pointing(_ text: String, at base: String) throws -> String {
+    /// `sample` with its hosts AND its built-in content (`ccinn-sample://…`: media, images, VAST tags) served from `base`,
+    /// so every byte the ad needs would come from the network.
+    static func remoteContent(_ sample: Sample, at base: String) throws -> Sample {
+        var copy = sample
+        copy.response = try pointing(sample.response, at: base, content: true)
+        copy.request = try sample.request.map { try pointing($0, at: base, content: true) }
+        return copy
+    }
+
+    /// `text` with the sample hosts replaced by `base` (`http://127.0.0.1:<port>`), recursively inside base64 `data:` URLs;
+    /// `content`: `ccinn-sample://` URLs too.
+    static func pointing(_ text: String, at base: String, content: Bool = false) throws -> String {
         let expression = try NSRegularExpression(pattern: #"data:([A-Za-z0-9.+/-]+);base64,([A-Za-z0-9+/]+=*)"#)
         var result = text
         let matches = expression.matches(in: text, range: NSRange(text.startIndex..., in: text))
@@ -34,12 +44,13 @@ enum SampleCopies {
                   let payloadRange = Range(match.range(at: 2), in: result),
                   let decoded = Data(base64Encoded: String(result[payloadRange])),
                   let inner = String(data: decoded, encoding: .utf8) else { continue }
-            let rewritten = try pointing(inner, at: base)
+            let rewritten = try pointing(inner, at: base, content: content)
             result.replaceSubrange(whole, with: "data:\(result[typeRange]);base64,\(Data(rewritten.utf8).base64EncodedString())")
         }
         for host in sampleHosts {
             result = result.replacingOccurrences(of: host, with: base)
         }
+        if content { result = result.replacingOccurrences(of: "\(SampleURL.scheme)://", with: "\(base)/sample/") }
         return result
     }
 }

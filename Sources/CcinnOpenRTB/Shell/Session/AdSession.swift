@@ -992,8 +992,36 @@ final class AdSession: AdRenderingHost {
         realModeConfirmation = nil
     }
 
+    /// The toolbar's mode: Offline, Simulated or Real.
+    var sessionMode: SessionMode { SessionMode(monitor) }
+
+    /// Switches to `mode`: Real only asks (`requestRealMode`).
+    func choose(_ mode: SessionMode) {
+        switch mode {
+        case .offline: useOfflineMode()
+        case .simulated: useSimulatedMode()
+        case .real: requestRealMode()
+        }
+    }
+
+    /// Offline: Simulated tracking, and no content from the network — only `data:` URLs and built-in samples load. Ends
+    /// Real mode at once, and cancels every request in flight, content included.
+    func useOfflineMode() {
+        realModeConfirmation = nil
+        guard !monitor.offline else { return }
+        monitor.offline = true
+        // The renderers tear down every Real-mode script tracker web view when the list empties.
+        scriptTrackers = []
+        log("Offline: nothing is loaded or sent; only data: URLs and built-in samples", origin: "mode", outcome: .fired(requests: 0))
+    }
+
     func useSimulatedMode() {
         realModeConfirmation = nil
+        if monitor.offline {
+            monitor.offline = false
+            log("Simulated mode: trackers are recorded, not sent; content loads from the markup's URLs", origin: "mode", outcome: .fired(requests: 0))
+            return
+        }
         guard monitor.mode != .simulated else { return }
         monitor.mode = .simulated
         // The renderers tear down every Real-mode script tracker web view when the list empties.

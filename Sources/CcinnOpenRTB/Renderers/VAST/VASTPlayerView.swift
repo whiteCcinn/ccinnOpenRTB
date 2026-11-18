@@ -274,26 +274,14 @@ private struct ProgressBar: View {
     }
 }
 
-/// After the pod: why nothing plays, or that it ended.
-private struct FinishedOverlay: View {
-    let model: VASTPlayerModel
-    @Environment(\.simulatorTextScale) private var scale
-
-    var body: some View {
-        if model.startedAds == 0 {
-            RendererMessageView(symbol: "exclamationmark.triangle",
-                                title: model.lastError.map { "VAST error \($0.rawValue)" } ?? "Nothing to play",
-                                detail: model.lastError.map(Self.describe) ?? "The VAST has no linear ad.")
-                .foregroundStyle(.white)
-        } else {
-            Text("Ad finished")
-                .font(.system(size: 12 * scale, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10 * scale)
-                .padding(.vertical, 5 * scale)
-                .background(Capsule().fill(.black.opacity(0.6)))
-                .simulatorStatusPlacement()
+/// What the player says when nothing played.
+enum VASTPlayerMessages {
+    static func nothingPlayed(lastError: VASTErrorCode?, offline: Bool) -> (title: String, detail: String) {
+        if offline {
+            let code = lastError.map { " (VAST error \($0.rawValue))" } ?? ""
+            return ("Offline", "The ad's VAST or media is on the network and was not loaded\(code). Choose Simulated to load the ad's content.")
         }
+        return (lastError.map { "VAST error \($0.rawValue)" } ?? "Nothing to play", lastError.map(describe) ?? "The VAST has no linear ad.")
     }
 
     static func describe(_ code: VASTErrorCode) -> String {
@@ -307,6 +295,29 @@ private struct FinishedOverlay: View {
         default: "See the renderer log and the network monitor."
         }
     }
+}
+
+/// After the pod: why nothing plays, or that it ended.
+private struct FinishedOverlay: View {
+    let model: VASTPlayerModel
+    @Environment(\.simulatorTextScale) private var scale
+
+    var body: some View {
+        if model.startedAds == 0 {
+            let message = VASTPlayerMessages.nothingPlayed(lastError: model.lastError, offline: model.contentIsOffline)
+            RendererMessageView(symbol: model.contentIsOffline ? "wifi.slash" : "exclamationmark.triangle", title: message.title, detail: message.detail)
+                .foregroundStyle(.white)
+        } else {
+            Text("Ad finished")
+                .font(.system(size: 12 * scale, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10 * scale)
+                .padding(.vertical, 5 * scale)
+                .background(Capsule().fill(.black.opacity(0.6)))
+                .simulatorStatusPlacement()
+        }
+    }
+
 }
 
 /// The last ad's companion as the end card.
@@ -365,7 +376,8 @@ private struct AudioAdCard: View {
             }
             if model.phase == .finished {
                 if model.startedAds == 0 {
-                    Text(model.lastError.map { "VAST error \($0.rawValue): \(FinishedOverlay.describe($0))" } ?? "Nothing to play")
+                    let message = VASTPlayerMessages.nothingPlayed(lastError: model.lastError, offline: model.contentIsOffline)
+                    Text(message.title + ": " + message.detail)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 } else if request.isFullscreen {
                     Button { model.close() } label: {
