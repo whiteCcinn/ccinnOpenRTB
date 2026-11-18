@@ -42,6 +42,58 @@ struct RequestIdentifierTests {
         """
     }
 
+    /// The simulated device's `[DEVICEUA]`, encoded as the player sends it.
+    private static func deviceUA(_ device: DeviceProfile) -> String {
+        MacroExpander.expandVAST("[DEVICEUA]", context: MacroContext(device: device)).url
+    }
+
+    /// The reviewer's criteria: on the wire and in the recorded entry, `[DEVICEUA]` is the simulated device's User-Agent, the
+    /// request's `ua` appears nowhere, and none of the request's identifiers either.
+    private func expectNoRequestValues(_ url: String, harness: AcceptanceSession, path: String) throws {
+        for secret in Self.secrets { #expect(!url.contains(secret), "\(path): \(secret) left the Mac in Simulated mode: \(url)") }
+        #expect(url.contains("ifa=-1&ip=-1&ll=-1&gdpr=-1&gpp=-1&ua=\(Self.deviceUA(harness.session.device))&cb="), "\(path): \(url)")
+        let entry = try #require(harness.monitor.liveEntries.first { $0.url == url }, "\(path): no recorded entry for \(url)")
+        #expect(entry.url.contains("ua=\(Self.deviceUA(harness.session.device))"))
+        for recorded in harness.monitor.liveEntries {
+            for secret in Self.secrets {
+                #expect(!recorded.url.contains(secret) || recorded.category.isTracker, "\(path): \(secret) in a content entry \(recorded.url)")
+            }
+            #expect(!recorded.requestHeaders.values.contains { $0.contains("RealUA") }, "\(path): the request's ua in headers")
+        }
+    }
+
+    /// (c) An OpenRTB 3.0 AdCOM video `curl`: the VAST tag URL of the bid.
+    @Test func simulatedAdCOMVideoCurlTagCarriesNoRequestIdentifiers() async throws {
+        let transport = CountingTransport()
+        transport.respondByPrefix("https://ad.example/curl.xml", body: Self.inline())
+        let harness = AcceptanceSession(transport: transport)
+        let response = """
+        {"openrtb": {"ver": "3.0", "response": {"id": "req-1", "seatbid": [{"seat": "dsp", "bid": [{"id": "bid-1", "item": "1", "price": 1.5,
+          "media": {"ad": {"id": "ad-1", "video": {"curl": "https://ad.example/curl.xml?\(Self.tagQuery)"}}}}]}]}}}
+        """
+        try await harness.render(Sample(id: "p8-curl", title: "p8", group: "test", response: response, request: Self.request))
+        let url = try #require(transport.requests.first { $0.url.absoluteString.hasPrefix("https://ad.example/curl.xml") }).url.absoluteString
+        try expectNoRequestValues(url, harness: harness, path: "video curl")
+    }
+
+    /// (d) A request-derived macro in a FETCHED wrapper's VASTAdTagURI (hop 2).
+    @Test func simulatedSecondHopTagCarriesNoRequestIdentifiers() async throws {
+        let transport = CountingTransport()
+        let hop1 = """
+        <VAST version="4.1"><Ad id="w2"><Wrapper><AdSystem>t</AdSystem>
+          <VASTAdTagURI><![CDATA[https://ad.example/hop2.xml?\(Self.tagQuery)]]></VASTAdTagURI>
+          <Impression><![CDATA[https://t.example/w2-imp]]></Impression></Wrapper></Ad></VAST>
+        """
+        transport.respondByPrefix("https://ad.example/inline.xml", body: hop1)
+        transport.respondByPrefix("https://ad.example/hop2.xml", body: Self.inline())
+        let harness = AcceptanceSession(transport: transport)
+        try await harness.render(Sample(id: "p8-hop2", title: "p8", group: "test", response: Self.wrapperResponse(base: "https://ad.example"),
+                                        request: Self.request))
+        let url = try #require(transport.requests.first { $0.url.absoluteString.hasPrefix("https://ad.example/hop2.xml") },
+                               "\(transport.requests.map(\.url))").url.absoluteString
+        try expectNoRequestValues(url, harness: harness, path: "hop 2")
+    }
+
     @Test func simulatedTagFetchCarriesNoRequestIdentifiers() async throws {
         let transport = CountingTransport()
         transport.respondByPrefix("https://ad.example/inline.xml", body: Self.inline())
@@ -51,6 +103,7 @@ struct RequestIdentifierTests {
         #expect(harness.session.mode == .simulated)
         let fetched = try #require(transport.requests.first { $0.url.absoluteString.hasPrefix("https://ad.example/inline.xml") })
         let url = fetched.url.absoluteString
+        try expectNoRequestValues(url, harness: harness, path: "adm wrapper")
         for secret in Self.secrets { #expect(!url.contains(secret), "\(secret) left the Mac in Simulated mode: \(url)") }
         let device = harness.session.device.userAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
         #expect(url.contains("ifa=-1&ip=-1&ll=-1&gdpr=-1&gpp=-1&ua="), "\(url)")
@@ -69,8 +122,34 @@ struct RequestIdentifierTests {
         let sample = Sample(id: "p8-tag", title: "p8", group: "test", response: "https://ad.example/tag.xml?\(Self.tagQuery)", request: Self.request)
         try await harness.render(sample)
         let url = try #require(transport.requests.first).url.absoluteString
-        for secret in Self.secrets { #expect(!url.contains(secret), "\(secret) left the Mac in Simulated mode: \(url)") }
-        #expect(url.contains("ifa=-1&ip=-1&ll=-1&gdpr=-1"), "\(url)")
+        try expectNoRequestValues(url, harness: harness, path: "pasted tag")
+    }
+
+    /// Leaving Real stops everything Real mode started (lead, with B1): a wrapper chain still resolving under Real is
+    /// cancelled when the session switches to Simulated, so no later hop goes out with the Real context.
+    @Test func leavingRealMidChainSendsNoLaterHopWithRequestValues() async throws {
+        let inner = CountingTransport()
+        let hop1 = """
+        <VAST version="4.1"><Ad id="w2"><Wrapper><AdSystem>t</AdSystem>
+          <VASTAdTagURI><![CDATA[https://ad.example/hop2.xml?\(Self.tagQuery)]]></VASTAdTagURI>
+          <Impression><![CDATA[https://t.example/w2-imp]]></Impression></Wrapper></Ad></VAST>
+        """
+        inner.respondByPrefix("https://ad.example/inline.xml", body: hop1)
+        inner.respondByPrefix("https://ad.example/hop2.xml", body: Self.inline())
+        let transport = DelayingTransport(inner: inner, delays: ["https://ad.example/inline.xml": .milliseconds(800)])
+        let harness = AcceptanceSession(transport: transport)
+        let sample = Sample(id: "p8-mid", title: "p8", group: "test", response: Self.wrapperResponse(base: "https://ad.example"), request: Self.request)
+        await harness.session.load(sample, render: false)
+        try harness.confirmRealMode()
+        harness.session.render()
+        #expect(await Wait.until { inner.requests.contains { $0.url.absoluteString.hasPrefix("https://ad.example/inline.xml") } || transport.started > 1 })
+        harness.session.choose(.simulated)
+        try await Task.sleep(for: .milliseconds(1500))
+        await harness.waitUntilSettled()
+        let hop2 = inner.requests.filter { $0.url.absoluteString.hasPrefix("https://ad.example/hop2.xml") }
+        for request in hop2 {
+            for secret in Self.secrets { #expect(!request.url.absoluteString.contains(secret), "a later hop went out with the Real context: \(request.url)") }
+        }
     }
 
     /// Real mode, after the confirmation: the player fills the request's values in, as a device would.
@@ -88,5 +167,31 @@ struct RequestIdentifierTests {
         let fetched = try #require(server.requests.first { $0.target.hasPrefix("/inline.xml") }, "\(server.requests.map(\.target))")
         #expect(fetched.target.contains("ifa=REAL-USER-IFA-1234&ip=203.0.113.7&ll=3.139,101.6869&gdpr=CPREALCONSENTSTRING"), "\(fetched.target)")
         #expect(fetched.target.contains("ua=RealUA"), "\(fetched.target)")
+        // The entry shows the template next to the URL sent.
+        let entry = try #require(harness.monitor.liveEntries.first { $0.url.contains("/inline.xml?") })
+        #expect(entry.template == "\(base)/inline.xml?\(Self.tagQuery)", "\(entry.template)")
+        #expect(entry.url.contains("ifa=REAL-USER-IFA-1234"))
+    }
+}
+
+/// A transport that holds the answer to some URLs (by prefix) for a while: a slow ad server.
+final class DelayingTransport: HTTPTransport, @unchecked Sendable {
+    private let inner: any HTTPTransport
+    private let delays: [String: Duration]
+    private let lock = NSLock()
+    private var startedCount = 0
+    var started: Int { lock.withLock { startedCount } }
+
+    init(inner: any HTTPTransport, delays: [String: Duration]) {
+        self.inner = inner
+        self.delays = delays
+    }
+
+    func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
+        lock.withLock { startedCount += 1 }
+        if let delay = delays.first(where: { request.url.absoluteString.hasPrefix($0.key) })?.value {
+            try await Task.sleep(for: delay)
+        }
+        return try await inner.perform(request)
     }
 }

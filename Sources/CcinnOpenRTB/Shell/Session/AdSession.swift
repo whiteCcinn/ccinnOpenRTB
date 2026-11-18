@@ -557,9 +557,11 @@ final class AdSession: AdRenderingHost {
             }
         case let .vast(source):
             phase = .preparing("Resolving VAST…")
-            let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: sourceRoot(candidate) + " › VAST",
-                                             rootParentID: markupEntryID, resolving: source)
-            let resolved = await services.resolveVAST(source, fetcher, markupEntryID, contentFetchContext(for: candidate, input: input))
+            let fetch = contentResolution(for: candidate, input: input,
+                                          fetcher: MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent,
+                                                                      source: sourceRoot(candidate) + " › VAST", rootParentID: markupEntryID,
+                                                                      resolving: source))
+            let resolved = await services.resolveVAST(source, fetch.fetcher, markupEntryID, fetch.context)
             guard token == generation else { return }
             vast = resolved
             renderIssues = resolved.issues
@@ -790,12 +792,29 @@ final class AdSession: AdRenderingHost {
         monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened)
     }
 
-    /// The macros of what the player fetches to render (VAST tag and wrapper URIs). Before Real mode is confirmed, nothing
-    /// derived from the pasted request's personal data leaves the Mac: its identifiers, address, location and consent
-    /// strings are unknown and `[DEVICEUA]` is the simulated device's (spec review, blocker on 0864bf9). Real mode fills them.
-    func contentFetchContext(for candidate: AdCandidate, input: ParsedInput) -> MacroContext {
+    /// The one choke point for what the player fetches to render (VAST tag and wrapper URIs: the render's, the Native video
+    /// tag's, the Real-mode review's): the macros a fetch may carry, and the fetcher that sends it.
+    /// - Before Real mode is confirmed, nothing derived from the pasted request's personal data leaves the Mac: its
+    ///   identifiers, address, location and consent strings are unknown and `[DEVICEUA]` is the simulated device's (spec
+    ///   review, blocker on 0864bf9).
+    /// - A context filled for Real mode comes with a fetcher that sends only while the session is still in Real mode, so no
+    ///   later hop of a resolution goes out with the request's values after leaving it.
+    func contentResolution(for candidate: AdCandidate, input: ParsedInput, fetcher: MonitorVASTFetcher)
+        -> (context: MacroContext, fetcher: any VASTFetcher) {
         let context = macroContext(for: candidate, input: input, adIndex: nil)
-        return monitor.mode == .real ? context : context.withoutRequestIdentifiers()
+        guard monitor.mode == .real else { return (context.withoutRequestIdentifiers(), fetcher) }
+        return (context, RealModeOnlyVASTFetcher(base: fetcher) { [weak self] in await self?.isInRealMode() ?? false })
+    }
+
+    private func isInRealMode() -> Bool { monitor.mode == .real }
+
+    /// Leaving Real mode stops everything Real mode started (as Reset does): a render still being prepared — its VAST
+    /// resolution may have later hops to fetch with the request's values — is stopped; render again in the new mode.
+    private func stopRenderStartedInRealMode() {
+        guard case .preparing = phase else { return }
+        startGeneration()
+        phase = .idle
+        log("render stopped: Real mode ended before the ad was ready", origin: "mode", outcome: .ignored("render again in this mode"))
     }
 
     func macroContext(for candidate: AdCandidate, input: ParsedInput, adIndex: Int?, lossReason: Int = LossReason.bidWon.code) -> MacroContext {
@@ -881,10 +900,11 @@ final class AdSession: AdRenderingHost {
         let token = generation
         let parent = prepared.markupEntryID
         let label = sourceRoot(prepared.candidate) + " › native video"
-        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent, resolving: source)
+        let fetch = contentResolution(for: prepared.candidate, input: renderInput,
+                                      fetcher: MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent,
+                                                                  resolving: source))
         let resolve = services.resolveVAST
-        let context = contentFetchContext(for: prepared.candidate, input: renderInput)
-        let task = Task { await resolve(source, fetcher, parent, context) }
+        let task = Task { await resolve(source, fetch.fetcher, parent, fetch.context) }
         nativeVideoResolution = (source, task)
         let resolved = await task.value
         guard token == generation, phase == .ready else { return resolved }
@@ -931,12 +951,15 @@ final class AdSession: AdRenderingHost {
         let revision = inputRevision
         reviewedNativeVideo = (candidateID, revision, source, nil)
         let parent = candidateID == prepared?.candidate.id ? prepared?.markupEntryID : nil
-        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidateID) › native video (Real-mode review)",
-                                         rootParentID: parent, resolving: source)
+        let reviewFetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent,
+                                               source: "bid \(candidateID) › native video (Real-mode review)", rootParentID: parent,
+                                               resolving: source)
+        let fetch: (context: MacroContext, fetcher: any VASTFetcher) = realModeCandidate.map {
+            contentResolution(for: $0, input: parsed, fetcher: reviewFetcher)
+        } ?? (MacroContext(), reviewFetcher)
         let resolve = services.resolveVAST
-        let context = realModeCandidate.map { contentFetchContext(for: $0, input: parsed) } ?? MacroContext()
         Task { [weak self] in
-            let resolved = await resolve(source, fetcher, parent, context)
+            let resolved = await resolve(source, fetch.fetcher, parent, fetch.context)
             guard let self, let pending = self.reviewedNativeVideo, pending.candidateID == candidateID, pending.revision == revision,
                   pending.source == source else { return }
             self.reviewedNativeVideo = (candidateID, revision, source, resolved)
@@ -1027,7 +1050,9 @@ final class AdSession: AdRenderingHost {
     func useOfflineMode() {
         realModeConfirmation = nil
         guard !monitor.offline else { return }
+        let wasReal = monitor.mode == .real
         monitor.offline = true
+        if wasReal { stopRenderStartedInRealMode() }
         // The renderers tear down every Real-mode script tracker web view when the list empties.
         scriptTrackers = []
         log("Offline: nothing is loaded or sent; only data: URLs and built-in samples", origin: "mode", outcome: .fired(requests: 0))
@@ -1042,6 +1067,7 @@ final class AdSession: AdRenderingHost {
         }
         guard monitor.mode != .simulated else { return }
         monitor.mode = .simulated
+        stopRenderStartedInRealMode()
         // The renderers tear down every Real-mode script tracker web view when the list empties.
         scriptTrackers = []
         log("Simulated mode: trackers are recorded, not sent", origin: "mode", outcome: .fired(requests: 0))
@@ -1095,4 +1121,24 @@ struct RealModeTarget: Equatable, Sendable {
 struct ConsoleLine: Identifiable, Equatable, Sendable {
     let id: Int
     let entry: RendererLogEntry
+}
+
+/// The fetcher of a resolution whose macros were filled for Real mode: each fetch goes out only while the session is still
+/// in Real mode; after leaving it the resolution stops (no hop carries the request's values in Simulated or Offline mode).
+struct RealModeOnlyVASTFetcher: VASTFetcher {
+    struct RealModeEnded: Error, LocalizedError {
+        var errorDescription: String? { "Real mode ended: the rest of the wrapper chain is not fetched with Real-mode values." }
+    }
+
+    let base: MonitorVASTFetcher
+    let isRealMode: @Sendable () async -> Bool
+
+    func fetchVAST(_ url: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
+        try await fetchVAST(url, template: url, parentRequestID: parentRequestID)
+    }
+
+    func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
+        guard await isRealMode() else { throw RealModeEnded() }
+        return try await base.fetchVAST(url, template: template, parentRequestID: parentRequestID)
+    }
 }
