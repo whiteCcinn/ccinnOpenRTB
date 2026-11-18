@@ -104,6 +104,27 @@ struct MacroOriginAcceptanceTests {
         #expect(harness.session.renderIssues.contains { $0.code == "vast.macro.openrtb.unsubstituted" })
     }
 
+    /// AdTech review 6 on the real kit: `[ASSETURI]` is the chosen media file, `[BREAKPOSITION]` 4 (standalone) on a phone
+    /// and 1 (pre-roll) in the CTV instream break, `[ADCOUNT]` the ads that will play.
+    @Test(arguments: [("iphone-17-pro", "4"), ("apple-tv-4k", "1")])
+    func playbackMacros(deviceID: String, breakPosition: String) async throws {
+        let vast = Self.inline(impression: "https://t.example/imp").replacingOccurrences(of: "<Duration>00:00:15</Duration>", with: """
+        <Duration>00:00:15</Duration><TrackingEvents><Tracking event="start"><![CDATA[https://t.example/start?a=[ASSETURI]&bp=[BREAKPOSITION]&n=[ADCOUNT]]]></Tracking></TrackingEvents>
+        """)
+        let adm = JSONValue.string(vast).serialized()
+        let harness = AcceptanceSession(transport: CountingTransport())
+        harness.session.device = try #require(DeviceCatalog.device(id: deviceID))
+        await harness.session.load(Sample(id: "m", title: "m", group: "t", response: Self.response(#""mtype": 2, "adm": \#(adm)"#)), render: true)
+        await harness.waitUntilSettled()
+        #expect(harness.session.phase == .ready, "\(harness.session.phase)")
+        harness.session.rendererHost.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 0, duration: 15, isPlaying: true, isMuted: true,
+                                                                   assetURI: "ccinn-sample://media/sample-15s.mp4"))
+        harness.session.rendererHost.report(.video(.start, adIndex: 0))
+        await harness.monitor.waitUntilIdle()
+        let start = try #require(harness.monitor.liveEntries.first { $0.url.hasPrefix("https://t.example/start") })
+        #expect(start.url == "https://t.example/start?a=ccinn-sample%3A%2F%2Fmedia%2Fsample-15s.mp4&bp=\(breakPosition)&n=1", "\(start.url)")
+    }
+
     /// A pasted VAST tag URL: the document is served, never substituted by an exchange.
     @Test func pastedTag() async throws {
         let transport = CountingTransport()

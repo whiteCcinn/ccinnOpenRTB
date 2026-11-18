@@ -792,7 +792,8 @@ final class AdSession: AdRenderingHost {
 
     func macroContext(for candidate: AdCandidate, input: ParsedInput, adIndex: Int?, lossReason: Int = LossReason.bidWon.code) -> MacroContext {
         macros.context(candidate: candidate, input: input, device: device, playerSize: adSize, transactionID: transactionID,
-                       playhead: playback[adIndex ?? currentAdIndex]?.playhead, lossCode: lossReason)
+                       playhead: playback[adIndex ?? currentAdIndex]?.playhead, lossCode: lossReason,
+                       assetURI: playback[adIndex ?? currentAdIndex]?.assetURI)
     }
 
     // MARK: Viewability timers

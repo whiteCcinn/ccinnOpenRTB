@@ -69,8 +69,9 @@ struct MacroSettings: Equatable, Sendable {
     ///   - transactionID: `[TRANSACTIONID]` of the current render when the request has none.
     ///   - playhead: `[ADPLAYHEAD]` of the ad the event belongs to.
     ///   - lossCode: the reason of the loss notice being sent; every other URL of the bid carries 0, "Bid Won".
+    ///   - assetURI: `[ASSETURI]`, the media file the player chose for the ad.
     func context(candidate: AdCandidate, input: ParsedInput, device: DeviceProfile, playerSize: CGSize, transactionID: String,
-                 playhead: Double? = nil, lossCode: Int = LossReason.bidWon.code) -> MacroContext {
+                 playhead: Double? = nil, lossCode: Int = LossReason.bidWon.code, assetURI: String? = nil) -> MacroContext {
         func defaults(_ request: BidRequestSummary?) -> MacroContext {
             MacroContext.simulatorDefaults(candidate: candidate, request: request, device: device, playerWidth: Self.points(playerSize.width),
                                            playerHeight: Self.points(playerSize.height), responseID: input.responseID,
@@ -80,6 +81,7 @@ struct MacroSettings: Equatable, Sendable {
         var context = overlay(on: base, withoutRequest: input.request == nil ? base : defaults(nil), candidate: candidate,
                               transactionID: transactionID, playhead: playhead)
         context.lossReason = lossCode
+        if let assetURI, !assetURI.isEmpty { context.assetURI = assetURI }
         return context
     }
 

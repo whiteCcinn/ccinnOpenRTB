@@ -63,6 +63,8 @@ struct PlaybackStatus: Equatable, Sendable {
     var duration: Double?
     var isPlaying: Bool
     var isMuted: Bool
+    /// The media file the player chose for this ad, as written in the VAST (the host's `[ASSETURI]`).
+    var assetURI: String? = nil
 }
 
 /// One line of the renderer console (MRAID bridge, VAST player, Native, HTML).

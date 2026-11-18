@@ -1169,6 +1169,21 @@ struct AdSessionTests {
         #expect(harness.session.playback.keys.sorted() == [0])
     }
 
+    /// AdTech review 6: `[ASSETURI]` is the media file the player chose for the ad (VAST 4.1 §6.2), per pod ad.
+    @Test func theSelectedMediaFileIsTheAssetURI() async throws {
+        let harness = SessionHarness(Fixtures.input([video]))
+        await harness.paste()
+        await harness.renderAndWait()
+        harness.session.playbackChanged(PlaybackStatus(adIndex: 0, playhead: 1, duration: 15, isPlaying: true, isMuted: false,
+                                                       assetURI: "https://cdn.example/ad-1280.mp4"))
+        harness.session.report(.video(.start, adIndex: 0))
+        #expect(harness.recorder.contexts.last?.assetURI == "https://cdn.example/ad-1280.mp4")
+        harness.session.reset()
+        await harness.renderAndWait()
+        harness.session.report(.video(.start, adIndex: 0))
+        #expect(harness.recorder.contexts.last?.assetURI == nil, "a new render starts without one until the player chooses")
+    }
+
     // MARK: Macros
 
     @Test func macroContextComesFromTheBidThePanelAndTheDevice() async throws {

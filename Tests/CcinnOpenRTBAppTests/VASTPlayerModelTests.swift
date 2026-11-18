@@ -128,6 +128,20 @@ struct VASTPlayerModelTests {
         #expect(engine.loaded.count == 1, "only the second ad's media")
     }
 
+    /// The player reports the media file it chose (the host's `[ASSETURI]`) before the ad's first event.
+    @Test func thePlayerReportsTheMediaFileItChose() async {
+        let media = [VASTMediaFile(url: "https://cdn.example/low.mp4", type: "video/mp4", width: 320, height: 180),
+                     VASTMediaFile(url: "https://cdn.example/high.mp4", type: "video/mp4", width: 1280, height: 720)]
+        let (model, host, engine) = make([RendererFixtures.linearAd(duration: 4, media: media)],
+                                         choose: { files, _, _, _ in .play(files[1]) })
+        model.start()
+        await waitForLoad(engine)
+        engine.send(.ready(duration: 4))
+        #expect(host.statuses.last?.assetURI == "https://cdn.example/high.mp4")
+        let firstEvent = host.events.firstIndex(of: .video(.loaded, adIndex: 0))
+        #expect(firstEvent != nil)
+    }
+
     @Test func podAdsPlayInOrderAndBillingFiresOnce() async {
         let first = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/1.mp4", type: "video/mp4")], sequence: 1)
         let second = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/2.mp4", type: "video/mp4")], sequence: 2)

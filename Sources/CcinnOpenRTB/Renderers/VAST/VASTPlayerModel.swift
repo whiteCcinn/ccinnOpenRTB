@@ -93,6 +93,8 @@ final class VASTPlayerModel {
     @ObservationIgnored private var viewedCompanions: Set<[Int]> = []
     /// Companions reported shown before their ad started, viewed right after the ad's `creativeView`.
     @ObservationIgnored private var pendingCompanionViews: [(choice: CompanionChoice, adIndex: Int)] = []
+    /// The media file chosen for the current ad (`[ASSETURI]`).
+    @ObservationIgnored private var currentAssetURI: String?
     /// The current ad's icons already shown (IconViewTracking fires once per icon).
     @ObservationIgnored private var shownIcons: Set<Int> = []
     @ObservationIgnored private var lastStatus: PlaybackStatus?
@@ -324,6 +326,8 @@ final class VASTPlayerModel {
             fail(item, code: code, "No playable media file among \(item.mediaFiles.count) (error \(code.rawValue))")
             return .failed
         case let .play(file):
+            currentAssetURI = file.url
+            reportStatusIfChanged()
             log(.info, "Ad \(item.adIndex + 1): \(file.type ?? "media") \(file.width.map(String.init) ?? "?")×\(file.height.map(String.init) ?? "?") "
                 + "for a \(width)×\(height) px player")
             let prepared = await host.monitor.prepareMedia(file.url, trigger: "media file", source: item.source + " › MediaFile",
@@ -353,6 +357,7 @@ final class VASTPlayerModel {
         currentAdStarted = false
         pendingCompanionViews.removeAll()
         shownIcons.removeAll()
+        currentAssetURI = nil
         playhead = 0
         duration = item.declaredDuration
         isReady = false
@@ -506,7 +511,8 @@ final class VASTPlayerModel {
     /// The current status at once, unless it is the one reported last (before events, for `[ADPLAYHEAD]`).
     private func reportStatusIfChanged() {
         guard let item = currentItem else { return }
-        let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)
+        let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted,
+                                    assetURI: currentAssetURI)
         guard status != lastStatus else { return }
         lastStatus = status
         host?.playbackChanged(status)
@@ -515,7 +521,8 @@ final class VASTPlayerModel {
     /// About 4 Hz while playing (playhead steps of 0.25 s), and at once when play / mute / ad changes.
     private func reportStatus(force: Bool) {
         guard let item = currentItem else { return }
-        let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted)
+        let status = PlaybackStatus(adIndex: item.adIndex, playhead: playhead, duration: duration, isPlaying: isPlaying, isMuted: isMuted,
+                                    assetURI: currentAssetURI)
         if status == lastStatus { return }
         if !force, let last = lastStatus, last.isPlaying == status.isPlaying, last.isMuted == status.isMuted, last.adIndex == status.adIndex,
            abs(status.playhead - last.playhead) < 0.25 {
