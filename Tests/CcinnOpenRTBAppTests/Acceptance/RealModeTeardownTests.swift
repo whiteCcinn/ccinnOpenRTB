@@ -80,6 +80,39 @@ struct RealModeTeardownTests {
         try await expectSilence(server, after: change)
     }
 
+    /// Safety review B1 (on 0864bf9): an HTML VAST companion created in Real mode (its sandbox off) kept beaconing after
+    /// the switch to Simulated or Offline. It reloads with the sandbox on as soon as the mode leaves Real, like the HTML ad.
+    @Test(arguments: ["simulated", "offline"])
+    func leavingRealStopsAnHTMLCompanionsOwnLoads(_ change: String) async throws {
+        let server = try EchoServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let beacon = "<script>setInterval(function () { new Image().src = 'http://127.0.0.1:\(port)/companion?' + Date.now(); }, 100);</script>"
+        let vast = """
+        <VAST version="3.0"><Ad id="1"><InLine><AdSystem>x</AdSystem><AdTitle>t</AdTitle><Impression>https://imp.example/i</Impression>
+        <Creatives><Creative><Linear><Duration>00:00:15</Duration><MediaFiles>
+        <MediaFile type="video/mp4" delivery="progressive" width="1280" height="720">ccinn-sample://media/sample-15s.mp4</MediaFile></MediaFiles></Linear></Creative>
+        <Creative><CompanionAds><Companion width="300" height="250"><HTMLResource><![CDATA[\(beacon)]]></HTMLResource></Companion></CompanionAds></Creative>
+        </Creatives></InLine></Ad></VAST>
+        """
+        let adm = JSONValue.string(vast).serialized()
+        let response = """
+        {"id": "req-1", "seatbid": [{"seat": "dsp", "bid": [{"id": "bid-1", "impid": "1", "price": 1, "mtype": 2, "adm": \(adm)}]}]}
+        """
+        let harness = AcceptanceSession(transport: URLSessionTransport())
+        await harness.session.load(Sample(id: "companion", title: "companion", group: "test", response: response), render: false)
+        try harness.confirmRealMode()
+        harness.session.render()
+        await harness.waitUntilSettled()
+        let size = harness.session.adSize
+        let window = WindowHarness(AdSlotView(session: harness.session, size: size), size: size)
+        defer { window.close() }
+        let beating = await Wait.until(timeout: .seconds(25)) { server.requests.filter { $0.target.hasPrefix("/companion") }.count >= 3 }
+        #expect(beating, "the Real-mode companion loads: \(server.requests.map(\.target))")
+        harness.session.choose(change == "offline" ? .offline : .simulated)
+        try await expectSilence(server, after: change)
+    }
+
     @Test func resettingStopsEveryRealModeWebView() async throws {
         let (harness, server, window) = try await beatingSession()
         defer {

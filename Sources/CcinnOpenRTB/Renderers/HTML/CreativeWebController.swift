@@ -221,12 +221,14 @@ final class CreativeWebController: NSObject {
         finishOpenRequests("The creative was removed before the load finished")
         onEvent = nil
         webView.stopLoading()
+        // The page goes now, not when the web view is released: its scripts and timers stop at once (safety review B1).
+        // The content rule lists stay with the web view, so nothing it had queued gets out unblocked.
+        webView.loadHTMLString("", baseURL: nil)
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         let userContent = webView.configuration.userContentController
         userContent.removeAllScriptMessageHandlers()
         userContent.removeAllUserScripts()
-        userContent.removeAllContentRuleLists()
         messageProxy.target = nil
         if let gestureMonitor { NSEvent.removeMonitor(gestureMonitor) }
         gestureMonitor = nil

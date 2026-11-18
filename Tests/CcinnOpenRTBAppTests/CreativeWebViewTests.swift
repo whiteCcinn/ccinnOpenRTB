@@ -275,6 +275,24 @@ struct CreativeWebViewTests {
         #expect(result.dropFirst().compactMap { $0 as? String } == ["HEAD", "CSS1Compat", "Creative", "en", "<head>"], "\(result)")
     }
 
+    /// Safety review B1: a torn-down creative stops at once — its scripts and timers do not run on until the web view
+    /// happens to be released (a page with its network open would keep reaching it). Here the controller (and its web
+    /// view) stays alive after the teardown.
+    @Test func teardownStopsThePageAtOnce() async throws {
+        let server = try LoopbackServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let adm = "<script>setInterval(function () { new Image().src = 'http://127.0.0.1:\(port)/beat?' + Date.now(); }, 100);</script>"
+        let harness = await load(adm, blocks: false, mraid: false)
+        #expect(await Wait.until(timeout: .seconds(10)) { server.connectionCount >= 3 }, "the open page beats")
+        harness.controller.teardown()
+        try await Task.sleep(for: .milliseconds(200))
+        let settled = server.connectionCount
+        try await Task.sleep(for: .milliseconds(1500))
+        #expect(server.connectionCount == settled, "\(server.connectionCount - settled) more hits after the teardown")
+        withExtendedLifetime(harness) {}
+    }
+
     /// Adversarial: loads no hook reports (preconnect, CSS, fonts, workers, refresh) must still never connect.
     @Test func simulatedModeLetsNothingOutThroughSideChannels() async throws {
         let server = try LoopbackServer()

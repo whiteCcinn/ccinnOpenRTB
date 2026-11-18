@@ -69,22 +69,39 @@ private struct CompanionWeb: View {
     let source: String
 
     @State private var controller: CreativeWebController?
+    /// Whether the loaded page has its network blocked (every mode but Real).
+    @State private var loadedBlocking: Bool?
+
+    /// The page is loaded again whenever the sandbox changes: leaving Real mode (Simulated, Offline) closes a Real-mode
+    /// companion's network at once (safety review B1), as the HTML ad does.
+    private struct LoadKey: Hashable {
+        var companionIndex: Int
+        var blocksNetwork: Bool
+    }
 
     var body: some View {
+        let blocksNetwork = HTMLAdModel.blocksNetwork(host.monitor)
         ZStack {
             if let controller {
                 CreativeWebViewHost(webView: controller.webView, isActive: true)
             }
         }
-        .task(id: choice.companionIndex) { start() }
+        .task(id: LoadKey(companionIndex: choice.companionIndex, blocksNetwork: blocksNetwork)) { start(blocksNetwork: blocksNetwork) }
         .onDisappear {
             controller?.teardown()
             controller = nil
+            loadedBlocking = nil
         }
     }
 
-    private func start() {
-        guard controller == nil else { return }
+    private func start(blocksNetwork: Bool) {
+        if let controller {
+            guard loadedBlocking != blocksNetwork else { return }
+            // A page loaded with another sandbox goes with its web view: nothing it started keeps running.
+            controller.teardown()
+            self.controller = nil
+        }
+        loadedBlocking = blocksNetwork
         let created = CreativeWebController(host: host)
         let choice = choice
         let adIndex = adIndex
@@ -98,7 +115,7 @@ private struct CompanionWeb: View {
         }
         controller = created
         created.load(CreativeWebController.Content(document: CompanionDocument.html(for: choice.resource), mraid: nil,
-                                                   blocksNetwork: HTMLAdModel.blocksNetwork(host.monitor), disableScroll: true,
+                                                   blocksNetwork: blocksNetwork, disableScroll: true,
                                                    networkParentID: player.documentRequestID(adIndex: adIndex),
                                                    source: CompanionView.source(source, companionIndex: choice.companionIndex)))
     }
