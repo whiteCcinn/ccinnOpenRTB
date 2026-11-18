@@ -47,10 +47,11 @@ struct ClientPaneTests {
         defer { harness.close() }
         try await Task.sleep(for: .milliseconds(100))
 
-        fixture.transport.answer(endpoint, .init(body: bidResponse, delay: .milliseconds(150)))
+        fixture.transport.answer(endpoint, .init(body: bidResponse, delay: .milliseconds(300)))
         let sending = fixture.client.send()
-        try await Task.sleep(for: .milliseconds(50))
+        // Sending until the response: drawn in that phase (the transport holds it for 300 ms once it has the request).
         #expect(fixture.client.isSending)
+        for _ in 0..<2_000 where fixture.transport.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
         await sending?.value
         try await Task.sleep(for: .milliseconds(100))
         #expect(fixture.client.phase == .received)
@@ -85,7 +86,7 @@ struct ClientPaneTests {
 
         await fixture.client.send()?.value
         _ = await fixture.client.save()
-        for _ in 0..<300 where fixture.session.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<1_000 where fixture.session.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
         try await Task.sleep(for: .seconds(2))
 
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CCINN_CLIENT_SNAPSHOTS"] ?? NSTemporaryDirectory(), isDirectory: true)

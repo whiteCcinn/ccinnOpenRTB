@@ -174,7 +174,7 @@ struct ComposedRequestMonitorTests {
         monitor.mode = .real
 
         let sending = Task { try await monitor.send(composed(), userAgent: deviceUA) }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntilOnTheWire(transport)
         monitor.mode = .simulated
         monitor.cancelInFlightTrackers(reason: "a new render started")
 
@@ -187,7 +187,7 @@ struct ComposedRequestMonitorTests {
         let monitor = makeMonitor(transport: transport)
 
         let sending = Task { try await monitor.send(composed(), userAgent: deviceUA) }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntilOnTheWire(transport)
         monitor.offline = true
 
         await #expect(throws: NetworkMonitorError.cancelled(NetworkMonitor.offlineCancellation)) { try await sending.value }
@@ -200,7 +200,7 @@ struct ComposedRequestMonitorTests {
         let monitor = makeMonitor(transport: transport)
 
         let sending = Task { try await monitor.send(composed(), userAgent: deviceUA) }
-        try await Task.sleep(for: .milliseconds(30))
+        try await waitUntilOnTheWire(transport)
         sending.cancel()
 
         await #expect(throws: (any Error).self) { try await sending.value }
@@ -326,6 +326,14 @@ struct ComposedRequestMonitorTests {
         #expect(transport.requests.allSatisfy { $0.body == nil })
         #expect(monitor.liveEntries.allSatisfy { $0.method == "GET" })
     }
+}
+
+/// Waits (bounded only against a hang: CI runners are slow) until the transport has the request: from then on it is in
+/// flight, which a fixed sleep cannot promise.
+@MainActor
+private func waitUntilOnTheWire(_ transport: FakeTransport) async throws {
+    for _ in 0..<2_000 where transport.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(transport.requests.count == 1, "the request never reached the transport")
 }
 
 @Suite("Composed requests on the wire", .serialized)

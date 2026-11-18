@@ -534,7 +534,7 @@ struct ClientModelTests {
         harness.model.request.body = "{\"id\":"
 
         await harness.model.send()?.value
-        for _ in 0..<100 where harness.model.sendWarning == nil { try await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<2_000 where harness.model.sendWarning == nil { try await Task.sleep(for: .milliseconds(5)) }
 
         #expect(harness.transport.requests.first?.body == Data("{\"id\":".utf8))
         #expect(harness.model.sendWarning != nil)
@@ -589,10 +589,11 @@ struct ClientModelTests {
     @Test func cancellingDropsTheLateResponse() async throws {
         let harness = Harness()
         defer { harness.directory.cleanUp() }
-        harness.transport.answer(endpoint, .init(body: videoResponse, delay: .milliseconds(200)))
+        harness.transport.answer(endpoint, .init(body: videoResponse, delay: .seconds(5)))
 
         let sending = harness.model.send()
-        try await Task.sleep(for: .milliseconds(20))
+        for _ in 0..<2_000 where harness.transport.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(harness.transport.requests.count == 1)
         harness.model.cancel()
         await sending?.value
 
@@ -696,7 +697,7 @@ struct ClientEndToEndTests {
         model.request = request()
 
         await model.send()?.value
-        for _ in 0..<200 where session.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        for _ in 0..<1_000 where session.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
 
         #expect(session.requestText == rewardedVideoRequest)
         #expect(session.responseText == videoResponse)

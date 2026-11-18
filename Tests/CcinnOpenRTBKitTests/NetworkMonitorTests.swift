@@ -437,7 +437,9 @@ struct MonitorLogTests {
 
         monitor.dispatch(tracker(.event, "https://t.example/late"), userAgent: deviceUA)
         #expect(monitor.entries.count == 200)
-        try await Task.sleep(for: .milliseconds(300))
+        // Published by the coalescing timer, not by a flush. The bound only guards against a hang: on a loaded 3-core CI
+        // runner the main actor can be busy for longer than a fixed 300 ms.
+        for _ in 0..<500 where monitor.entries.count < 201 { try await Task.sleep(for: .milliseconds(10)) }
         #expect(monitor.entries.count == 201)
     }
 
