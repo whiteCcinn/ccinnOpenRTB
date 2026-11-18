@@ -100,7 +100,9 @@ final class VASTPlayerModel {
 
     init(vast: ResolvedVAST, configuration: VASTPlayerConfiguration, host: any AdRenderingHost, engine: any PlaybackEngine,
          chooseMedia: @escaping VASTMediaChooser = VASTMediaSelector.choose) {
-        items = VASTPodPlan.items(for: vast, source: configuration.source)
+        let showsCompanions = configuration.showsCompanions && !configuration.isCTV
+        items = VASTPodPlan.items(for: vast, source: configuration.source,
+                                  canShowCompanion: { showsCompanions && CompanionPicker.resource(of: $0) != nil })
         self.configuration = configuration
         self.host = host
         self.engine = engine
@@ -284,6 +286,11 @@ final class VASTPlayerModel {
         guard let host else { return .cancelled }
         guard item.linear != nil else {
             fail(item, code: item.missingLinearError, "Ad \(item.adIndex + 1) has no linear creative")
+            return .failed
+        }
+        if let code = item.companionRequirementError {
+            let reason = configuration.isCTV ? "a CTV player shows no companions" : "this player cannot show the companions it requires"
+            fail(item, code: code, "Ad \(item.adIndex + 1) is not played: its CompanionAds are required and \(reason) (error \(code.rawValue))")
             return .failed
         }
         // MediaFile@width/@height are pixels (VAST 4.1 §3.9.1): the player's points at the device's scale.

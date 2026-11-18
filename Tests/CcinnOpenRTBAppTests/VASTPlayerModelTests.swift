@@ -72,6 +72,62 @@ struct VASTPlayerModelTests {
         }
     }
 
+    // MARK: CompanionAds@required
+
+    private func requiringCompanions(_ requirement: VASTCompanionRequirement, _ companions: [VASTCompanion],
+                                     media: String = "https://cdn.example/a.mp4") -> ResolvedVASTAd {
+        var ad = RendererFixtures.linearAd(duration: 2, media: [VASTMediaFile(url: media, type: "video/mp4")], companions: companions)
+        ad.inline.creatives[0].companionsRequired = requirement
+        return ad
+    }
+
+    private static let htmlCompanion = VASTCompanion(width: 300, height: 250, resources: [.html("<div>c</div>")])
+    private static let unshowable = VASTCompanion(width: 300, height: 250)
+
+    /// AdTech review: an ad whose `CompanionAds@required` cannot be met is not played: Error 602, and the pod moves on.
+    /// A CTV player shows no companions, so any requirement over companions fails there.
+    @Test func anAdWhoseRequiredCompanionsCannotBeShownIsNotPlayed() async {
+        let (model, host, engine) = make([requiringCompanions(.all, [Self.htmlCompanion])], device: RendererFixtures.tv, placement: .ctvInstream)
+        model.start()
+        #expect(await Wait.until { model.phase == .finished })
+        #expect(host.events == [.error(.requiredCompanionUnavailable, adIndex: 0)])
+        #expect(engine.loaded.isEmpty, "the media is never loaded")
+        #expect(model.lastError == .requiredCompanionUnavailable)
+    }
+
+    @Test(arguments: [VASTCompanionRequirement.all, .any])
+    func aPhoneShowsRequiredCompanionsAndPlays(_ requirement: VASTCompanionRequirement) async {
+        let (model, host, engine) = make([requiringCompanions(requirement, [Self.htmlCompanion])])
+        model.start()
+        await waitForLoad(engine)
+        #expect(!host.events.contains { if case .error = $0 { true } else { false } })
+    }
+
+    /// `all` with one companion the player cannot show (no resource it renders) fails; `any` with one it can show plays.
+    @Test func allNeedsEveryCompanionAnyNeedsOne() async {
+        let (allModel, allHost, _) = make([requiringCompanions(.all, [Self.htmlCompanion, Self.unshowable])])
+        allModel.start()
+        #expect(await Wait.until { allModel.phase == .finished })
+        #expect(allHost.events == [.error(.requiredCompanionUnavailable, adIndex: 0)])
+
+        let (anyModel, anyHost, anyEngine) = make([requiringCompanions(.any, [Self.unshowable, Self.htmlCompanion])])
+        anyModel.start()
+        await waitForLoad(anyEngine)
+        #expect(anyHost.events.isEmpty || !anyHost.events.contains(.error(.requiredCompanionUnavailable, adIndex: 0)),
+                "\(anyHost.events) \(anyHost.logs.map(\.message))")
+    }
+
+    /// In a pod, the failing ad is skipped and the next one plays.
+    @Test func thePodMovesOnPastAnUnsatisfiableAd() async {
+        let first = requiringCompanions(.any, [Self.unshowable], media: "https://cdn.example/1.mp4")
+        let second = RendererFixtures.linearAd(duration: 2, media: [VASTMediaFile(url: "https://cdn.example/2.mp4", type: "video/mp4")])
+        let (model, host, engine) = make([first, second])
+        model.start()
+        await waitForLoad(engine)
+        #expect(host.events.first == .error(.requiredCompanionUnavailable, adIndex: 0))
+        #expect(engine.loaded.count == 1, "only the second ad's media")
+    }
+
     @Test func podAdsPlayInOrderAndBillingFiresOnce() async {
         let first = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/1.mp4", type: "video/mp4")], sequence: 1)
         let second = RendererFixtures.linearAd(duration: 2, media: [.init(url: "https://cdn.example/2.mp4", type: "video/mp4")], sequence: 2)

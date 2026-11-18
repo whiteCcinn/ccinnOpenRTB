@@ -33,13 +33,18 @@ struct VASTPodItem: Equatable, Sendable {
     var mediaFiles: [VASTMediaFile] { linear?.mediaFiles ?? [] }
     /// `progress` offsets of the merged tracking events (wrappers + inline), in document order.
     var progressOffsets: [VASTOffset]
+    /// 602 when a creative's `CompanionAds@required` cannot be met by the companions this player shows (none on CTV):
+    /// the ad must not play (VAST 4.1 §3.13.1).
+    var companionRequirementError: VASTErrorCode? = nil
 
     /// The error an ad without a linear creative reports: 201 (expected linear, got non-linear) or 400.
     var missingLinearError: VASTErrorCode { isNonLinearOnly ? .unexpectedLinearity : .linearError }
 }
 
 enum VASTPodPlan {
-    static func items(for vast: ResolvedVAST, source: String) -> [VASTPodItem] {
+    /// `canShowCompanion`: whether this player displays a companion (CTV: none), for `CompanionAds@required`.
+    static func items(for vast: ResolvedVAST, source: String,
+                      canShowCompanion: (VASTCompanion) -> Bool = { CompanionPicker.resource(of: $0) != nil }) -> [VASTPodItem] {
         let count = vast.ads.count
         return vast.ads.enumerated().map { index, ad in
             let creatives = ad.inline.creatives
@@ -55,7 +60,8 @@ enum VASTPodPlan {
             }
             return VASTPodItem(adIndex: index, title: ad.inline.adTitle, advertiser: ad.inline.adSystem, linear: linear,
                                isNonLinearOnly: linear == nil && creatives.contains(where: \.hasNonLinear), companions: companions,
-                               mediaParentID: parentID(of: ad, in: vast), source: label, progressOffsets: progress)
+                               mediaParentID: parentID(of: ad, in: vast), source: label, progressOffsets: progress,
+                               companionRequirementError: ad.inline.companionRequirementError(canShow: canShowCompanion))
         }
     }
 
