@@ -71,16 +71,37 @@ actor SavedRequestStore {
 
     private func write(_ request: SavedRequest, encoder: JSONEncoder) throws {
         let file = fileURL(for: request.id)
-        try encoder.encode(request).write(to: file, options: [.atomic])
+        let data = try encoder.encode(request)
+        guard data.count <= maxFileBytes else { throw TooLarge(limit: maxFileBytes) }
+        try data.write(to: file, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
-    /// Removes the request's file; a request that has no file is already gone.
+    /// The request and its response encode larger than the store reads back (`maxFileBytes`).
+    struct TooLarge: LocalizedError {
+        let limit: Int
+        var errorDescription: String? {
+            "The request and its response are larger than \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .file)): too large to save."
+        }
+    }
+
+    /// Removes every file that holds the request — `<id>.json` and any copy claiming its id (`loadAll` would bring a copy
+    /// back) — so a deleted request's headers and data are gone from disk. A request that has no file is already gone.
     func delete(id: UUID) throws {
-        do {
-            try FileManager.default.removeItem(at: fileURL(for: id))
-        } catch CocoaError.fileNoSuchFile {
-            return
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: directory.path) else { return }
+        var files = [fileURL(for: id)]
+        let others = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                                                     options: [.skipsHiddenFiles])
+            .filter { $0.pathExtension.lowercased() == "json" && $0.lastPathComponent != files[0].lastPathComponent }
+        let decoder = JSONDecoder()
+        for file in others where readID(file, decoder: decoder) == id { files.append(file) }
+        for file in files {
+            do {
+                try manager.removeItem(at: file)
+            } catch CocoaError.fileNoSuchFile {
+                continue
+            }
         }
     }
 
@@ -95,6 +116,14 @@ actor SavedRequestStore {
               (values.fileSize ?? 0) <= maxFileBytes,
               let data = try? Data(contentsOf: file, options: .mappedIfSafe), data.count <= maxFileBytes else { return nil }
         return try? decoder.decode(SavedRequest.self, from: data)
+    }
+
+    /// The id a file claims, reading only that field.
+    private func readID(_ file: URL, decoder: JSONDecoder) -> UUID? {
+        struct Identity: Decodable { var id: UUID }
+        guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), values.isRegularFile == true,
+              (values.fileSize ?? 0) <= maxFileBytes, let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return nil }
+        return (try? decoder.decode(Identity.self, from: data))?.id
     }
 
     /// Creates the directory private to the user, and makes an existing one private again.

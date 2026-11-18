@@ -43,8 +43,7 @@ struct SavedRequestsPopover: View {
                             presenting: pendingDelete) { saved in
             Button("Delete “\(saved.name)”", role: .destructive) {
                 Task {
-                    await library.delete(saved.id)
-                    client.forget(saved.id)
+                    if await library.delete(saved.id) { client.forget(saved.id) }
                 }
             }
         } message: { _ in
@@ -54,7 +53,7 @@ struct SavedRequestsPopover: View {
 
     /// Opens at once when nothing would be lost, else asks (rendering a saved response opens it too).
     private func request(open saved: SavedRequest, render: Bool) {
-        if client.hasUnsavedChanges, client.savedID != saved.id {
+        if client.hasUnsavedChanges {
             pendingOpen = PendingOpen(saved: saved, render: render)
             return
         }

@@ -225,8 +225,10 @@ public final class NetworkMonitor {
     /// Sends a request the user composed (the Client tab), recorded as a `.bidRequest` root entry with its method, headers
     /// and body. It is no tracker: sent in Simulated and Real mode, recorded and not sent when Offline (`offline`), and
     /// only Offline, `clear()` or the caller's cancellation stop it. Only `http(s)` URLs with a host are sent. The user's
-    /// headers replace the monitor's own whatever their case; GET and HEAD carry no body. Redirects are followed by hand
-    /// (`RedirectRule`). Any final status is a result; a transport failure, a timeout, a body over `maxContentBytes` or a
+    /// headers replace the monitor's own whatever their case; GET and HEAD carry no body. Redirects within the origin are
+    /// followed by hand (`RedirectRule`); one to another origin (host, scheme or port) is the result, not followed, so
+    /// nothing the user typed (custom credentials, the request's personal data) goes anywhere they did not enter and https
+    /// is never downgraded. Any final status is a result; a transport failure, a timeout, a body over `maxContentBytes` or a
     /// cancellation throws a `NetworkMonitorError`.
     public func send(_ request: ComposedRequest, userAgent: String) async throws -> ComposedResponse {
         let method = request.wireMethod
@@ -263,7 +265,7 @@ public final class NetworkMonitor {
             record.delivery = .network
             let stored = appendComposed(record, body: body)
             let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: Self.maxContentBytes,
-                                failOnTruncation: true, acceptsAnyStatus: true)
+                                failOnTruncation: true, acceptsAnyStatus: true, followsCrossOriginRedirects: false)
             let task = startLoad(stored, permit: permit, spec: spec)
             let loaded = try await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }.get()
             return ComposedResponse(status: loaded.status, headers: loaded.headers, body: loaded.body, url: loaded.url ?? requestURL, entryID: stored.id,
@@ -550,7 +552,7 @@ public final class NetworkMonitor {
             guard let permit = DispatchPolicy.permit(for: root.category, isScript: root.isScript, mode: mode, offline: offline) else {
                 return .failure(markNotSent(currentID, isTracker: root.category.isTracker, reason: Self.simulatedCancellation))
             }
-            visited.insert(requestURL.absoluteString)
+            visited.insert(Self.visitKey(method: hopRequest.method, url: requestURL.absoluteString))
 
             let headers = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: hopRequest.headers)
             let request = HTTPRequest(url: requestURL, method: hopRequest.method, headers: headers, body: hopRequest.body,
@@ -577,6 +579,12 @@ public final class NetworkMonitor {
                 let next = URL(string: location, relativeTo: requestURL)?.absoluteURL ?? URLText.requestURL(location)
                 let nextURL = next?.absoluteString ?? location
                 let nextScheme = URLText.scheme(nextURL)
+                if !spec.followsCrossOriginRedirects, let next, !RedirectRule.sameOrigin(requestURL, next) {
+                    // The 3xx is the answer: the user sees where it points and decides whether to send there.
+                    update(currentID) { $0.note = Self.joined($0.note, "Redirect to another origin not followed: \(String(location.prefix(300)))") }
+                    return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
+                                                   entryID: currentID, truncated: response.truncated))
+                }
                 let nextRequest = next.map { RedirectRule.next(after: hopRequest, status: response.status, from: requestURL, to: $0) } ?? hopRequest
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
                                        source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL,
@@ -587,7 +595,7 @@ public final class NetworkMonitor {
                     .invalidURL(location)
                 } else if hops >= Self.maxRedirects {
                     .tooManyRedirects(limit: Self.maxRedirects)
-                } else if visited.contains(nextURL) {
+                } else if visited.contains(Self.visitKey(method: nextRequest.method, url: nextURL)) {
                     .redirectLoop(nextURL)
                 } else if nextScheme != "http", nextScheme != "https" {
                     .redirectNotFollowed(nextURL)
@@ -807,6 +815,11 @@ public final class NetworkMonitor {
         return trimmed
     }
 
+    /// A redirect loop repeats a request: the same method to the same URL (POST, 303, then GET of that URL is not one).
+    nonisolated static func visitKey(method: String, url: String) -> String {
+        method.uppercased() + " " + url
+    }
+
     nonisolated static func isRedirect(_ status: Int) -> Bool {
         [301, 302, 303, 307, 308].contains(status)
     }
@@ -863,6 +876,8 @@ struct LoadSpec: Sendable {
     var failOnTruncation: Bool
     /// Every final status is a result (a composed request); otherwise a status outside 2xx fails the load.
     var acceptsAnyStatus = false
+    /// `false`: a redirect to another origin ends the load with the 3xx as its result (a composed request).
+    var followsCrossOriginRedirects = true
 }
 
 /// What a load produced: the response of its final hop.

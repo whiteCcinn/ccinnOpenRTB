@@ -3,6 +3,15 @@ import Foundation
 import Observation
 import RTBKit
 
+/// When an exchange handed to the simulator is rendered.
+enum ExchangeRendering: Equatable, Sendable {
+    /// Right after a Send: rendered unless the session is in Real mode (where nothing is sent without an explicit Render),
+    /// decided once the exchange is parsed.
+    case unlessRealMode
+    /// The user pressed Render: rendered in any mode (in Real mode, the bid's trackers are sent).
+    case always
+}
+
 /// What the Client needs from the simulator: the session's network gate, its device and mode, and a way to show an
 /// exchange. `AdSession` adopts it; tests use a recording stand-in.
 @MainActor
@@ -12,8 +21,9 @@ protocol ClientSimulatorTarget: AnyObject {
     /// The simulated device: its User-Agent goes with the request.
     var device: DeviceProfile { get }
     var mode: TrackingMode { get }
-    /// Puts `request` and `response` into the editors (on `device`, when given) and renders when `render` is set.
-    func loadExchange(request: String, response: String, device: DeviceProfile?, render: Bool) async
+    /// Puts `request` and `response` into the editors (on `device`, when given) and renders as `rendering` says.
+    /// Returns whether it rendered.
+    func loadExchange(request: String, response: String, device: DeviceProfile?, rendering: ExchangeRendering) async -> Bool
 }
 
 /// The Client tab of one main window (bid-client B4): the request being composed, the exchange it produced or that was
@@ -21,8 +31,10 @@ protocol ClientSimulatorTarget: AnyObject {
 ///
 /// - A response is shown on the device as soon as it arrives when it carries one (a 2xx with a body): in Real mode the
 ///   editors get it and the device waits for an explicit Render, so no tracker is sent without one.
-/// - What the simulator gets is the body that was sent, never a draft edited while the request was in flight.
-/// - Each Send starts a generation; a cancelled or superseded request never updates the tab.
+/// - What the simulator gets is the body that was sent (none for a GET), never a draft edited while it was in flight.
+/// - Each Send starts a generation; a cancelled or superseded request never updates the tab, and neither does a
+///   simulator hand-off that finishes after the tab moved on.
+/// - One save at a time; a save that lands after another request was opened does not relabel it.
 @MainActor
 @Observable
 final class ClientModel {
@@ -50,12 +62,15 @@ final class ClientModel {
     private(set) var sendWarning: String?
     /// What happened to the simulator after the last response or Render.
     private(set) var simulatorNote: String?
+    private(set) var isSaving = false
 
     @ObservationIgnored let library: SavedRequestLibrary
     @ObservationIgnored private let target: any ClientSimulatorTarget
     @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private var sendTask: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
+    /// Incremented when the tab shows another request (Open, New Request).
+    @ObservationIgnored private var draftGeneration = 0
 
     init(target: any ClientSimulatorTarget, library: SavedRequestLibrary = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.target = target
@@ -98,7 +113,7 @@ final class ClientModel {
         generation &+= 1
         let token = generation
         let draft = request
-        let sentBody = request.body
+        let sentBody = request.method.sendsBody ? request.body : ""
         let device = target.device
         let monitor = target.monitor
         phase = .sending
@@ -141,26 +156,36 @@ final class ClientModel {
         phase = .received
         sendTask = nil
         guard exchange.response.carriesAResponseToRender else {
-            simulatorNote = exchange.response.isSuccess
-                ? "No bid: the response has no body. The simulator was left as it was."
-                : "HTTP \(exchange.response.status): the simulator was left as it was."
+            simulatorNote = Self.leftAloneNote(for: exchange.response)
             return
         }
-        await show(exchange, on: device)
+        await show(exchange, on: device, rendering: .unlessRealMode)
+    }
+
+    static func leftAloneNote(for response: ClientResponse) -> String {
+        if response.isSuccess { return "No bid: the response has no body. The simulator was left as it was." }
+        if (300..<400).contains(response.status), let location = HTTPHeaders.value("Location", in: response.headers) {
+            return "HTTP \(response.status): redirected to \(location.prefix(200)), on another origin: not followed, so nothing you typed went there. "
+                + "Send to that URL if you trust it."
+        }
+        return "HTTP \(response.status): the simulator was left as it was."
     }
 
     // MARK: Simulator
 
-    /// Shows the current exchange's response on its device (a saved one, or the last one sent), without sending anything.
+    /// Render: shows the current exchange's response on its device (a saved one, or the last one sent) without sending
+    /// anything to the endpoint. An explicit render, so it renders in Real mode too (and then sends the bid's trackers).
     func render() async {
         guard let exchange, exchange.response.carriesAResponseToRender else { return }
-        await show(exchange, on: exchange.deviceID.flatMap(DeviceCatalog.device(id:)))
+        await show(exchange, on: exchange.deviceID.flatMap(DeviceCatalog.device(id:)), rendering: .always)
     }
 
-    private func show(_ exchange: ClientExchange, on device: DeviceProfile?) async {
-        let renders = target.mode != .real
-        await target.loadExchange(request: exchange.requestBody, response: exchange.response.body, device: device, render: renders)
-        simulatorNote = renders
+    private func show(_ exchange: ClientExchange, on device: DeviceProfile?, rendering: ExchangeRendering) async {
+        let token = generation
+        let rendered = await target.loadExchange(request: exchange.requestBody, response: exchange.response.body, device: device,
+                                                 rendering: rendering)
+        guard token == generation else { return }
+        simulatorNote = rendered
             ? nil
             : "Loaded into the Response and Request editors. Real mode: press Render to show it; its trackers will be sent."
     }
@@ -170,12 +195,18 @@ final class ClientModel {
     /// Saves the request and its exchange: over the request it was opened from, or (`asNew`, or never saved) as a new one.
     @discardableResult
     func save(asNew: Bool = false) async -> Bool {
+        guard !isSaving else { return false }
+        isSaving = true
+        defer { isSaving = false }
+        let draft = draftGeneration
         let date = now()
         let id = asNew ? UUID() : (savedID ?? UUID())
         let existing = asNew ? nil : library.request(id: id)
         let item = SavedRequest(id: id, name: effectiveName, createdAt: existing?.createdAt ?? date, updatedAt: date, request: request,
                                 exchange: exchange)
         guard await library.save(item) else { return false }
+        // Saved; the tab may show another request by now, which keeps its own identity.
+        guard draft == draftGeneration else { return true }
         savedID = item.id
         name = item.name
         return true
@@ -184,6 +215,7 @@ final class ClientModel {
     /// Opens a saved request with its exchange (nothing is sent).
     func open(_ saved: SavedRequest) {
         stopSending()
+        draftGeneration &+= 1
         request = saved.request
         name = saved.name
         savedID = saved.id
@@ -196,6 +228,7 @@ final class ClientModel {
 
     func newRequest() {
         stopSending()
+        draftGeneration &+= 1
         request = ClientRequest()
         name = ""
         savedID = nil
@@ -233,9 +266,9 @@ final class ClientModel {
 
 extension AdSession: ClientSimulatorTarget {
     /// The Client's exchange in the editors: a different device first (the ad on the old one is removed, nothing is sent),
-    /// then the request and response, parsed at once, so the bid's format and placement come from both; rendered when
-    /// `render` is set (never in Real mode: the Client asks only outside it).
-    func loadExchange(request: String, response: String, device: DeviceProfile?, render shouldRender: Bool) async {
+    /// then the request and response, parsed at once, so the bid's format and placement come from both. Whether to render
+    /// is decided after the parse, so a switch to Real mode meanwhile is honoured: there, only an explicit Render renders.
+    func loadExchange(request: String, response: String, device: DeviceProfile?, rendering: ExchangeRendering) async -> Bool {
         if let device, device != self.device {
             if phase != .idle { reset() }
             self.device = device
@@ -243,6 +276,8 @@ extension AdSession: ClientSimulatorTarget {
         requestText = request
         responseText = response
         await parseNow()
-        if shouldRender { render() }
+        guard rendering == .always || mode != .real else { return false }
+        render()
+        return true
     }
 }

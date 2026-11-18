@@ -56,7 +56,10 @@ struct NetworkDetailView: View {
             Text(entry.source).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             HStack {
                 Button("Copy URL", systemImage: "link") { Pasteboard.copy(entry.url) }
-                Button("Copy as curl", systemImage: "terminal") { Pasteboard.copy(CurlCommand.make(for: entry, body: monitor.requestBody(for: entry.id))) }
+                let curl = NetworkPresentation.curl(for: entry, body: monitor.requestBody(for: entry.id))
+                Button("Copy as curl", systemImage: "terminal") { curl.map(Pasteboard.copy) }
+                    .disabled(curl == nil)
+                    .help(curl == nil ? "The request body was not kept (over 512 KiB): a command without it would not repeat the request" : "")
             }
             .controlSize(.small)
             if let message = NetworkCells.failureMessage(entry) {

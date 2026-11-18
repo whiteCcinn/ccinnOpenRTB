@@ -48,7 +48,7 @@ final class RecordingSimulatorTarget: ClientSimulatorTarget {
         var request: String
         var response: String
         var deviceID: String?
-        var render: Bool
+        var rendering: ExchangeRendering
     }
 
     let monitor: NetworkMonitor
@@ -60,8 +60,9 @@ final class RecordingSimulatorTarget: ClientSimulatorTarget {
         self.monitor = monitor
     }
 
-    func loadExchange(request: String, response: String, device: DeviceProfile?, render: Bool) async {
-        loads.append(Load(request: request, response: response, deviceID: device?.id, render: render))
+    func loadExchange(request: String, response: String, device: DeviceProfile?, rendering: ExchangeRendering) async -> Bool {
+        loads.append(Load(request: request, response: response, deviceID: device?.id, rendering: rendering))
+        return rendering == .always || (rendering == .unlessRealMode && mode != .real)
     }
 }
 
@@ -152,6 +153,16 @@ struct ClientRequestTests {
         #expect(request(body: "  ").jsonWarning == nil)
         #expect(request(method: .get, body: "not json").jsonWarning == nil)
         #expect(throws: Never.self) { try request(body: "{\"id\":").composed() }
+    }
+
+    /// A hand-edited file with one header id twice: the rows get ids of their own, so the editor can tell them apart.
+    @Test func duplicateHeaderIDsAreMadeUnique() throws {
+        let id = UUID()
+        let draft = request(headers: [ClientHeader(id: id, name: "A", value: "1"), ClientHeader(id: id, name: "B", value: "2")])
+        let decoded = try JSONDecoder().decode(ClientRequest.self, from: JSONEncoder().encode(draft))
+        #expect(Set(decoded.headers.map(\.id)).count == 2)
+        #expect(decoded.headers.map(\.name) == ["A", "B"])
+        #expect(decoded.headers.first?.id == id)
     }
 
     @Test func requestsRoundTripThroughCodable() throws {
@@ -262,6 +273,35 @@ struct SavedRequestStoreTests {
         #expect(snapshot.unreadable.sorted() == ["broken.json", "foreign.json", "huge.json"])
     }
 
+    /// Deleting removes every file that holds the request (a Finder copy too): it never comes back on the next launch.
+    @Test func deletingRemovesEveryCopy() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let store = SavedRequestStore(directory: directory.url)
+        let item = saved("Secret")
+        let keep = saved("Keep")
+        try await store.write(item)
+        try await store.write(keep)
+        try FileManager.default.copyItem(at: directory.url.appendingPathComponent("\(item.id.uuidString).json"),
+                                         to: directory.url.appendingPathComponent("Secret copy.json"))
+
+        try await store.delete(id: item.id)
+
+        #expect(try await store.loadAll().requests == [keep])
+        #expect(!FileManager.default.fileExists(atPath: directory.url.appendingPathComponent("Secret copy.json").path))
+    }
+
+    /// A request too large to be read back is refused when saving, not lost on the next launch.
+    @Test func aRequestTooLargeToReadBackIsNotWritten() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let store = SavedRequestStore(directory: directory.url, maxFileBytes: 1_024)
+
+        await #expect(throws: (any Error).self) { try await store.write(saved("Big")) }
+
+        #expect(try await store.loadAll().requests.isEmpty)
+    }
+
     /// Two files claiming one id (a copied file): the most recently updated wins, so the list never shows one id twice.
     @Test func oneRequestPerID() async throws {
         let directory = TemporaryDirectory()
@@ -328,6 +368,23 @@ struct SavedRequestLibraryTests {
         #expect(library.lastError != nil)
     }
 
+    @Test func aFailedDeleteKeepsTheRequestAndSaysSo() async throws {
+        let directory = TemporaryDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.url.path)
+            directory.cleanUp()
+        }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let kept = item("Kept", at: 1)
+        #expect(await library.save(kept))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.url.path)
+
+        #expect(await library.delete(kept.id) == false)
+
+        #expect(library.requests.map(\.id) == [kept.id])
+        #expect(library.lastError != nil)
+    }
+
     @Test func duplicatingMakesAnIndependentCopy() async throws {
         let directory = TemporaryDirectory()
         defer { directory.cleanUp() }
@@ -381,7 +438,8 @@ struct ClientModelTests {
         #expect(exchange.requestBody == rewardedVideoRequest)
         #expect(exchange.deviceID == "iphone-18-pro")
         #expect(harness.model.exchangeOrigin == .sent)
-        #expect(harness.target.loads == [.init(request: rewardedVideoRequest, response: videoResponse, deviceID: "iphone-18-pro", render: true)])
+        #expect(harness.target.loads == [.init(request: rewardedVideoRequest, response: videoResponse, deviceID: "iphone-18-pro",
+                                               rendering: .unlessRealMode)])
         let sent = try #require(harness.transport.requests.first)
         #expect(sent.method == "POST")
         #expect(sent.body == Data(rewardedVideoRequest.utf8))
@@ -397,8 +455,60 @@ struct ClientModelTests {
 
         await harness.model.send()?.value
 
-        #expect(harness.target.loads.map(\.render) == [false])
+        #expect(harness.target.loads.map(\.rendering) == [.unlessRealMode])
         #expect(harness.model.simulatorNote?.contains("Render") == true)
+
+        // Render is the explicit action Real mode waits for: it renders (and so sends the bid's trackers).
+        await harness.model.render()
+        #expect(harness.target.loads.map(\.rendering) == [.unlessRealMode, .always])
+        #expect(harness.model.simulatorNote == nil)
+    }
+
+    /// A GET sends no body, so none goes to the simulator either (not a stale body left in the hidden editor).
+    @Test func aGETExchangeCarriesNoBody() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+        harness.transport.answer(endpoint, .init(body: videoResponse))
+        harness.model.request.method = .get
+
+        await harness.model.send()?.value
+
+        #expect(harness.transport.requests.first?.body == nil)
+        #expect(harness.model.exchange?.requestBody == "")
+        #expect(harness.target.loads.first?.request == "")
+    }
+
+    /// ⌘S twice before the first write lands saves one request, not two.
+    @Test func concurrentSavesMakeOneRequest() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+
+        async let first = harness.model.save()
+        async let second = harness.model.save()
+        let results = await [first, second]
+
+        #expect(results.filter { $0 }.count == 1)
+        #expect(harness.library.requests.count == 1)
+    }
+
+    /// Opening another request while a save is in flight: the save lands, and the tab stays on what was opened.
+    @Test func aSaveDoesNotRelabelARequestOpenedMeanwhile() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+        let date = Date(timeIntervalSince1970: 1)
+        let other = SavedRequest(id: UUID(), name: "Other", createdAt: date, updatedAt: date, request: request("https://other.example/bid"),
+                                 exchange: nil)
+
+        let saving = Task { await harness.model.save() }
+        for _ in 0..<1_000 where !harness.model.isSaving { await Task.yield() }
+        #expect(harness.model.isSaving)
+        harness.model.open(other)
+        #expect(await saving.value)
+
+        #expect(harness.model.savedID == other.id)
+        #expect(harness.model.name == "Other")
+        #expect(harness.model.request.url == "https://other.example/bid")
+        #expect(harness.library.requests.map(\.name) == ["ssp.example/openrtb2/auction"])
     }
 
     @Test(arguments: [(204, ""), (400, #"{"error":"bad imp"}"#), (503, "")])
@@ -489,6 +599,10 @@ struct ClientModelTests {
         #expect(harness.model.phase == .failed("Cancelled"))
         #expect(harness.model.exchange == nil)
         #expect(harness.target.loads.isEmpty)
+        // The request itself was stopped, not just ignored.
+        await harness.monitor.waitUntilIdle()
+        #expect(harness.monitor.inFlightCount == 0)
+        #expect(harness.monitor.liveEntries.first?.isFailure == true)
     }
 
     @Test func savingNamesUpdatesAndTracksChanges() async throws {
@@ -541,7 +655,7 @@ struct ClientModelTests {
 
         await harness.model.render()
 
-        #expect(harness.target.loads == [.init(request: rewardedVideoRequest, response: videoResponse, deviceID: "galaxy-z-fold", render: true)])
+        #expect(harness.target.loads == [.init(request: rewardedVideoRequest, response: videoResponse, deviceID: "galaxy-z-fold", rendering: .always)])
         #expect(harness.transport.requests.isEmpty)
     }
 
@@ -596,6 +710,55 @@ struct ClientEndToEndTests {
     }
 }
 
+@MainActor
+@Suite("Client: Real mode with a session", .serialized)
+struct ClientRealModeTests {
+    /// Real mode: the response reaches the editors, nothing renders and no tracker goes out — until Render.
+    @Test func realModeSendsNoTrackerUntilRender() async throws {
+        let transport = ScriptedTransport()
+        transport.answer(endpoint, .init(body: videoResponse))
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let session = AdSession(services: .live, monitor: monitor, parseDebounce: .zero)
+        monitor.mode = .real  // as after a confirmation
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let model = ClientModel(target: session, library: SavedRequestLibrary(store: SavedRequestStore(directory: directory.url)))
+        model.request = request()
+
+        await model.send()?.value
+
+        #expect(session.responseText == videoResponse)
+        #expect(session.phase == .idle)
+        #expect(transport.requests.map(\.url.absoluteString) == [endpoint])
+        #expect(monitor.liveEntries.map(\.category) == [.bidRequest])
+
+        await model.render()
+        #expect(session.phase != .idle)
+    }
+
+    /// The render decision is taken after the parse: a switch to Real mode while it runs is honoured.
+    @Test func aSwitchToRealModeDuringTheParseStopsTheAutomaticRender() async throws {
+        let gate = DispatchSemaphore(value: 0)
+        var services = AdKitServices.live
+        services.parseInput = { text, request in
+            gate.wait()
+            return InputParser.parse(text, request: request)
+        }
+        let monitor = NetworkMonitor(transport: ScriptedTransport(), publishInterval: .zero)
+        let session = AdSession(services: services, monitor: monitor, parseDebounce: .zero)
+
+        let loading = Task { await session.loadExchange(request: rewardedVideoRequest, response: videoResponse, device: nil, rendering: .unlessRealMode) }
+        for _ in 0..<1_000 where session.responseText.isEmpty { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(30))
+        monitor.mode = .real
+        for _ in 0..<8 { gate.signal() }
+
+        #expect(await loading.value == false)
+        #expect(session.phase == .idle)
+        #expect(session.responseText == videoResponse)
+    }
+}
+
 // MARK: - Presentation
 
 @MainActor
@@ -619,7 +782,7 @@ struct ClientPresentationTests {
         #expect(command.contains("-H 'Accept: */*'"))
         #expect(command.contains("-H 'Accept-Language: en-US,en;q=0.9'"))
         #expect(command.contains("-H 'x-openrtb-version: 2.6'"))
-        #expect(command.contains("--data-binary '" + rewardedVideoRequest + "'"))
+        #expect(command.contains("--data-raw '" + rewardedVideoRequest + "'"))
         #expect(command.hasSuffix("--url '\(endpoint)'"))
         var custom = request()
         custom.headers.append(ClientHeader(name: "user-agent", value: "Exchange/2"))
@@ -627,6 +790,19 @@ struct ClientPresentationTests {
         #expect(overridden.contains("-H 'user-agent: Exchange/2'"))
         #expect(!overridden.contains("UA/1"))
         #expect(throws: ClientRequest.Invalid.self) { try ClientPresentation.curl(for: ClientRequest(), userAgent: "UA", acceptLanguage: "en") }
+    }
+
+    /// A body the monitor did not keep (over 512 KiB) cannot be repeated: no curl rather than a wrong one.
+    @Test func curlOfAnEntryNeedsItsBody() {
+        let entry = NetworkEntry(sequence: 1, category: .bidRequest, trigger: "bid request", source: "client", template: endpoint, url: endpoint,
+                                 method: "POST", state: .completed(status: 200), requestBodyBytes: 600_000)
+        #expect(NetworkPresentation.curl(for: entry, body: nil) == nil)
+        #expect(NetworkPresentation.curl(for: entry, body: Data("{}".utf8))?.contains("--data-raw '{}'") == true)
+        let get = NetworkEntry(sequence: 2, category: .content, trigger: "t", source: "s", template: endpoint, url: endpoint, state: .simulated)
+        #expect(NetworkPresentation.curl(for: get, body: nil) != nil)
+        var empty = entry
+        empty.requestBodyBytes = 0
+        #expect(NetworkPresentation.curl(for: empty, body: nil) != nil)
     }
 
     @Test func savedRequestsAreFoundByNameURLAndMethod() {

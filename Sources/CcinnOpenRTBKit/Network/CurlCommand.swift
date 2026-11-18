@@ -8,8 +8,10 @@ import Foundation
 /// - Control characters (which a shell argument cannot carry safely) are percent-encoded.
 /// - The headers are the entry's, as sent on the wire when the transport reported them; with an `Accept-Encoding`
 ///   header, `--compressed` makes curl decode the compressed body it asked for (as browsers' "Copy as cURL" do).
-/// - A request body goes in `--data-binary` (which implies POST, so `-X` is written only for another method), single
-///   quoted with its newlines and tabs; other control characters become JSON `\u00XX` escapes (`bodyArgument`).
+/// - A request body goes in `--data-raw` (which implies POST, so `-X` is written only for another method): never
+///   `--data-binary` or `-d`, which read a body starting with `@` as a file name — `@~/.ssh/id_rsa` would upload that
+///   file. Single quoted with its newlines and tabs; other control characters become JSON `\u00XX` escapes
+///   (`bodyArgument`).
 public enum CurlCommand {
     public static func make(url: String, method: String = "GET", headers: [String: String] = [:], body: Data? = nil) -> String {
         var parts = ["curl", "--globoff"]
@@ -20,7 +22,7 @@ public enum CurlCommand {
             parts += ["-H", quote("\(header.name): \(header.value)")]
         }
         if HTTPHeaders.value("Accept-Encoding", in: headers) != nil { parts.append("--compressed") }
-        if let body { parts += ["--data-binary", bodyArgument(body)] }
+        if let body { parts += ["--data-raw", bodyArgument(body)] }
         parts += ["--url", quote(url)]
         return parts.joined(separator: " ")
     }

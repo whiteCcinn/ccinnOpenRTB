@@ -106,7 +106,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **保存的请求**：**Save**（⌘S）会保存请求及其最近一次响应和发送时使用的设备；**Saved** 在每个窗口中列出它们（最新的在前，可搜索）。打开后可以再次发送，或者在其设备上 **Render** 保存的响应而不发出任何请求。可以在列表中复制或删除。每个请求是 `~/Library/Application Support/CcinnOpenRTB/Requests/` 下的一个 JSON 文件，只有你的账户可以读取；其中包含你的请求头（包括凭据）以及请求中的个人数据。
 - **迁移到另一台 Mac**：**Export All…**（在 **Saved** 中，或 ⋯ 菜单中）会把所有保存的请求及其最近一次响应写入一个 JSON 文件；在另一台 Mac 上用 **Import…** 一次导入全部内容。按 id 合并：只有更新的副本才会替换已有的请求，因此重复导入不会改变任何内容。损坏的条目会被跳过并计数，绝不会导致失败。导出文件包含你的请求头（包括凭据）以及请求中的个人数据，写入后只有你的账户可以读取：请妥善保管。
 - **Copy as curl**（⋯ 菜单中）复制的正是 Send 会发出的内容。
-- 该请求在 Network 窗口中是一条 **Bid request** 记录，带有请求体。重定向由应用逐跳跟随：307 与 308 会重复 POST 及其请求体；303（以及 POST 之后的 301 或 302）改为不带请求体的 GET；跳到其他主机时绝不携带 `Authorization`、`Proxy-Authorization` 或 `Cookie`。
+- 该请求在 Network 窗口中是一条 **Bid request** 记录，带有请求体。端点同源内的重定向由应用逐跳跟随：307 与 308 会重复 POST 及其请求体；303（以及 POST 之后的 301 或 302）改为不带请求体的 GET。跳到其他源（其他主机、协议或端口，包括 http↔https）的重定向**不会被跟随**：3xx 及其 `Location` 就是响应，因此你输入的任何内容——例如 `X-Api-Key` 这类自定义凭据、请求中的个人数据——都不会发往你没有填写的地址。如果信任该地址，请自行向它发送。
 
 ## Network 窗口
 
@@ -119,7 +119,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **筛选**：按类别、模式和文本筛选。**Follow tail** 让最新的记录始终可见，**Clear** 清空当前会话的列表。
 - **内容**类记录带有 CONTENT 标记，因此应用为渲染广告而加载的内容不会被误认为监测请求。VAST 标签或 Wrapper 的 URL 会把书写时的 URI 与实际请求的 URL 并排显示（播放器会展开其中的 VAST 宏）。请求头是实际发出的请求头。
 - **导出 HAR 1.2**：每条记录带有自定义的 `_ccinn` 字段：`sequence`、`category`、`trigger`、`source`、`mode`、`delivery`、`parent`、`template` 和 `macros`。竞价请求的请求体导出为 `postData`。
-- **Copy URL** 与 **Copy as curl**：curl 命令经过 shell 转义并使用 `--globoff`，因此 VAST 的 `[MACROS]` 不会被 curl 当作通配模式。竞价请求的请求体放在 `--data-binary` 中并保留换行；其他控制字符写成 JSON 的 `\u00XX` 转义。
+- **Copy URL** 与 **Copy as curl**：curl 命令经过 shell 转义并使用 `--globoff`，因此 VAST 的 `[MACROS]` 不会被 curl 当作通配模式。竞价请求的请求体放在 `--data-raw` 中并保留换行（绝不使用 `--data-binary` 或 `-d`，它们会把以 `@` 开头的请求体当作要上传的文件）；其他控制字符写成 JSON 的 `\u00XX` 转义。
 - 每个会话最多保留 10,000 条记录，超出时最早的记录会被丢弃。
 
 | 类别 | 含义 |

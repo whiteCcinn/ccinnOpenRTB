@@ -64,10 +64,9 @@ struct NetworkContextMenu: View {
         let selected = entries.filter { ids.contains($0.id) }
         Button(selected.count > 1 ? "Copy URLs" : "Copy URL") { Pasteboard.copy(selected.map(\.url).joined(separator: "\n")) }
             .disabled(selected.isEmpty)
-        Button("Copy as curl") {
-            Pasteboard.copy(selected.map { CurlCommand.make(for: $0, body: monitor?.requestBody(for: $0.id)) }.joined(separator: "\n"))
-        }
-        .disabled(selected.isEmpty)
+        let commands = selected.map { NetworkPresentation.curl(for: $0, body: monitor?.requestBody(for: $0.id)) }
+        Button("Copy as curl") { Pasteboard.copy(commands.compactMap { $0 }.joined(separator: "\n")) }
+            .disabled(selected.isEmpty || commands.contains(nil))
         if selected.count == 1, let entry = selected.first, entry.template != entry.url {
             Button("Copy Template") { Pasteboard.copy(entry.template) }
         }

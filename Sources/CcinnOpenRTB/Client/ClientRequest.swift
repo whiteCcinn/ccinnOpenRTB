@@ -47,6 +47,27 @@ struct ClientRequest: Codable, Hashable, Sendable {
         self.body = body
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case method, url, headers, body
+    }
+
+    /// Header ids are made unique: a hand-edited file may repeat one, and the editor tells rows apart by id.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        method = try container.decode(ClientMethod.self, forKey: .method)
+        url = try container.decode(String.self, forKey: .url)
+        body = try container.decode(String.self, forKey: .body)
+        var seen: Set<UUID> = []
+        headers = try container.decode([ClientHeader].self, forKey: .headers).map { header in
+            var header = header
+            if !seen.insert(header.id).inserted {
+                header.id = UUID()
+                seen.insert(header.id)
+            }
+            return header
+        }
+    }
+
     /// A JSON bid request with the version header OpenRTB recommends (2.6 §2.4 "Version HTTP Header").
     static func defaultHeaders() -> [ClientHeader] {
         [ClientHeader(name: "Content-Type", value: "application/json"), ClientHeader(name: "x-openrtb-version", value: "2.6")]

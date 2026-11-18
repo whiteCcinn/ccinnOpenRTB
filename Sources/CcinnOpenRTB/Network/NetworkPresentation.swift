@@ -49,6 +49,13 @@ enum NetworkPresentation {
         }
     }
 
+    /// Copy as curl for an entry; `nil` when the request had a body the monitor did not keep (over its 512 KiB preview
+    /// limit): a command without it would not repeat the request.
+    static func curl(for entry: NetworkEntry, body: Data?) -> String? {
+        if let bytes = entry.requestBodyBytes, bytes > 0, body == nil { return nil }
+        return CurlCommand.make(for: entry, body: body)
+    }
+
     /// Whether the headers shown are the ones that went over the wire: reported by the transport ("as sent"), the ones a
     /// request is being or was set up with when the wire never reported (a failed connection; the media entry, whose
     /// requests are its children), or the ones a request never sent would have had.

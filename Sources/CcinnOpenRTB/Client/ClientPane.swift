@@ -71,10 +71,13 @@ private struct ClientTitleBar: View {
 private struct ClientRequestMenu: View {
     let client: ClientModel
     let session: AdSession
+    @State private var confirmsNewRequest = false
 
     var body: some View {
         Menu {
-            Button("New Request") { client.newRequest() }
+            Button("New Request") {
+                if client.hasUnsavedChanges { confirmsNewRequest = true } else { client.newRequest() }
+            }
             Button("Save as New Request") { Task { await client.save(asNew: true) } }
             Divider()
             Button("Copy as curl") { copyCurl() }
@@ -89,6 +92,11 @@ private struct ClientRequestMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("More")
+        .confirmationDialog("Discard the unsaved changes?", isPresented: $confirmsNewRequest) {
+            Button("New Request", role: .destructive) { client.newRequest() }
+        } message: {
+            Text("The request in the Client tab has changes that are not saved.")
+        }
     }
 
     private func copyCurl() {
@@ -151,8 +159,8 @@ private struct ClientNotices: View {
         let info = client.library.lastNotice
         if !blocking.isEmpty || !notes.isEmpty || info != nil {
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(blocking, id: \.self) { Label($0, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
-                ForEach(notes, id: \.self) { Label($0, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                ForEach(Array(blocking.enumerated()), id: \.offset) { Label($0.element, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
+                ForEach(Array(notes.enumerated()), id: \.offset) { Label($0.element, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 if let info { Label(info, systemImage: "checkmark.circle").foregroundStyle(.secondary) }
             }
             .font(.caption)
@@ -339,7 +347,7 @@ private struct ClientExchangeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ClientStatusBar(client: client, exchange: exchange)
+            ClientStatusBar(client: client, session: session, exchange: exchange)
             ClientSimulatorLine(client: client, session: session, exchange: exchange)
             Divider()
             HStack {
@@ -380,6 +388,7 @@ private struct ClientExchangeView: View {
 /// "● 200 OK · 142 ms · 3.4 KB · Received 14:02:11 · iPhone 18 Pro" and Render.
 private struct ClientStatusBar: View {
     let client: ClientModel
+    let session: AdSession
     let exchange: ClientExchange
 
     var body: some View {
@@ -401,7 +410,8 @@ private struct ClientStatusBar: View {
             }
             .controlSize(.small)
             .disabled(!client.canRender)
-            .help("Show this response on its device (nothing is sent to the endpoint)")
+            .help(session.mode == .real ? "Show this response on its device: nothing goes to the endpoint, but in Real mode the bid’s trackers are sent"
+                : "Show this response on its device (nothing is sent to the endpoint)")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -106,7 +106,7 @@ A request composer in the right panel of every window, for sending a bid request
 - **Saved requests.** **Save** (⌘S) keeps the request with its last response and the device it was sent as; **Saved** lists them (newest first, searchable) in every window. Open one to send it again, or **Render** its saved response on its device without sending anything. Duplicate and delete from the list. Each is a JSON file in `~/Library/Application Support/CcinnOpenRTB/Requests/`, readable only by your account; it holds your headers (credentials included) and the request's personal data.
 - **Move them to another Mac.** **Export All…** (in **Saved**, or the ⋯ menu) writes every saved request with its last response to one JSON file; on the other Mac, **Import…** reads it in one go. Requests are merged by id: a copy here is replaced only by a newer one, so importing twice changes nothing. A damaged entry is skipped and counted, never fatal. The export holds your headers (credentials included) and the requests' personal data, and is written readable only by your account: keep it private.
 - **Copy as curl** (in the ⋯ menu) copies exactly what Send would put on the wire.
-- The request is a **Bid request** entry in the Network window, with its body. Redirects are followed by hand: 307 and 308 repeat the POST and its body, 303 (and 301 or 302 after a POST) continue as a GET without the body, and a hop to another host never carries `Authorization`, `Proxy-Authorization` or `Cookie`.
+- The request is a **Bid request** entry in the Network window, with its body. Redirects within the endpoint's origin are followed by hand: 307 and 308 repeat the POST and its body, 303 (and 301 or 302 after a POST) continue as a GET without the body. A redirect to another origin (another host, scheme or port, http↔https included) is **not followed**: the 3xx and its `Location` are the response, so nothing you typed — custom credentials such as `X-Api-Key`, the request's personal data — goes anywhere you did not enter. Send to that URL yourself if you trust it.
 
 ## The Network window
 
@@ -119,7 +119,7 @@ Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; 
 - **Filters** by category, mode and text. **Follow tail** keeps the newest entry in view. **Clear** empties the session's list.
 - **Content** entries carry a CONTENT badge, so what the app loads to render the ad never looks like a tracker. A VAST tag or wrapper URL shows the URI as written next to the URL actually requested (the player expands VAST macros in it). The request headers are the ones actually sent.
 - **Export HAR 1.2.** Entries carry custom `_ccinn` fields: `sequence`, `category`, `trigger`, `source`, `mode`, `delivery`, `parent`, `template` and `macros`. A bid request's body is its `postData`.
-- **Copy URL** and **Copy as curl**. The curl command is shell-quoted and uses `--globoff`, so VAST `[MACROS]` are not read as curl globs. A bid request's body goes in `--data-binary`, with its line breaks; other control characters are written as JSON `\u00XX` escapes.
+- **Copy URL** and **Copy as curl**. The curl command is shell-quoted and uses `--globoff`, so VAST `[MACROS]` are not read as curl globs. A bid request's body goes in `--data-raw` (never `--data-binary` or `-d`, which would read a body starting with `@` as a file to upload), with its line breaks; other control characters are written as JSON `\u00XX` escapes.
 - A session keeps at most 10,000 entries. The oldest are dropped first.
 
 | Category | What it is |

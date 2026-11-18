@@ -1,4 +1,5 @@
 import Foundation
+import os
 import RTBKit
 import Testing
 @testable import CcinnOpenRTBKit
@@ -237,24 +238,53 @@ struct ComposedRequestMonitorTests {
         #expect(monitor.requestBody(for: hopEntry.id) == Data(bidRequestJSON.utf8))
     }
 
-    /// A hop to another origin never carries the user's credentials (Fetch: "remove `Authorization`" on a cross-origin
-    /// redirect; a hand-written `Cookie` is a credential too).
-    @Test func aCrossOriginHopDropsCredentials() async throws {
+    /// A redirect to another origin (host, scheme or port) is shown, not followed: nothing the user typed — custom
+    /// credentials such as `X-Api-Key`, the request's personal data — goes anywhere they did not enter, and https is never
+    /// downgraded.
+    @Test(arguments: [(307, "https://other.example/auction"), (308, "http://ssp.example/openrtb2/auction"),
+                      (301, "https://ssp.example:8443/openrtb2/auction")])
+    func aRedirectToAnotherOriginIsShownNotFollowed(status: Int, location: String) async throws {
         let transport = FakeTransport()
-        transport.redirect(endpoint, to: "https://other.example/auction", status: 307)
-        transport.respond("https://other.example/auction", body: bidResponseJSON)
+        transport.redirect(endpoint, to: location, status: status)
+        transport.respond(location, body: bidResponseJSON)
         let monitor = makeMonitor(transport: transport)
 
-        _ = try await monitor.send(composed(headers: ["Content-Type": "application/json", "authorization": "Bearer t", "Cookie": "s=1",
-                                                      "Proxy-Authorization": "Basic x", "x-openrtb-version": "2.6"]),
-                                   userAgent: deviceUA)
+        let response = try await monitor.send(composed(headers: ["Content-Type": "application/json", "X-Api-Key": "secret"]), userAgent: deviceUA)
 
-        let hop = try #require(transport.requests.last)
-        #expect(headerValues("Authorization", in: hop.headers).isEmpty)
-        #expect(headerValues("Cookie", in: hop.headers).isEmpty)
-        #expect(headerValues("Proxy-Authorization", in: hop.headers).isEmpty)
-        #expect(hop.headers["x-openrtb-version"] == "2.6")
-        #expect(hop.body == Data(bidRequestJSON.utf8))
+        #expect(response.status == status)
+        #expect(HTTPHeaders.value("Location", in: response.headers) == location)
+        #expect(transport.requests.count == 1)
+        #expect(response.responseEntryID == response.entryID)
+        let entry = try #require(monitor.entry(id: response.entryID))
+        #expect(entry.state == .completed(status: status))
+        #expect(entry.note?.contains("not followed") == true)
+        #expect(monitor.liveEntries.count == 1)
+    }
+
+    /// The rule itself, for any load that does cross origins: credentials stay behind.
+    @Test func theRedirectRuleDropsCredentialsAcrossOrigins() throws {
+        let hop = RedirectRule.Hop(method: "POST", body: Data("x".utf8),
+                                   headers: ["authorization": "Bearer t", "Cookie": "s=1", "Proxy-Authorization": "Basic x", "X-Keep": "1"])
+        let origin = try #require(URL(string: "https://a.example/p"))
+        let crossed = RedirectRule.next(after: hop, status: 307, from: origin, to: try #require(URL(string: "https://b.example/p")))
+        #expect(crossed.headers == ["X-Keep": "1"])
+        #expect(crossed.body == hop.body)
+        let same = RedirectRule.next(after: hop, status: 307, from: origin, to: try #require(URL(string: "https://A.example:443/q")))
+        #expect(same.headers == hop.headers)
+    }
+
+    /// POST /auction → 303 → GET /auction is a different request, not a loop.
+    @Test func seeOtherToTheSameURLIsNotALoop() async throws {
+        let transport = MethodRoutingTransport { request in
+            request.method == "POST" ? HTTPResponse(status: 303, headers: ["Location": endpoint])
+                : HTTPResponse(status: 200, headers: ["Content-Type": "application/json"], body: Data(bidResponseJSON.utf8))
+        }
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await monitor.send(composed(), userAgent: deviceUA)
+
+        #expect(response.status == 200)
+        #expect(transport.methods == ["POST", "GET"])
     }
 
     /// 303, and 301 / 302 after a POST, continue as a GET without the body or the headers that describe it.
@@ -332,14 +362,22 @@ struct RequestBodyExportTests {
     @Test func curlSendsTheBodyVerbatimWithNewlinesAndQuotes() {
         let body = "{\n  \"site\": \"it's\"\n}"
         let command = CurlCommand.make(url: endpoint, method: "POST", headers: ["Content-Type": "application/json"], body: Data(body.utf8))
-        #expect(command == #"curl --globoff -H 'Content-Type: application/json' --data-binary '{"# + "\n" + #"  "site": "it'\''s""# + "\n"
+        #expect(command == #"curl --globoff -H 'Content-Type: application/json' --data-raw '{"# + "\n" + #"  "site": "it'\''s""# + "\n"
             + #"}' --url 'https://ssp.example/openrtb2/auction'"#)
+    }
+
+    /// `--data-binary '@file'` would make curl read a local file and upload it: the body is never read as a file name.
+    @Test func aBodyStartingWithAnAtSignIsSentAsText() {
+        let command = CurlCommand.make(url: endpoint, method: "POST", body: Data("@/Users/me/.ssh/id_rsa".utf8))
+        #expect(command.contains("--data-raw '@/Users/me/.ssh/id_rsa'"))
+        #expect(!command.contains("--data-binary"))
+        #expect(!command.contains(" -d "))
     }
 
     /// A raw control character cannot be in JSON text and must not reach a terminal: written as its JSON escape.
     @Test func curlEscapesControlCharactersOtherThanWhitespace() {
         let command = CurlCommand.make(url: endpoint, method: "POST", body: Data("{\"a\":\"x\u{1B}[31m\u{0}\"}\t".utf8))
-        #expect(command.contains(#"--data-binary '{"a":"x\u001B[31m\u0000"}"# + "\t'"))
+        #expect(command.contains(#"--data-raw '{"a":"x\u001B[31m\u0000"}"# + "\t'"))
         #expect(!command.contains("\u{1B}"))
     }
 
@@ -368,5 +406,22 @@ struct RequestBodyExportTests {
         let entry = NetworkEntry(sequence: 1, category: .content, trigger: "t", source: "s", template: endpoint, url: endpoint, state: .simulated)
         let text = String(decoding: try HARExporter.data(entries: [entry], creatorVersion: "1.0.0"), as: UTF8.self)
         #expect(!text.contains("postData"))
+    }
+}
+
+/// Answers by method, records the methods it saw.
+final class MethodRoutingTransport: HTTPTransport {
+    private let answer: @Sendable (HTTPRequest) -> HTTPResponse
+    private let seen = OSAllocatedUnfairLock(initialState: [String]())
+
+    init(_ answer: @escaping @Sendable (HTTPRequest) -> HTTPResponse) {
+        self.answer = answer
+    }
+
+    var methods: [String] { seen.withLock { $0 } }
+
+    func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
+        seen.withLock { $0.append(request.method) }
+        return answer(request)
     }
 }

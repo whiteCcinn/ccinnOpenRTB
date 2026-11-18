@@ -75,15 +75,20 @@ final class SavedRequestLibrary {
         return true
     }
 
-    func delete(_ id: UUID) async {
+    /// Deletes the request from disk and the list; `false` (with `lastError`, the request still listed) when it could not.
+    @discardableResult
+    func delete(_ id: UUID) async -> Bool {
         await loadIfNeeded()
         do {
             try await store.delete(id: id)
-            requests.removeAll { $0.id == id }
-            lastError = nil
         } catch {
             lastError = "The request could not be deleted: \(error.localizedDescription)"
+            return false
         }
+        requests.removeAll { $0.id == id }
+        lastError = nil
+        lastNotice = nil
+        return true
     }
 
     /// A copy named "<name> copy", saved as a new request.
