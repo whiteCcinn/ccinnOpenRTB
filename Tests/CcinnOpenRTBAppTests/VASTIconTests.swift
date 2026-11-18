@@ -55,12 +55,14 @@ struct VASTIconPlanTests {
 @MainActor
 @Suite("VAST icons in the player")
 struct VASTPlayerIconTests {
+    private let keepAlive = KeepAlive()
+
     private func make(device: DeviceProfile = RendererFixtures.phone, placement: Placement = .interstitial) -> (VASTPlayerModel, RecordingHost, FakeEngine) {
         var ad = RendererFixtures.linearAd(duration: 10)
         ad.icons = [VASTIcon(program: "AdChoices", width: 77, height: 15, xPosition: .right, yPosition: .top, offset: 1,
                              resources: [.staticResource(url: "https://icons.example/adchoices.png", creativeType: "image/png")],
                              clickThrough: "https://privacy.example/")]
-        let host = RecordingHost(device: device)
+        let host = keepAlive.hold(RecordingHost(device: device))
         let engine = FakeEngine()
         let configuration = VASTPlayerConfiguration(placement: placement, device: device, playerSize: CGSize(width: 390, height: 219),
                                                     audioOnly: false, source: "bid 0.0 › VAST")
@@ -82,6 +84,21 @@ struct VASTPlayerIconTests {
         #expect(host.events.filter { $0 == .iconView(adIndex: 0, iconIndex: 0) }.count == 1)
         model.iconClicked(icon)
         #expect(host.events.last == .iconClick(adIndex: 0, iconIndex: 0))
+    }
+
+    /// The integration's "flaky" timeouts, pinned down: a player whose host is gone plays nothing (it holds the host
+    /// weakly, as every renderer model does). Tests keep their hosts alive (`KeepAlive`); this proves the bound.
+    @Test func aPlayerWithoutItsHostPlaysNothing() async {
+        let engine = FakeEngine()
+        let configuration = VASTPlayerConfiguration(placement: .interstitial, device: RendererFixtures.phone,
+                                                    playerSize: CGSize(width: 390, height: 219), audioOnly: false, source: "bid 0.0 › VAST")
+        var host: RecordingHost? = RecordingHost()
+        let model = VASTPlayerModel(vast: ResolvedVAST(ads: [RendererFixtures.linearAd(duration: 2)]), configuration: configuration,
+                                    host: host ?? RecordingHost(), engine: engine,
+                                    chooseMedia: { files, _, _, _ in files.first.map(VASTMediaSelector.Choice.play) ?? .unsupported(.noSupportedMedia) })
+        host = nil
+        model.start()
+        #expect(!(await Wait.until(timeout: .milliseconds(300)) { !engine.loaded.isEmpty }))
     }
 
     @Test func noIconsOnCTV() async {

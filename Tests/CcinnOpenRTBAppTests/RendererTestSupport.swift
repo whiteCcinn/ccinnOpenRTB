@@ -172,3 +172,16 @@ enum TestImages {
         return bitmap.representation(using: .png, properties: [:]) ?? Data()
     }
 }
+
+/// Keeps a test's hosts alive for the whole test. Renderer models hold their host weakly (in the app the session and the
+/// views own it): a test that drops the host it was handed — `let (model, _, engine) = make()` — would see the player
+/// stop before it loads anything, and a wait time out (the "flaky" first-run timeouts during integration were exactly this).
+@MainActor
+final class KeepAlive {
+    private var objects: [AnyObject] = []
+
+    func hold<Object: AnyObject>(_ object: Object) -> Object {
+        objects.append(object)
+        return object
+    }
+}

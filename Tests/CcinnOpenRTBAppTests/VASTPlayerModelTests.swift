@@ -9,6 +9,8 @@ import Testing
 @MainActor
 @Suite("VAST player model")
 struct VASTPlayerModelTests {
+    private let keepAlive = KeepAlive()
+
     private static let playEverything: VASTMediaChooser = { files, _, _, _ in
         files.first.map(VASTMediaSelector.Choice.play) ?? .unsupported(.noSupportedMedia)
     }
@@ -16,7 +18,7 @@ struct VASTPlayerModelTests {
     private func make(_ ads: [ResolvedVASTAd], device: DeviceProfile = RendererFixtures.phone, placement: Placement = .interstitial,
                       reportsRendered: Bool = true, choose: @escaping VASTMediaChooser = playEverything,
                       readyTimeout: Duration = .seconds(30)) -> (VASTPlayerModel, RecordingHost, FakeEngine) {
-        let host = RecordingHost(device: device)
+        let host = keepAlive.hold(RecordingHost(device: device))
         let engine = FakeEngine()
         var configuration = VASTPlayerConfiguration(placement: placement, device: device, playerSize: CGSize(width: 390, height: 219),
                                                     audioOnly: false, source: "bid 0.0 › VAST")
