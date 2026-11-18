@@ -289,6 +289,24 @@ struct CreativeWebViewTests {
         #expect(harness.entries().allSatisfy { $0.delivery == .renderer })
     }
 
+    /// A load a hook saw is one entry, even though resource timing reports the same load again after the element's `load`
+    /// event: one request on the wire, one row in the monitor (two loads of one URL are two rows).
+    @Test func anAllowedLoadIsRecordedOnce() async throws {
+        let server = try LoopbackServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let base = "http://127.0.0.1:\(port)"
+        let adm = #"<img src="\#(base)/once.gif"><img src="\#(base)/also.gif?n=1"><img src="\#(base)/also.gif?n=2">"#
+        let harness = await load(adm, blocks: false, mraid: false)
+        defer { harness.controller.teardown() }
+        let finished = await Wait.until { harness.entries().filter { $0.state == .completed(status: 200) }.count >= 3 }
+        #expect(finished, "\(harness.entries().map(\.dumpLine))")
+        // Resource timing is delivered after the load events.
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(harness.entries().filter { $0.url.hasSuffix("/once.gif") }.count == 1, "\(harness.entries().map(\.dumpLine))")
+        #expect(harness.entries().count == server.connectionCount, "\(harness.entries().map(\.dumpLine))")
+    }
+
     @Test func httpScriptsInTheHTTPSCreativeAreMixedContentEvenWhenAllowed() async throws {
         let server = try LoopbackServer()
         let port = try #require(await server.start())

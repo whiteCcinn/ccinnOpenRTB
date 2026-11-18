@@ -61,10 +61,25 @@ enum CreativeScripts {
                error: error ? String(error).slice(0, 500) : null });
       }
       function forget(rid) {
+        var forgotten = null;
         pendingByURL.forEach(function (list, url) {
           var index = list.indexOf(rid);
-          if (index >= 0) { list.splice(index, 1); if (!list.length) { pendingByURL.delete(url); } }
+          if (index >= 0) { list.splice(index, 1); forgotten = url; if (!list.length) { pendingByURL.delete(url); } }
         });
+        return forgotten;
+      }
+      // Loads an element hook ended (load / error event) before resource timing reported them: that later timing entry is
+      // the same request, not one the hooks missed.
+      var settledByURL = new Map();
+      function settle(rid) {
+        var url = forget(rid);
+        if (url) { settledByURL.set(url, (settledByURL.get(url) || 0) + 1); }
+      }
+      function consumeSettled(url) {
+        var count = settledByURL.get(url);
+        if (!count) { return false; }
+        if (count > 1) { settledByURL.set(url, count - 1); } else { settledByURL.delete(url); }
+        return true;
       }
 
       var nativeFetch = window.fetch;
@@ -130,7 +145,7 @@ enum CreativeScripts {
         var rid = elementRequest.get(element);
         if (!rid) { return; }
         elementRequest.delete(element);
-        forget(rid);
+        settle(rid);
         end(rid, ok ? 200 : 0, null, ok ? null : 'load error');
       }
       function noteElement(element, attribute) {
@@ -217,6 +232,7 @@ enum CreativeScripts {
                 end(rid, status || 200, bytes, null);
                 continue;
               }
+              if (consumeSettled(entry.name)) { continue; }
               if (!admit()) { continue; }
               post({ channel: 'net', phase: 'timing', url: entry.name.slice(0, 8192), kind: kind, status: status, bytes: bytes });
             }
