@@ -293,3 +293,49 @@ struct PhaseBadgeTests {
         #expect(PhaseBadge.title(for: .noBid(reason: 2), rendered: false) == "No bid (nbr 2)")
     }
 }
+
+/// Safety review: a click-through opened with the system's generic "open" goes to whichever app claims the URL (a
+/// universal link, an app that registered the advertiser's domain), not necessarily a browser. The landing page is a web
+/// page: it opens in the default web browser — the app that opens https URLs — resolved explicitly, or not at all.
+@MainActor
+@Suite("Click-throughs open in the default browser")
+struct WorkspaceBrowserTests {
+    private final class Opener {
+        var opened: [(url: URL, app: URL)] = []
+    }
+
+    @Test func theLandingPageOpensInTheResolvedBrowser() throws {
+        let opener = Opener()
+        let safari = URL(fileURLWithPath: "/Applications/Safari.app")
+        let browser = WorkspaceBrowser(defaultBrowser: { safari }, openWith: { opener.opened.append(($0, $1)) })
+        let landing = try #require(URL(string: "https://adv.example/landing?x=1"))
+        #expect(browser.open(landing))
+        #expect(opener.opened.map(\.url) == [landing])
+        #expect(opener.opened.map(\.app) == [safari])
+    }
+
+    @Test func withoutADefaultBrowserNothingIsOpened() throws {
+        let opener = Opener()
+        let browser = WorkspaceBrowser(defaultBrowser: { nil }, openWith: { opener.opened.append(($0, $1)) })
+        #expect(!browser.open(try #require(URL(string: "https://adv.example/"))))
+        #expect(opener.opened.isEmpty)
+    }
+
+    @Test func onlyWebURLsAreOpened() throws {
+        let opener = Opener()
+        let browser = WorkspaceBrowser(defaultBrowser: { URL(fileURLWithPath: "/Applications/Safari.app") },
+                                       openWith: { opener.opened.append(($0, $1)) })
+        for text in ["mailto:x@adv.example", "file:///etc/hosts", "itms-apps://apps.apple.com/app/id1", "javascript:alert(1)"] {
+            #expect(!browser.open(try #require(URL(string: text))), "\(text)")
+        }
+        #expect(opener.opened.isEmpty)
+    }
+
+    /// The simulator itself is never "the browser" (it would load the landing page inside the app).
+    @Test func theAppItselfIsNotABrowser() {
+        #expect(WorkspaceBrowser.browser(Bundle.main.bundleURL, isNot: Bundle.main.bundleURL) == nil)
+        let safari = URL(fileURLWithPath: "/Applications/Safari.app")
+        #expect(WorkspaceBrowser.browser(safari, isNot: Bundle.main.bundleURL) == safari)
+        #expect(WorkspaceBrowser.browser(nil, isNot: Bundle.main.bundleURL) == nil)
+    }
+}

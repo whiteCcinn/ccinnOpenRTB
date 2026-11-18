@@ -607,6 +607,21 @@ struct AdSessionTests {
         #expect(settingOff.monitor.liveEntries.last?.category == .navigation)
     }
 
+    /// Without a default web browser the click-through is recorded as not opened, and the lifecycle log says why.
+    @Test func noDefaultBrowserMeansTheClickThroughIsNotOpened() async throws {
+        let harness = SessionHarness(Fixtures.input([display]), opensClickThroughs: true)
+        harness.browser.hasBrowser = false
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        harness.session.fireManually(.click(assetID: nil))
+        let navigation = try #require(harness.monitor.liveEntries.first { $0.category == .navigation })
+        #expect(navigation.delivery == .simulated)
+        #expect(harness.session.lifecycleLog.contains { entry in
+            if case let .ignored(reason) = entry.outcome { reason.contains("no default web browser") } else { false }
+        })
+    }
+
     @Test func connectedTVNeverOpensClickThroughs() async throws {
         let harness = SessionHarness(Fixtures.input([video]), opensClickThroughs: true)
         harness.session.device = try #require(DeviceCatalog.device(id: "apple-tv-4k"))

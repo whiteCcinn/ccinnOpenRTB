@@ -712,8 +712,8 @@ final class AdSession: AdRenderingHost {
         var opened = false
         if NetworkPreferences.shouldOpenInBrowser(url, mode: monitor.mode, settingEnabled: opensClickThroughs(), device: device),
            let target = URLText.requestURL(url) {
-            browser.open(target)
-            opened = true
+            opened = browser.open(target)
+            if !opened { log(trigger, origin: source, outcome: .ignored("no default web browser: the click-through was not opened")) }
         }
         monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened)
     }

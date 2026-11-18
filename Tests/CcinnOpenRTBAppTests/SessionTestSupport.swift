@@ -166,7 +166,13 @@ final class CountingTransport: HTTPTransport {
 @MainActor
 final class RecordingBrowser: BrowserOpening {
     private(set) var opened: [URL] = []
-    func open(_ url: URL) { opened.append(url) }
+    /// `false`: no default web browser (nothing opens).
+    var hasBrowser = true
+    func open(_ url: URL) -> Bool {
+        guard hasBrowser else { return false }
+        opened.append(url)
+        return true
+    }
 }
 
 @MainActor
