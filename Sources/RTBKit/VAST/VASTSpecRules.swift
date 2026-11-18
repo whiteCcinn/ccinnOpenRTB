@@ -46,6 +46,7 @@ enum VASTSpecRules {
         "MediaFile@maxBitrate": .v3_0,
         "MediaFile@codec": .v3_0,
         "Companion/CompanionClickTracking": .v3_0,
+        "CompanionAds@required": .v3_0,
         "InLine/ViewableImpression": .v4_0,
         "Wrapper/ViewableImpression": .v4_0,
         "InLine/AdVerifications": .v4_0,

@@ -76,3 +76,28 @@ public extension VASTCompanion {
         text.allSatisfy(\.isWhitespace)
     }
 }
+
+// MARK: - CompanionAds@required
+
+public extension VASTCreative {
+    /// Whether this creative's `CompanionAds@required` (VAST 4.1 §3.13.1) can be met when the player can show exactly the
+    /// companions `canShow` accepts (a CTV player accepts none): `all` needs every companion, `any` at least one, `none`
+    /// nothing. A requirement over no companions requires nothing (the decoder reports it).
+    func isCompanionRequirementSatisfiable(canShow: (VASTCompanion) -> Bool) -> Bool {
+        guard !companions.isEmpty else { return true }
+        switch companionsRequired {
+        case .all: return companions.allSatisfy(canShow)
+        case .any: return companions.contains(where: canShow)
+        case .none: return true
+        }
+    }
+}
+
+public extension VASTInline {
+    /// The player's check before playing the ad: `.requiredCompanionUnavailable` (602, "Unable to display Required
+    /// Companion", VAST 4.1 §2.3.6.3) when a creative's `CompanionAds@required` cannot be met with the companions
+    /// `canShow` accepts — the ad must not play — else `nil`.
+    func companionRequirementError(canShow: (VASTCompanion) -> Bool) -> VASTErrorCode? {
+        creatives.allSatisfy { $0.isCompanionRequirementSatisfiable(canShow: canShow) } ? nil : .requiredCompanionUnavailable
+    }
+}

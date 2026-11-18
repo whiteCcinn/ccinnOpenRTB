@@ -284,11 +284,31 @@ struct VASTDecoder {
             report(.warning, "vast.creative.linear.multiple", "<Creative> has more than one <Linear>; the first one is used.", path + "/Linear")
         }
 
+        let companions = decodeCompanions(companionAds, at: path + "/CompanionAds", context: context)
         return VASTCreative(id: nonEmpty(element.attribute("id")), adID: nonEmpty(element.attribute("adId")), sequence: sequence,
                             linear: linearElement.map { decodeLinear($0, at: path + "/Linear", context: context) },
-                            companions: decodeCompanions(companionAds, at: path + "/CompanionAds", context: context),
-                            hasNonLinear: nonLinearAds != nil,
-                            universalAdIDs: decodeUniversalAdIDs(element.children(named: "UniversalAdId"), at: path + "/UniversalAdId"))
+                            companions: companions, hasNonLinear: nonLinearAds != nil,
+                            universalAdIDs: decodeUniversalAdIDs(element.children(named: "UniversalAdId"), at: path + "/UniversalAdId"),
+                            companionsRequired: decodeCompanionRequirement(companionAds, companionCount: companions.count,
+                                                                           at: path + "/CompanionAds"))
+    }
+
+    /// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1): `all`, `any` or `none`; absent or invalid is `none`, the
+    /// spec's default.
+    private mutating func decodeCompanionRequirement(_ element: VASTXMLElement?, companionCount: Int, at path: String) -> VASTCompanionRequirement {
+        guard let element, let raw = element.attribute("required") else { return .none }
+        checkIntroduced("CompanionAds@required", at: path + "@required")
+        guard let requirement = VASTCompanionRequirement(rawValue: raw.trimmingCharacters(in: .whitespaces).lowercased()) else {
+            report(.warning, "vast.companionAds.required.invalid",
+                   "required=\"\(raw)\" must be all, any or none; companions are treated as optional (none).", path + "@required")
+            return .none
+        }
+        if requirement != .none, companionCount == 0 {
+            report(.warning, "vast.companionAds.required.empty",
+                   "required=\"\(requirement.rawValue)\" names no <Companion>: there is nothing to display, so nothing is required.",
+                   path + "@required")
+        }
+        return requirement
     }
 
     /// VAST 4.1 §3.7.1: the content is the source of truth; VAST 4.0's `idValue` attribute (a duplicate of it, removed in
@@ -582,7 +602,7 @@ struct VASTDecoder {
                                                                            at: path + "/TrackingEvents"))
         if context == .inline, !resources.isEmpty, companion.displayResource == nil {
             report(.warning, "vast.companion.resource.unsupported",
-                   "None of the companion's resources can be shown: a StaticResource must be an image or a script (VAST error 604, no Companion resource with a supported type).",
+                   "None of the companion's resources can be shown: a StaticResource must be an image or a script (VAST error \(VASTErrorCode.companionResourceUnsupported.rawValue), no Companion resource with a supported type).",
                    path)
         }
         return companion

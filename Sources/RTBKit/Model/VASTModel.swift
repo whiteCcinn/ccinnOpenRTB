@@ -146,9 +146,11 @@ public struct VASTCreative: Sendable, Hashable {
     public var hasNonLinear: Bool
     /// VAST 4.0+ `UniversalAdId` elements (one in 4.0 / 4.1, several from 4.2), in document order.
     public var universalAdIDs: [VASTUniversalAdID]
+    /// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1); `.none`, the spec's default, when absent.
+    public var companionsRequired: VASTCompanionRequirement
 
     public init(id: String? = nil, adID: String? = nil, sequence: Int? = nil, linear: VASTLinear? = nil, companions: [VASTCompanion] = [],
-                hasNonLinear: Bool = false, universalAdIDs: [VASTUniversalAdID] = []) {
+                hasNonLinear: Bool = false, universalAdIDs: [VASTUniversalAdID] = [], companionsRequired: VASTCompanionRequirement = .none) {
         self.id = id
         self.adID = adID
         self.sequence = sequence
@@ -156,7 +158,21 @@ public struct VASTCreative: Sendable, Hashable {
         self.companions = companions
         self.hasNonLinear = hasNonLinear
         self.universalAdIDs = universalAdIDs
+        self.companionsRequired = companionsRequired
     }
+}
+
+/// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1): which of the creative's companions the player must display for
+/// the ad to play.
+public enum VASTCompanionRequirement: String, Sendable, Hashable, CaseIterable {
+    /// "the player must attempt to display the contents for all <Companion> elements provided; if all Companion creative
+    /// cannot be displayed, the player should not display the ad".
+    case all
+    /// "the player must attempt to display content from at least one of the <Companion> elements provided … if none of the
+    /// Companion creative can be displayed, the player should not display the ad".
+    case any
+    /// "the player may choose to not display any of the Companion creative" — the default when the attribute is absent.
+    case none
 }
 
 /// VAST 4.0+ `Creative/UniversalAdId` (VAST 4.1 / 4.2 §3.7.1): the creative's identifier in a registry such as Ad-ID.
@@ -306,15 +322,39 @@ public struct VASTDocument: Sendable, Hashable {
     }
 }
 
-/// VAST error codes used by the simulator.
+/// VAST error codes (VAST 4.1 §2.3.6.3, VAST 4.2 error table).
 public enum VASTErrorCode: Int, Sendable, Hashable, CaseIterable {
     case xmlParsing = 100, schemaValidation = 101, unsupportedVersion = 102
     case traffickingError = 200, unexpectedLinearity = 201, unexpectedDuration = 202, unexpectedSize = 203
+    /// 204 "Ad category was required but not provided."
+    case adCategoryRequired = 204
+    /// 205 "Inline Category violates Wrapper BlockedAdCategories (refer 3.19.2)."
+    case blockedAdCategory = 205
+    /// 206 "Ad Break shortened. Ad was not served."
+    case adBreakShortened = 206
     case wrapperError = 300, wrapperTimeout = 301, wrapperLimit = 302, noAdsAfterWrapper = 303, inlineResponseTimeout = 304
     case linearError = 400, fileNotFound = 401, mediaTimeout = 402, noSupportedMedia = 403, mediaDisplayProblem = 405
     case mezzanineRequired = 406, mezzanineDownloading = 407, conditionalAdRejected = 408
     case interactiveCreativeError = 409, codeResourceError = 410
-    case nonLinearError = 500, companionError = 600, undefinedError = 900, vpaidError = 901
+    case nonLinearError = 500
+    /// 501 "Unable to display NonLinearAd because creative dimensions do not align with creative display area (i.e.
+    /// creative dimension too large)."
+    case nonLinearDimensions = 501
+    /// 502 "Unable to fetch NonLinearAds/NonLinear resource."
+    case nonLinearResourceUnavailable = 502
+    /// 503 "Couldn't find NonLinear resource with supported type."
+    case nonLinearResourceUnsupported = 503
+    case companionError = 600
+    /// 601 "Unable to display Companion because creative dimensions do not fit within Companion display area (i.e., no
+    /// available space)."
+    case companionDimensions = 601
+    /// 602 "Unable to display Required Companion."
+    case requiredCompanionUnavailable = 602
+    /// 603 "Unable to fetch CompanionAds/Companion resource."
+    case companionResourceUnavailable = 603
+    /// 604 "Couldn't find Companion resource with supported type."
+    case companionResourceUnsupported = 604
+    case undefinedError = 900, vpaidError = 901
 }
 
 /// Where an ad came from: `hop` indexes `ResolvedVAST.chain`, `ad` indexes that hop's `document.ads`.
