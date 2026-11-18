@@ -130,7 +130,7 @@ struct BridgeMessageTests {
         #expect(BridgeMessage.decode(["channel": "state", "state": "expanded", "customClose": true]) == .mraidState("expanded", customClose: true, size: nil))
         #expect(BridgeMessage.decode(["channel": "state", "state": "resized", "width": 300, "height": 250])
             == .mraidState("resized", customClose: false, size: MRAIDSize(width: 300, height: 250)))
-        #expect(BridgeMessage.decode(["channel": "gesture"]) == .gesture)
+        #expect(BridgeMessage.decode(["channel": "gesture"]) == nil, "gestures are seen natively: the page cannot report one")
         #expect(BridgeMessage.decode(["channel": "console", "level": "error", "message": "boom"]) == .console(level: "error", message: "boom"))
     }
 

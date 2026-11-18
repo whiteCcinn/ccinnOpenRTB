@@ -25,9 +25,9 @@ enum CreativeNetworkMessage: Equatable, Sendable {
     case overflow
 }
 
-/// One message posted by the injected scripts (`window.webkit.messageHandlers.ccinn`, and `ccinnGesture` from the
-/// isolated world). Decoding is defensive: the page is untrusted, so anything malformed is dropped, strings are
-/// length-capped and numbers bounded.
+/// One message posted by the injected scripts (`window.webkit.messageHandlers.ccinn`). Decoding is defensive: the page
+/// is untrusted, so anything malformed is dropped, strings are length-capped and numbers bounded. The controller accepts
+/// only messages carrying its per-load secret (`nonceKey`); user gestures are seen natively, never reported by the page.
 enum BridgeMessage: Equatable, Sendable {
     /// An MRAID call: the command to act on and a readable description of the call for the log.
     case mraid(MRAIDCommand, description: String)
@@ -40,14 +40,12 @@ enum BridgeMessage: Equatable, Sendable {
     case network(CreativeNetworkMessage)
     /// `window.open(url)` (overridden: never opens a window).
     case windowOpen(url: String)
-    /// A trusted user gesture (pointer or key) inside the creative; a navigation shortly after it is a click.
-    case gesture
     /// `console.*` / `window.onerror` output of the creative.
     case console(level: String, message: String)
 
     static let handlerName = "ccinn"
-    /// Registered in the isolated content world only, so the page cannot fake a user gesture.
-    static let gestureHandlerName = "ccinnGesture"
+    /// The key of the per-load secret every message of the injected scripts carries (see `CreativeWebController`).
+    static let nonceKey = "n"
     static let maxStringLength = 16 * 1024
 
     static func decode(_ body: Any) -> BridgeMessage? {
@@ -69,8 +67,6 @@ enum BridgeMessage: Equatable, Sendable {
         case "open":
             guard let url = string(object["url"]), !url.isEmpty else { return nil }
             return .windowOpen(url: url)
-        case "gesture":
-            return .gesture
         case "console":
             let level = string(object["level"]).flatMap { consoleLevels.contains($0) ? $0 : nil } ?? "log"
             return .console(level: level, message: string(object["message"]) ?? "")

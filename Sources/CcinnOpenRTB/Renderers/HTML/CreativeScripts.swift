@@ -8,11 +8,23 @@ import Foundation
 ///   The originals are captured before the creative runs.
 /// - `mraid` (page world, main frame): the MRAID 3.0 container. Every call is posted for the log (getters throttled to
 ///   one line per second per name); state changes and commands are posted for the container to act on.
-/// - `gesture` (isolated world): trusted pointer / key events, so the page cannot fake a user gesture.
+/// Every message carries the load's secret (`noncePlaceholder`); user gestures are seen natively by the controller.
 enum CreativeScripts {
-    static let isolatedWorldName = "ccinn-isolated"
 
-    static let instrumentation = #"""
+    /// The per-load secret placeholder: every script posts it with each message so the controller can tell its own
+    /// messages from the page's (the page cannot read a closure's variables).
+    static let noncePlaceholder = "__CCINN_NONCE__"
+
+    /// The scripts' source with this load's secret in place.
+    static func instrumentation(nonce: String) -> String {
+        instrumentationTemplate.replacingOccurrences(of: noncePlaceholder, with: JSLiteral.string(nonce))
+    }
+
+    static func blockWebRTC(nonce: String) -> String {
+        blockWebRTCTemplate.replacingOccurrences(of: noncePlaceholder, with: JSLiteral.string(nonce))
+    }
+
+    private static let instrumentationTemplate = #"""
     (function () {
       'use strict';
       if (window.__ccinnInstrumented) { return; }
@@ -21,7 +33,10 @@ enum CreativeScripts {
       if (!handler) { return; }
       var postMessage = handler.postMessage.bind(handler);
       var stringify = JSON.stringify;
-      function post(message) { try { postMessage(message); } catch (e) {} }
+      var defineSecret = Object.defineProperty;
+      var NONCE = __CCINN_NONCE__;
+      // Defined, not assigned: a setter the page puts on Object.prototype never sees the secret.
+      function post(message) { try { defineSecret(message, 'n', { value: NONCE, enumerable: true }); postMessage(message); } catch (e) {} }
 
       var MAX_REPORTS = 500;
       var MAX_CONSOLE = 200;
@@ -273,32 +288,16 @@ enum CreativeScripts {
     })();
     """#
 
-    static let gesture = #"""
-    (function () {
-      var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ccinnGesture;
-      if (!handler) { return; }
-      var last = 0;
-      function gesture(event) {
-        if (!event.isTrusted) { return; }
-        var now = Date.now();
-        if (now - last < 200) { return; }
-        last = now;
-        try { handler.postMessage({ channel: 'gesture' }); } catch (e) {}
-      }
-      ['pointerdown', 'mousedown', 'touchstart', 'keydown'].forEach(function (type) {
-        window.addEventListener(type, gesture, { capture: true, passive: true });
-      });
-    })();
-    """#
-
     /// Simulated-mode sandbox only (every frame): content rules cannot stop WebRTC (ICE / STUN is not HTTP), so the
     /// constructors throw, and the attempt is recorded as a blocked request. Best effort: a script that grabs a constructor
     /// from a frame WebKit injects no script into could still reach it.
-    static let blockWebRTC = #"""
+    private static let blockWebRTCTemplate = #"""
     (function () {
       'use strict';
       var handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ccinn;
       var postMessage = handler ? handler.postMessage.bind(handler) : null;
+      var defineSecret = Object.defineProperty;
+      var NONCE = __CCINN_NONCE__;
       var counter = 0;
       var frame = 'rtc' + Math.random().toString(36).slice(2, 8);
       function record(configuration) {
@@ -309,7 +308,11 @@ enum CreativeScripts {
           var first = servers && servers[0] && servers[0].urls;
           if (first) { url = String(Array.isArray(first) ? first[0] : first).slice(0, 2000); }
         } catch (e) {}
-        try { postMessage({ channel: 'net', phase: 'start', rid: frame + ':' + (++counter), url: url, kind: 'webrtc' }); } catch (e) {}
+        try {
+          var message = { channel: 'net', phase: 'start', rid: frame + ':' + (++counter), url: url, kind: 'webrtc' };
+          defineSecret(message, 'n', { value: NONCE, enumerable: true });
+          postMessage(message);
+        } catch (e) {}
       }
       ['RTCPeerConnection', 'webkitRTCPeerConnection'].forEach(function (name) {
         if (!(name in window)) { return; }
@@ -332,11 +335,12 @@ enum CreativeScripts {
 
     /// The MRAID 3.0 container for one load. `controller` is the (per-load, unguessable) global name of the object the
     /// container drives: `ready()`, `update({exposure})`, `containerClose()`.
-    static func mraid(environment: MRAIDEnvironment, controller: String) -> String {
-        // The controller placeholder goes first: the environment carries bid data (the bundle), which must never be
-        // scanned for placeholders after it is inserted.
+    static func mraid(environment: MRAIDEnvironment, controller: String, nonce: String) -> String {
+        // The controller and secret placeholders go first: the environment carries bid data (the bundle), which must never
+        // be scanned for placeholders after it is inserted.
         mraidTemplate
             .replacingOccurrences(of: "__CCINN_CONTROLLER__", with: JSLiteral.string(controller))
+            .replacingOccurrences(of: noncePlaceholder, with: JSLiteral.string(nonce))
             .replacingOccurrences(of: "__CCINN_ENV__", with: JSLiteral.json(environment))
     }
 
@@ -349,7 +353,9 @@ enum CreativeScripts {
       var schedule = window.setTimeout.bind(window);
       var parse = JSON.parse;
       var stringify = JSON.stringify;
-      function post(message) { try { postMessage(message); } catch (e) {} }
+      var defineSecret = Object.defineProperty;
+      var NONCE = __CCINN_NONCE__;
+      function post(message) { try { defineSecret(message, 'n', { value: NONCE, enumerable: true }); postMessage(message); } catch (e) {} }
 
       var env = __CCINN_ENV__;
       var VERSION = '3.0';

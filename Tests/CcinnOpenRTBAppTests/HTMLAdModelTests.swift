@@ -60,6 +60,7 @@ struct HTMLAdModelTests {
     @Test func mraidOpenIsAClickThenANavigation() async throws {
         let (model, host, _) = await load("<p>ad</p>")
         defer { model.teardown() }
+        model.controller.noteUserGesture()
         _ = try await evaluate(model, "mraid.open('https://adv.example/landing')")
         let clicked = await Wait.until { host.navigations.count == 1 }
         #expect(clicked)
@@ -70,6 +71,7 @@ struct HTMLAdModelTests {
     @Test func ctvRecordsNoClick() async throws {
         let (model, host, _) = await load("<p>ad</p>", device: RendererFixtures.tv, placement: .ctvInstream)
         defer { model.teardown() }
+        model.controller.noteUserGesture()
         _ = try await evaluate(model, "mraid.open('https://adv.example/landing')")
         let logged = await Wait.until { host.logs.contains { $0.message.contains("click-through is disabled") } }
         #expect(logged)

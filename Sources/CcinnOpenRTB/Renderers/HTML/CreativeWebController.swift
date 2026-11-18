@@ -65,7 +65,13 @@ final class CreativeWebController: NSObject {
     private let messageProxy = ScriptMessageProxy()
     private var content: Content?
     private var ledger = CreativeRequestLedger()
+    /// The last real click or key press in this web view (seen natively, never reported by the page).
     private var lastGesture: Date?
+    private var gestureMonitor: Any?
+    /// This load's secret: every message of the injected scripts carries it; anything else was posted by the page.
+    private var bridgeNonce = ""
+    private var messageBudget = CreativeWebController.messageCapacity
+    private var forgedReported = false
     private var awaitingInitialLoad = false
     private var initialNavigation: WKNavigation?
     private var controllerName = ""
@@ -76,6 +82,8 @@ final class CreativeWebController: NSObject {
     private var logBudget = CreativeWebController.logCapacity
 
     static let logCapacity = 2_000
+    /// Bridge messages accepted per load (the scripts cap their own reports well below this).
+    static let messageCapacity = 20_000
 
     init(host: any AdRenderingHost) {
         self.host = host
@@ -102,8 +110,33 @@ final class CreativeWebController: NSObject {
         Self.makeTransparent(webView)
         let controller = configuration.userContentController
         controller.add(messageProxy, contentWorld: .page, name: BridgeMessage.handlerName)
-        controller.add(messageProxy, contentWorld: .world(name: CreativeScripts.isolatedWorldName), name: BridgeMessage.gestureHandlerName)
+        installGestureMonitor()
     }
+
+    /// A real click or key press in this web view, seen in the app's event stream (the page cannot synthesise one). A
+    /// click-through, `mraid.open` or `mraid.playVideo` needs one within `NavigationClassifier.gestureWindow`.
+    private func installGestureMonitor() {
+        gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+            MainActor.assumeIsolated { self?.observe(event) }
+            return event
+        }
+    }
+
+    private func observe(_ event: NSEvent) {
+        guard !tornDown, let window = webView.window, event.window === window else { return }
+        if event.type == .keyDown {
+            if let responder = window.firstResponder as? NSView, responder === webView || responder.isDescendant(of: webView) { noteUserGesture() }
+        } else if webView.bounds.contains(webView.convert(event.locationInWindow, from: nil)) {
+            noteUserGesture()
+        }
+    }
+
+    /// Records a user gesture now (the native event monitor; tests stand in for a real click).
+    func noteUserGesture(at date: Date = Date()) {
+        lastGesture = date
+    }
+
+    private var hasRecentGesture: Bool { NavigationClassifier.hasRecentGesture(lastGesture, now: Date()) }
 
     private let parentProvider: ParentProvider
 
@@ -121,6 +154,9 @@ final class CreativeWebController: NSObject {
         logBudget = Self.logCapacity
         parentProvider.parentID = content.networkParentID
         lastGesture = nil
+        bridgeNonce = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        messageBudget = Self.messageCapacity
+        forgedReported = false
         awaitingInitialLoad = false
         initialNavigation = nil
         webView.stopLoading()
@@ -128,19 +164,17 @@ final class CreativeWebController: NSObject {
         let userContent = webView.configuration.userContentController
         userContent.removeAllUserScripts()
         userContent.removeAllContentRuleLists()
-        userContent.addUserScript(WKUserScript(source: CreativeScripts.instrumentation, injectionTime: .atDocumentStart, forMainFrameOnly: false,
-                                               in: .page))
-        userContent.addUserScript(WKUserScript(source: CreativeScripts.gesture, injectionTime: .atDocumentStart, forMainFrameOnly: false,
-                                               in: .world(name: CreativeScripts.isolatedWorldName)))
+        userContent.addUserScript(WKUserScript(source: CreativeScripts.instrumentation(nonce: bridgeNonce), injectionTime: .atDocumentStart,
+                                               forMainFrameOnly: false, in: .page))
         if let environment = content.mraid {
             controllerName = "__ccinnMRAID_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-            userContent.addUserScript(WKUserScript(source: CreativeScripts.mraid(environment: environment, controller: controllerName),
+            userContent.addUserScript(WKUserScript(source: CreativeScripts.mraid(environment: environment, controller: controllerName, nonce: bridgeNonce),
                                                    injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
         } else {
             controllerName = ""
         }
         if content.blocksNetwork {
-            userContent.addUserScript(WKUserScript(source: CreativeScripts.blockWebRTC, injectionTime: .atDocumentStart, forMainFrameOnly: false,
+            userContent.addUserScript(WKUserScript(source: CreativeScripts.blockWebRTC(nonce: bridgeNonce), injectionTime: .atDocumentStart, forMainFrameOnly: false,
                                                    in: .page))
         }
         if content.disableScroll {
@@ -194,6 +228,8 @@ final class CreativeWebController: NSObject {
         userContent.removeAllUserScripts()
         userContent.removeAllContentRuleLists()
         messageProxy.target = nil
+        if let gestureMonitor { NSEvent.removeMonitor(gestureMonitor) }
+        gestureMonitor = nil
     }
 
     /// Runs `body` with the MRAID controller bound to `controller` (the page world); errors are ignored.
@@ -206,22 +242,28 @@ final class CreativeWebController: NSObject {
     // MARK: Bridge
 
     fileprivate func receive(_ message: WKScriptMessage) {
-        guard !tornDown, let bridge = BridgeMessage.decode(message.body) else { return }
-        let fromGestureWorld = message.name == BridgeMessage.gestureHandlerName
-        if fromGestureWorld {
-            if bridge == .gesture { lastGesture = Date() }
+        guard !tornDown else { return }
+        // Only the injected scripts know this load's secret: a message without it was posted by the page (safety review).
+        guard let body = message.body as? [String: Any], !bridgeNonce.isEmpty, body[BridgeMessage.nonceKey] as? String == bridgeNonce else {
+            reportForgedMessage()
             return
         }
+        guard messageBudget > 0 else { return }
+        messageBudget -= 1
+        if messageBudget == 0 { log(.html, .warning, "The creative posted more than \(Self.messageCapacity) bridge messages; further ones are ignored") }
+        guard let bridge = BridgeMessage.decode(body) else { return }
         let isMainFrame = message.frameInfo.isMainFrame
         switch bridge {
-        case .gesture:
-            // Only the isolated world reports gestures; the page cannot fake one.
-            break
         case let .mraid(command, description):
             guard isMainFrame else { return }
             log(.mraid, .info, description)
             switch command {
-            case let .open(url): onEvent?(.mraidOpen(url: url))
+            case let .open(url):
+                guard hasRecentGesture else { return blockWithoutGesture(url, trigger: "mraid.open") }
+                onEvent?(.mraidOpen(url: url))
+            case let .playVideo(url):
+                guard hasRecentGesture else { return blockWithoutGesture(url, trigger: "mraid.playVideo") }
+                onEvent?(.mraidCommand(command))
             case .other: break
             default: onEvent?(.mraidCommand(command))
             }
@@ -286,6 +328,20 @@ final class CreativeWebController: NSObject {
     private func finishOpenRequests(_ reason: String) {
         guard let monitor = host?.monitor else { return }
         for id in ledger.drainOpen() { monitor.finishRendererLoad(id, error: reason) }
+    }
+
+    private func reportForgedMessage() {
+        guard !forgedReported else { return }
+        forgedReported = true
+        log(.html, .warning, "A message to the ad container did not come from its scripts (forged by the page): dropped")
+    }
+
+    /// `mraid.open` / `mraid.playVideo` without a user gesture: an auto-redirect, recorded and not followed (MRAID 3.0
+    /// §5: these respond to a user interaction), as for `window.open`.
+    private func blockWithoutGesture(_ url: String, trigger: String) {
+        log(.mraid, .warning, "\(trigger) without a user gesture blocked: \(url)")
+        host?.monitor.recordNavigation(url: url, trigger: "auto-redirect blocked (\(trigger), no user gesture)", source: content?.source ?? "creative",
+                                       parentID: content?.networkParentID)
     }
 
     /// A navigation the creative attempted (main frame, new window, `window.open`).

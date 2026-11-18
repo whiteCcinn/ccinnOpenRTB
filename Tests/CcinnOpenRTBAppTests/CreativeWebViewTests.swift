@@ -159,11 +159,57 @@ struct CreativeWebViewTests {
     @Test func openIsAClickAndTheCreativeStaysInPlace() async throws {
         let harness = await load(Self.recorder)
         defer { harness.controller.teardown() }
+        harness.controller.noteUserGesture()
         _ = try await harness.evaluate("mraid.open('https://adv.example/landing?a=1&b=2')")
         let opened = await Wait.until { harness.events.events.contains(.mraidOpen(url: "https://adv.example/landing?a=1&b=2")) }
         #expect(opened)
         #expect(harness.controller.webView.url == CreativeWebController.baseURL)
         #expect(harness.host.logs.contains { $0.message == #"mraid.open("https://adv.example/landing?a=1&b=2")"# })
+    }
+
+    /// Safety review: `mraid.open()` without a user gesture is an auto-redirect (MRAID 3.0 §5: open is a response to a
+    /// user interaction), exactly as `window.open` is — the gesture is a real click in the slot, seen natively, not
+    /// anything the page can post.
+    @Test func openWithoutAUserGestureIsBlocked() async throws {
+        let harness = await load(Self.recorder)
+        defer { harness.controller.teardown() }
+        _ = try await harness.evaluate("mraid.open('https://adv.example/landing'); mraid.playVideo('https://adv.example/video.mp4')")
+        let recorded = await Wait.until { harness.entries(.navigation).count == 2 }
+        #expect(recorded, "\(harness.entries(.navigation).map(\.trigger))")
+        #expect(harness.entries(.navigation).allSatisfy { $0.trigger.hasPrefix("auto-redirect blocked") })
+        #expect(!harness.events.events.contains { if case .mraidOpen = $0 { true } else { false } })
+        #expect(!harness.events.events.contains(.mraidCommand(.playVideo(url: "https://adv.example/video.mp4"))))
+    }
+
+    @Test func playVideoAfterAUserGestureReachesTheContainer() async throws {
+        let harness = await load(Self.recorder)
+        defer { harness.controller.teardown() }
+        harness.controller.noteUserGesture()
+        _ = try await harness.evaluate("mraid.playVideo('https://adv.example/video.mp4')")
+        let played = await Wait.until { harness.events.events.contains(.mraidCommand(.playVideo(url: "https://adv.example/video.mp4"))) }
+        #expect(played)
+    }
+
+    /// Safety review: the page can call the message handler directly. Every bridge message carries the per-load secret of
+    /// the injected scripts; a forged one (here a playVideo and a network report) is dropped with a warning.
+    @Test func forgedBridgeMessagesAreDropped() async throws {
+        let harness = await load(Self.recorder)
+        defer { harness.controller.teardown() }
+        harness.controller.noteUserGesture()
+        _ = try await harness.evaluate("""
+        var h = window.webkit.messageHandlers.ccinn;
+        h.postMessage({ channel: 'mraid', name: 'playVideo', description: 'forged', args: { url: 'https://evil.example/v.mp4' } });
+        h.postMessage({ channel: 'mraid', name: 'open', description: 'forged', args: { url: 'https://evil.example/' } });
+        h.postMessage({ channel: 'net', phase: 'start', rid: 'x:1', url: 'https://forged.example/p.gif', kind: 'img' });
+        h.postMessage({ channel: 'mraid', name: 'open', description: 'forged', args: { url: 'https://evil.example/' }, n: 'guess' });
+        """)
+        let warned = await Wait.until { harness.host.logs.contains { $0.level == .warning && $0.message.contains("forged") } }
+        #expect(warned, "\(harness.host.logs.map(\.message))")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!harness.events.events.contains { if case .mraidOpen = $0 { true } else { false } })
+        #expect(!harness.events.events.contains { if case .mraidCommand(.playVideo) = $0 { true } else { false } })
+        #expect(!harness.entries().contains { $0.url.hasPrefix("https://forged.example") })
+        #expect(harness.host.logs.filter { $0.message.contains("forged") }.count == 1, "warned once per load, not per message")
     }
 
     @Test func exposureFollowsTheVisibleFraction() async throws {
@@ -263,16 +309,25 @@ struct CreativeWebViewTests {
         #expect(recorded)
     }
 
+    /// A page flooding the handler directly is forging messages: one warning, nothing else reaches the log. Flooding the
+    /// console through the scripts is capped by them.
     @Test func aPageFloodingTheHandlerIsCapped() async throws {
         let harness = await load("<p>flood</p>", blocks: true, mraid: false)
         defer { harness.controller.teardown() }
         _ = try await harness.evaluate("""
         for (var i = 0; i < 5000; i++) { window.webkit.messageHandlers.ccinn.postMessage({channel: 'console', level: 'log', message: 'x' + i}); }
         """)
-        let capped = await Wait.until { harness.host.logs.last?.message.contains("log limit reached") == true }
+        let warned = await Wait.until { harness.host.logs.contains { $0.message.contains("forged") } }
+        #expect(warned)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(harness.host.logs.filter { $0.message.contains("forged") }.count == 1)
+        #expect(!harness.host.logs.contains { $0.message.contains("x1") })
+
+        _ = try await harness.evaluate("for (var i = 0; i < 5000; i++) { console.log('y' + i); }")
+        let capped = await Wait.until { harness.host.logs.contains { $0.message.contains("further console output is not recorded") } }
         #expect(capped)
         try await Task.sleep(for: .milliseconds(200))
-        #expect(harness.host.logs.count == CreativeWebController.logCapacity)
+        #expect(harness.host.logs.filter { $0.message.contains("console.log: y") }.count <= 200)
     }
 
     @Test func allowingTheCreativeNetworkLoadsAndFinishesTheEntries() async throws {
