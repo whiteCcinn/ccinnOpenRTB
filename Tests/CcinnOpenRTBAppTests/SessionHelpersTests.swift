@@ -1,3 +1,4 @@
+import CcinnOpenRTBKit
 import CoreGraphics
 import Foundation
 import RTBKit
@@ -127,6 +128,33 @@ struct TrackerHostsTests {
             == ["https://a.example/x.js", "https://b.example/p"])
         #expect(TrackerHosts.scriptSources("https://c.example/tag.js") == ["https://c.example/tag.js"])
         #expect(TrackerHosts.scriptSources("<script>var src = 1;</script><script src=\"unterminated") == [])
+    }
+}
+
+/// Safety review: Real mode is not the only one that reaches servers — the ad's content (VAST, images, media) loads in
+/// Simulated mode too. The confirmation and the Inspector list the content hosts the render contacted.
+@Suite("Content hosts")
+struct ContentHostsTests {
+    private func entry(_ url: String, _ category: TrackerCategory, trigger: String, delivery: NetworkDelivery, sequence: Int) -> NetworkEntry {
+        var entry = NetworkEntry(sequence: sequence, category: category, trigger: trigger, source: "bid 0.0", template: url, url: url, state: .completed(status: 200))
+        entry.delivery = delivery
+        return entry
+    }
+
+    @Test func onlyContentThatWentOutCounts() {
+        let entries = [
+            entry("https://ads.example/tag.xml", .content, trigger: "VAST tag", delivery: .network, sequence: 1),
+            entry("https://cdn.example/v.mp4", .content, trigger: "media file", delivery: .network, sequence: 2),
+            entry("https://cdn.example/v.mp4", .content, trigger: "media file", delivery: .network, sequence: 3),
+            entry("https://t.example/imp", .impression, trigger: "impression", delivery: .simulated, sequence: 4),
+            entry("ccinn-sample://media/sample-15s.mp4", .content, trigger: "media file", delivery: .local, sequence: 5),
+            entry("https://off.example/i.png", .content, trigger: "image", delivery: .offline, sequence: 6),
+        ]
+        let hosts = TrackerHosts.contentHosts(entries)
+        #expect(hosts.map(\.name) == ["ads.example", "cdn.example"])
+        #expect(hosts.first { $0.name == "cdn.example" }?.count == 2)
+        #expect(hosts.first { $0.name == "cdn.example" }?.kinds == ["media file"])
+        #expect(hosts.first { $0.name == "ads.example" }?.kinds == ["VAST tag"])
     }
 }
 

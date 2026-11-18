@@ -85,6 +85,12 @@ enum TrackerHosts {
         if case .html = markup { true } else { false }
     }
 
+    /// The hosts content requests actually went to (sent on the network, any status): the VAST tag and wrappers, images,
+    /// media, markup by reference, grouped by host with their triggers. Sorted by name.
+    static func contentHosts(_ entries: [NetworkEntry]) -> [Host] {
+        hosts(of: entries.lazy.filter { $0.category == .content && $0.delivery == .network }.map { Template(kind: $0.trigger, url: $0.url) })
+    }
+
     /// Groups templates by host; hosts sorted by name. Templates without a host (relative, `data:`) are skipped.
     static func hosts(of templates: [Template]) -> [Host] {
         var byName: [String: Host] = [:]

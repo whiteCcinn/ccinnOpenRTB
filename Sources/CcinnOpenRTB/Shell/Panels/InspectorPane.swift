@@ -17,6 +17,13 @@ struct InspectorPane: View {
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
                 .frame(minHeight: 160, maxHeight: .infinity)
+                let contentHosts = session.contactedContentHosts
+                if !contentHosts.isEmpty {
+                    ScrollView {
+                        ContentHostsSection(hosts: contentHosts).padding(10)
+                    }
+                    .frame(minHeight: 60, idealHeight: 110, maxHeight: 220)
+                }
                 if !session.issues.isEmpty {
                     IssuesList(issues: session.issues)
                         .frame(minHeight: 80, idealHeight: 180, maxHeight: 360)

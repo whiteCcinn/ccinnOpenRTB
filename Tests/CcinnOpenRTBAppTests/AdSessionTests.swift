@@ -599,6 +599,19 @@ struct AdSessionTests {
         #expect(harness.transport.requests.allSatisfy { $0.headers["User-Agent"] == tablet.userAgent })
     }
 
+    /// The content hosts the current render contacted (Simulated mode loads content too); a new render starts afresh.
+    @Test func theRenderListsTheContentHostsItContacted() async throws {
+        let candidate = Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")
+        let harness = SessionHarness(Fixtures.input([candidate]))
+        harness.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await harness.paste()
+        await harness.renderAndWait()
+        #expect(harness.session.contactedContentHosts.map(\.name) == ["cdn.example"])
+        harness.session.choose(.offline)
+        await harness.renderAndWait()
+        #expect(harness.session.contactedContentHosts.isEmpty, "Offline contacts nothing")
+    }
+
     // MARK: Offline
 
     /// Safety review: Offline is the third mode — Simulated tracking with no content loaded from the network either.

@@ -125,7 +125,8 @@ struct RealModeSheetHost: View {
 
     var body: some View {
         if let confirmation = session.realModeConfirmation {
-            RealModeSheet(confirmation: confirmation, onConfirm: { session.confirmRealMode(confirmation) }, onCancel: { session.cancelRealMode() })
+            RealModeSheet(confirmation: confirmation, contentHosts: session.contactedContentHosts, onConfirm: { session.confirmRealMode(confirmation) },
+                          onCancel: { session.cancelRealMode() })
         }
     }
 }
@@ -133,6 +134,8 @@ struct RealModeSheetHost: View {
 /// The confirmation before Real mode: the tracker hosts of the selected bid. Return does not confirm.
 struct RealModeSheet: View {
     let confirmation: RealModeConfirmation
+    /// The content hosts the current render already contacted (they see the device's requests in Simulated mode too).
+    var contentHosts: [TrackerHosts.Host] = []
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
@@ -189,6 +192,9 @@ struct RealModeSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if !contentHosts.isEmpty {
+                ContentHostsSection(hosts: contentHosts)
+            }
             HStack {
                 Spacer()
                 Button("Stay Simulated", role: .cancel, action: onCancel)
@@ -202,5 +208,28 @@ struct RealModeSheet: View {
         }
         .padding(22)
         .frame(width: 560)
+    }
+}
+
+/// The content hosts the render contacted: the ad's VAST, images and media load from them in Simulated mode too (the ad
+/// server sees those requests); only Offline loads nothing.
+struct ContentHostsSection: View {
+    let hosts: [TrackerHosts.Host]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Content hosts this render contacted").font(.subheadline.weight(.semibold))
+            Text("The ad's content loads from these in Simulated mode too; choose Offline to load nothing.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(hosts) { host in
+                HStack {
+                    Text(host.name).font(Theme.monospaced)
+                    Spacer()
+                    Text(host.kinds.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text("\(host.count)").font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 20, alignment: .trailing)
+                }
+            }
+        }
     }
 }

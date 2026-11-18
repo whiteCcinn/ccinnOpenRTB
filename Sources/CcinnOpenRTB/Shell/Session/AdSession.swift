@@ -86,6 +86,8 @@ final class AdSession: AdRenderingHost {
     /// Which replay of its auction the current play is (0: the first play, or nothing played); see `AuctionReplays`.
     private(set) var replay = 0
     @ObservationIgnored private var replays = AuctionReplays()
+    /// The monitor's last sequence number when the current render started: later entries are this render's.
+    @ObservationIgnored private var renderStartSequence = 0
     /// The auction of the current play (its `AuctionReplays` key).
     @ObservationIgnored private var playedAuction: String?
     /// Issues found while rendering (VAST resolution), appended to the input's issues.
@@ -440,6 +442,7 @@ final class AdSession: AdRenderingHost {
         // monitor prepared for it (media routes, data: media files) is released before the next render prepares its own.
         monitor.cancelInFlightTrackers(reason: Self.playEndedCancellation)
         monitor.endRender()
+        renderStartSequence = monitor.liveEntries.last?.sequence ?? 0
         generation &+= 1
         prepared = nil
         renderIssues = []
@@ -990,6 +993,12 @@ final class AdSession: AdRenderingHost {
 
     func cancelRealMode() {
         realModeConfirmation = nil
+    }
+
+    /// The content hosts the current render contacted (the VAST tag and wrappers, images, media, markup by reference):
+    /// they see the device's requests in Simulated mode too.
+    var contactedContentHosts: [TrackerHosts.Host] {
+        TrackerHosts.contentHosts(monitor.liveEntries.filter { $0.sequence > renderStartSequence })
     }
 
     /// The toolbar's mode: Offline, Simulated or Real.
