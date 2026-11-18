@@ -3,8 +3,10 @@ import RTBKit
 
 /// `RenderRequest.adSize`: the ad's area in points inside the device screen (pure).
 ///
-/// - Interstitial, rewarded and CTV instream cover the screen in use (both screens and the hinge when a dual-screen
-///   device spans); renderers keep their own chrome inside `device.safeArea`.
+/// - Interstitial, rewarded and CTV instream fill the safe-area rect of the screen in use (both screens and the hinge
+///   when a dual-screen device spans; the whole 1920×1080 on CTV): the slot the simulator draws, the size it reports and
+///   the placeholder are that one rect, and the container's top-right close control lands inside the safe area. The
+///   rest of the screen is the full-screen ad's black backdrop.
 /// - Inline banners use the bid size (`w`×`h`), scaled down proportionally — never up — when it is wider (or taller)
 ///   than the safe area of the screen.
 /// - In-feed ads sit in the feed column (screen width minus the feed padding, capped on wide screens). Native ads take the
@@ -22,7 +24,7 @@ enum AdSizing {
 
     static func adSize(bidSize: AdSize?, format: AdFormat, placement: Placement, layout: ScreenLayout) -> CGSize {
         let content = layout.contentFrame.size
-        if placement.isFullScreen { return content }
+        if placement.isFullScreen { return fullScreenSlot(in: layout).size }
 
         let insets = layout.safeArea
         var availableWidth = content.width - CGFloat(insets.leading + insets.trailing)
@@ -53,6 +55,20 @@ enum AdSizing {
         case .audio:
             return CGSize(width: availableWidth, height: audioCardHeight)
         }
+    }
+
+    /// The safe-area rect of the screen in use, in `contentFrame` coordinates (at least 1×1).
+    static func fullScreenSlot(in layout: ScreenLayout) -> CGRect {
+        let content = layout.contentFrame.size
+        let insets = layout.safeArea
+        return CGRect(x: insets.leading, y: insets.top, width: max(1, content.width - insets.leading - insets.trailing),
+                      height: max(1, content.height - insets.top - insets.bottom))
+    }
+
+    /// Where the simulator draws the slot of a full-screen placement — the ad and its placeholder alike (inline placements
+    /// are laid out by their mock app: the rect is only their size).
+    static func slotFrame(placement: Placement, adSize: CGSize, layout: ScreenLayout) -> CGRect {
+        placement.isFullScreen ? fullScreenSlot(in: layout) : CGRect(origin: .zero, size: adSize)
     }
 
     /// Scales `size` down (never up) to fit `bounds`, keeping its aspect ratio; whole points, at least 1×1.

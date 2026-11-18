@@ -119,6 +119,8 @@ final class AdSession: AdRenderingHost {
     @ObservationIgnored private var consoleSequence = 0
     /// Set while a device change adjusts the placement (one context change, not two).
     @ObservationIgnored private var isAdjustingContext = false
+    /// The placement suggested for the bid selected last (see `candidateSelectionChanged`).
+    @ObservationIgnored private var lastSuggestedPlacement: Placement?
 
     init(services: AdKitServices = .live, monitor: NetworkMonitor? = nil, clock: any SessionClock = SystemSessionClock(),
          browser: (any BrowserOpening)? = nil, opensClickThroughs: (@MainActor () -> Bool)? = nil,
@@ -255,10 +257,15 @@ final class AdSession: AdRenderingHost {
         }
     }
 
+    /// The placement follows the kind of bid selected (its format and size: a 320×480 banner is an interstitial, Native is
+    /// in-feed, video full screen): it changes when the suggestion for the selected bid changes, or when the placement
+    /// cannot show the format. A placement the user picked stands while they edit the same kind of bid.
     private func candidateSelectionChanged() {
         if let candidate = selectedCandidate {
             let suggested = Placement.suggested(for: candidate.format, size: candidate.size, on: device)
-            if placement != suggested, !Self.placement(placement, suits: candidate.format) { placement = suggested }
+            let kindChanged = suggested != lastSuggestedPlacement
+            lastSuggestedPlacement = suggested
+            if placement != suggested, kindChanged || !Self.placement(placement, suits: candidate.format) { placement = suggested }
         }
         inspect()
     }

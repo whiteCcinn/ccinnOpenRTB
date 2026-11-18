@@ -1,7 +1,8 @@
 import RTBKit
 import SwiftUI
 
-/// The ad (through the renderers' `AdView`) or, while there is none, an outlined slot saying why.
+/// The ad (through the renderers' `AdView`) or, while there is none, an outlined slot saying why. Both are drawn at
+/// `size`, and the placeholder's label is that size: what the slot says is what it is.
 struct AdSlotView: View {
     let session: AdSession
     let size: CGSize
@@ -13,8 +14,7 @@ struct AdSlotView: View {
                 .clipped()
                 .id(request.generation)
         } else {
-            AdSlotPlaceholder(phase: session.phase, format: session.slotCandidate?.format, adSize: session.adSize,
-                              compact: size.height < 90)
+            AdSlotPlaceholder(phase: session.phase, format: session.slotCandidate?.format, size: size, compact: size.height < 90)
                 .frame(width: size.width, height: size.height)
         }
     }
@@ -23,7 +23,8 @@ struct AdSlotView: View {
 struct AdSlotPlaceholder: View {
     let phase: RenderPhase
     let format: AdFormat?
-    let adSize: CGSize
+    /// The size the slot is drawn at (its label).
+    let size: CGSize
     let compact: Bool
 
     var body: some View {
@@ -64,11 +65,15 @@ struct AdSlotPlaceholder: View {
         }
     }
 
-    private var sizeText: String { "\(Int(adSize.width)) × \(Int(adSize.height))" }
+    /// `W × H` in whole points.
+    static func sizeText(_ size: CGSize) -> String {
+        func points(_ value: CGFloat) -> Int { value.isFinite ? Int(max(0, min(value, 100_000)).rounded()) : 0 }
+        return "\(points(size.width)) × \(points(size.height))"
+    }
 
     private var title: String {
         switch phase {
-        case .idle: "Ad slot · \(sizeText)"
+        case .idle: "Ad slot · \(Self.sizeText(size))"
         case let .preparing(message): message
         case .ready: "Ad"
         case let .noBid(reason): reason.map { "No bid · nbr \($0)" } ?? "No bid"

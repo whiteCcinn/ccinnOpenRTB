@@ -54,11 +54,12 @@ struct AdSizingTests {
             == CGSize(width: 320, height: 50))
     }
 
-    @Test func fullScreenPlacementsCoverTheScreen() throws {
+    @Test func fullScreenPlacementsFillTheSafeArea() throws {
         let phone = try layout("iphone-15-pro")
         for placement in [Placement.interstitial, .rewarded] {
             #expect(AdSizing.adSize(bidSize: AdSize(width: 320, height: 480), format: .banner, placement: placement, layout: phone)
-                == CGSize(width: 393, height: 852))
+                == CGSize(width: 393, height: 852 - 59 - 34))
+            #expect(AdSizing.fullScreenSlot(in: phone) == CGRect(x: 0, y: 59, width: 393, height: 852 - 59 - 34))
         }
         let tv = try layout("google-tv")
         #expect(AdSizing.adSize(bidSize: AdSize(width: 640, height: 360), format: .video, placement: .ctvInstream, layout: tv)
@@ -67,9 +68,36 @@ struct AdSizingTests {
 
     @Test func spannedInterstitialCoversBothScreensAndTheHinge() throws {
         let size = AdSizing.adSize(bidSize: nil, format: .banner, placement: .interstitial, layout: try layout("surface-duo", spanned: true))
-        #expect(size == CGSize(width: 1114, height: 720))
+        #expect(size == CGSize(width: 1114, height: 720 - 24 - 24))
         let single = AdSizing.adSize(bidSize: nil, format: .banner, placement: .interstitial, layout: try layout("surface-duo"))
-        #expect(single == CGSize(width: 540, height: 720))
+        #expect(single == CGSize(width: 540, height: 720 - 24 - 24))
+    }
+
+    /// The slot a full-screen ad is drawn in, the size it reports (`RenderRequest.adSize`, the placeholder's label) and
+    /// the safe-area rect of the screen in use are one and the same, on every device, orientation and posture.
+    @Test func fullScreenSlotsAreTheSafeAreaRectEverywhere() {
+        for device in DeviceCatalog.all {
+            for landscape in [false, true] {
+                for (folded, spanned) in [(false, false), (true, false), (false, true)] {
+                    let layout = ScreenLayout(device: device, landscape: landscape, folded: folded, spanned: spanned)
+                    let content = layout.contentFrame.size
+                    let insets = layout.safeArea
+                    let safe = CGRect(x: insets.leading, y: insets.top, width: content.width - insets.leading - insets.trailing,
+                                      height: content.height - insets.top - insets.bottom)
+                    let slot = AdSizing.fullScreenSlot(in: layout)
+                    let context = "\(device.id) landscape \(landscape) folded \(folded) spanned \(spanned)"
+                    #expect(slot == safe, "\(context)")
+                    #expect(slot.width > 0 && slot.height > 0, "\(context)")
+                    for placement in Placement.available(on: device) where placement.isFullScreen {
+                        for format in AdFormat.allCases {
+                            #expect(AdSizing.adSize(bidSize: AdSize(width: 320, height: 480), format: format, placement: placement, layout: layout)
+                                == slot.size, "\(context) \(placement.rawValue) \(format)")
+                        }
+                        #expect(AdSizing.slotFrame(placement: placement, adSize: slot.size, layout: layout) == slot, "\(context)")
+                    }
+                }
+            }
+        }
     }
 
     @Test func inFeedNativeCardFillsTheColumn() throws {

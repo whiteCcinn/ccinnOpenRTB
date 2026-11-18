@@ -232,30 +232,50 @@ struct SimulatedAppView: View {
             }
             .overlay { FeedScrollCapture(session: session) }
         case .interstitial, .rewarded:
-            ZStack {
+            FullScreenPlacement(session: session, layout: layout, television: false) {
                 NewsArticleApp(layout: layout, size: size, banner: nil, bannerHeight: 0, visibleFraction: 1) { EmptyView() }
-                if session.renderRequest != nil {
-                    AdSlotView(session: session, size: size)
-                } else {
-                    Color.black.opacity(0.35)
-                    AdSlotView(session: session, size: CGSize(width: min(size.width - 48, 340), height: 200))
-                }
-                OcclusionSheet(size: size, visibleFraction: session.visibleFraction, television: false)
             }
-            .frame(width: size.width, height: size.height)
         case .ctvInstream:
-            ZStack {
+            FullScreenPlacement(session: session, layout: layout, television: true) {
                 TVHomeApp(size: size)
-                if session.renderRequest != nil {
-                    AdSlotView(session: session, size: size)
-                } else {
-                    Color.black.opacity(0.45)
-                    AdSlotView(session: session, size: CGSize(width: 760, height: 300))
-                        .environment(\.colorScheme, .dark)
-                }
-                OcclusionSheet(size: size, visibleFraction: session.visibleFraction, television: true)
             }
-            .frame(width: size.width, height: size.height)
         }
+    }
+}
+
+/// A full-screen placement: the app behind, the ad's black backdrop (the dimmed app while there is no ad), and the slot —
+/// ad or placeholder — at `AdSizing.slotFrame`, the safe-area rect whose size the ad reports.
+///
+/// The shell draws no close control here: the renderer owns the full-screen chrome (the interstitial close after its delay,
+/// the rewarded countdown, VAST skip and close, MRAID custom close, Back on CTV) because only it knows the playback state,
+/// `skipoffset` and the creative's close state. Its top-right control lands inside the safe area because the slot is the
+/// safe-area rect. The Fire menu's Close is the manual equivalent.
+private struct FullScreenPlacement<Background: View>: View {
+    let session: AdSession
+    let layout: ScreenLayout
+    let television: Bool
+    @ViewBuilder let background: () -> Background
+
+    var body: some View {
+        let size = layout.contentFrame.size
+        let slot = AdSizing.slotFrame(placement: session.placement, adSize: session.adSize, layout: layout)
+        ZStack(alignment: .topLeading) {
+            background()
+            if session.renderRequest != nil {
+                Color.black
+                AdSlotView(session: session, size: slot.size)
+                    .frame(width: slot.width, height: slot.height)
+                    .offset(x: slot.minX, y: slot.minY)
+            } else {
+                Color.black.opacity(television ? 0.45 : 0.35)
+                // Legible on the dimmed app.
+                AdSlotView(session: session, size: slot.size)
+                    .frame(width: slot.width, height: slot.height)
+                    .offset(x: slot.minX, y: slot.minY)
+                    .environment(\.colorScheme, .dark)
+            }
+            OcclusionSheet(size: size, visibleFraction: session.visibleFraction, television: television)
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 }
