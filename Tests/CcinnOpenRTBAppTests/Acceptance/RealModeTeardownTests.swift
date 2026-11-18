@@ -39,10 +39,12 @@ struct RealModeTeardownTests {
     }
 
     private func expectSilence(_ server: EchoServer, after change: String) async throws {
-        // Teardown happens in the same turn as the change; allow one SwiftUI update for the view tree.
-        try await Task.sleep(for: .milliseconds(200))
+        // Teardown happens in the same turn as the change. A beacon the page sent just before it can still be in flight
+        // (on a 3-core CI runner one landed 200 ms+ later), so let in-flight requests land for 1 s, then require silence
+        // for 2 s: a page still running would send about 20 beacons in that window.
+        try await Task.sleep(for: .milliseconds(1000))
         let settled = server.requests.count
-        try await Task.sleep(for: .milliseconds(1500))
+        try await Task.sleep(for: .milliseconds(2000))
         #expect(server.requests.count == settled, "\(change): \(server.requests.count - settled) more hits after the change")
     }
 
