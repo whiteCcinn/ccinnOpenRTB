@@ -118,6 +118,7 @@ enum Fixtures {
                                        url: "https://err.vast.example/e")]
             },
             expand: { template, _ in ExpandedURL(url: template.replacingOccurrences(of: "${AUCTION_PRICE}", with: "2.5")) },
+            expandOpenRTB: { template, _ in ExpandedURL(url: template.replacingOccurrences(of: "${AUCTION_PRICE}", with: "2.5")) },
             expandMarkup: { markup, _ in ExpandedURL(url: markup.replacingOccurrences(of: "${AUCTION_PRICE}", with: "2.5")) },
             samples: { [] }
         )

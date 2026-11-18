@@ -66,6 +66,29 @@ struct ExchangeMacroAcceptanceTests {
         #expect(ad.link.url == "https://adv.example/?p=1.5")
     }
 
+    /// AdTech review: the markup fetch from the win notice expanded the nurl with VAST rules. The nurl is a bid-response
+    /// URL: only OpenRTB `${…}` macros are substituted (OpenRTB 2.6 §4.4), exactly as on the `.won` path; a VAST
+    /// `[…]` token is not a macro there and is sent as written.
+    @Test func theWinNoticeThatDeliversMarkupIsExpandedWithOpenRTBRules() async throws {
+        let server = try EchoServer()
+        let port = try #require(await server.start())
+        defer { server.stop() }
+        let response = """
+        {"id": "req-1", "seatbid": [{"seat": "dsp", "bid": [{"id": "bid-1", "impid": "1", "price": 1.5, "w": 320, "h": 50,
+          "nurl": "http://127.0.0.1:\(port)/win?p=${AUCTION_PRICE}&cb=[CACHEBUSTING]"}]}]}
+        """
+        let harness = AcceptanceSession(transport: URLSessionTransport())
+        await harness.session.load(Sample(id: "nurl", title: "nurl", group: "test", response: response), render: false)
+        try harness.confirmRealMode()
+        harness.session.render()
+        await harness.waitUntilSettled()
+        let win = try #require(server.requests.first { $0.target.hasPrefix("/win") }, "\(server.requests.map(\.target))")
+        #expect(win.target.contains("p=1.5"))
+        #expect(win.target.contains("CACHEBUSTING"), "a VAST token is not an OpenRTB macro: \(win.target)")
+        let entry = try #require(harness.monitor.liveEntries.first { $0.category == .win })
+        #expect(entry.unknownMacros.contains("[CACHEBUSTING]") || entry.url.contains("CACHEBUSTING"))
+    }
+
     @Test func htmlAdmCarriesThePrice() async throws {
         let harness = try await render(Self.response(mtype: 1, adm: #"<img src="https://t.example/px?p=${AUCTION_PRICE}">"#))
         #expect(harness.session.renderRequest?.candidate.markup == .html(#"<img src="https://t.example/px?p=1.5">"#))

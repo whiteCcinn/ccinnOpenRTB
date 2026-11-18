@@ -20,6 +20,8 @@ struct AdKitServices: Sendable {
     var resolutionRequests: @Sendable (_ vast: ResolvedVAST, _ context: MacroContext, _ source: String) -> [TrackerRequest]
     /// `MacroExpander.expand(_:context:)`.
     var expand: @Sendable (_ template: String, _ context: MacroContext) -> ExpandedURL
+    /// `MacroExpander.expandOpenRTB(_:context:)`: a bid-response URL (nurl, burl, lurl), OpenRTB `${…}` only.
+    var expandOpenRTB: @Sendable (_ template: String, _ context: MacroContext) -> ExpandedURL
     /// `MacroExpander.expandMarkup(_:context:)`: the exchange's substitution of OpenRTB macros in `adm`.
     var expandMarkup: @Sendable (_ markup: String, _ context: MacroContext) -> ExpandedURL
     /// `SampleLibrary.all`.
@@ -38,6 +40,7 @@ extension AdKitServices {
         },
         resolutionRequests: { vast, context, source in VASTTrackingPlan.resolutionRequests(vast: vast, context: context, source: source) },
         expand: { template, context in MacroExpander.expand(template, context: context) },
+        expandOpenRTB: { template, context in MacroExpander.expandOpenRTB(template, context: context) },
         expandMarkup: { markup, context in MacroExpander.expandMarkup(markup, context: context) },
         samples: { SampleLibrary.all }
     )

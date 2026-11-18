@@ -471,7 +471,8 @@ final class AdSession: AdRenderingHost {
             } else if let winURL = candidate.winURL {
                 phase = .preparing("Fetching markup from the win notice…")
                 let context = macroContext(for: candidate, input: input, adIndex: nil)
-                let expanded = services.expand(winURL, context)
+                // A bid-response URL: OpenRTB `${…}` only, as on the `.won` path (OpenRTB 2.6 §4.4).
+                let expanded = services.expandOpenRTB(winURL, context)
                 do {
                     let (data, entryID) = try await monitor.fetchContent(expanded.url, category: .win, trigger: "win (markup)",
                                                                          source: "bid \(candidate.id) › nurl", parentID: nil,
