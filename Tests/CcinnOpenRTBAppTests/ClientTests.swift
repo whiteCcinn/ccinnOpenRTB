@@ -416,6 +416,20 @@ struct ClientModelTests {
         #expect(harness.model.simulatorNote != nil)
     }
 
+    /// A body that is not JSON is sent as typed, with a note (computed off the main actor).
+    @Test func aBodyThatIsNotJSONIsSentWithANote() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+        harness.transport.answer(endpoint, .init(status: 400, body: "{}"))
+        harness.model.request.body = "{\"id\":"
+
+        await harness.model.send()?.value
+        for _ in 0..<100 where harness.model.sendWarning == nil { try await Task.sleep(for: .milliseconds(5)) }
+
+        #expect(harness.transport.requests.first?.body == Data("{\"id\":".utf8))
+        #expect(harness.model.sendWarning != nil)
+    }
+
     @Test func offlineSendsNothingAndSaysSo() async throws {
         let harness = Harness()
         defer { harness.directory.cleanUp() }

@@ -97,12 +97,19 @@ final class ClientModel {
         }
         generation &+= 1
         let token = generation
+        let draft = request
         let sentBody = request.body
         let device = target.device
         let monitor = target.monitor
         phase = .sending
-        sendWarning = request.jsonWarning
+        sendWarning = nil
         simulatorNote = nil
+        // The JSON check parses the whole body: off the main actor, while the request is on its way.
+        Task { [weak self] in
+            let warning = await Task.detached(priority: .utility) { draft.jsonWarning }.value
+            guard let self, token == self.generation else { return }
+            self.sendWarning = warning
+        }
         let task = Task { [weak self] in
             do {
                 let response = try await monitor.send(composed, userAgent: device.userAgent)
