@@ -60,8 +60,9 @@ enum LaunchCoordinator {
 }
 
 /// `--snapshot <file.png>`: renders the main window (with its toolbar) into a PNG without screen-recording permission.
-/// AppKit's cache draws layer-hosted video (`AVPlayerLayer`) as black, so each visible player's current frame is drawn in
-/// on top (`VideoFrameCapture`); web content is drawn by the cache. The PNG is written once the window has finished
+/// AppKit's cache draws layer-hosted video (`AVPlayerLayer`) as black, so during the capture each visible player shows its
+/// current frame in an image view of its own (`VideoFrameCapture`), at the player's place in the view tree: the controls
+/// above the player stay above it. Web content is drawn by the cache. The PNG is written once the window has finished
 /// drawing (`SnapshotSettler`): on a first launch under load, text can still be undrawn seconds after the window appears.
 @MainActor
 enum SnapshotTool {
@@ -84,41 +85,25 @@ enum SnapshotTool {
         return candidates.first { $0.contentView != nil }
     }
 
-    /// `window` as PNG data, after pending layout and display, with the current video frames drawn in.
+    /// `window` as PNG data, after pending layout and display, with the current video frames in place. The view tree is
+    /// left as it was.
     static func render(_ window: NSWindow) async -> Data? {
         guard let view = window.contentView?.superview ?? window.contentView else { return nil }
+        let frames = await VideoFrameCapture.frames(in: view)
+        let standIns = frames.map { frame in
+            let imageView = NSImageView(frame: frame.player.bounds)
+            imageView.image = NSImage(cgImage: frame.image, size: .zero)
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.autoresizingMask = [.width, .height]
+            frame.player.addSubview(imageView)
+            return imageView
+        }
+        defer { standIns.forEach { $0.removeFromSuperview() } }
         window.layoutIfNeeded()
         window.displayIfNeeded()
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
         view.cacheDisplay(in: view.bounds, to: bitmap)
-        let frames = await VideoFrameCapture.frames(in: view)
-        guard !frames.isEmpty, let base = bitmap.cgImage, let composed = compose(base, frames: frames, in: view) else {
-            return bitmap.representation(using: .png, properties: [:])
-        }
-        return NSBitmapImageRep(cgImage: composed).representation(using: .png, properties: [:])
-    }
-
-    /// `base` (the cached window, in pixels) with each frame drawn at its rect (points of `root`), clipped to its view.
-    private static func compose(_ base: CGImage, frames: [VideoFrameCapture.Frame], in root: NSView) -> CGImage? {
-        let bounds = root.bounds
-        guard bounds.width > 0, bounds.height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: base.width, height: base.height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let scaleX = CGFloat(base.width) / bounds.width
-        let scaleY = CGFloat(base.height) / bounds.height
-        func pixels(_ rect: CGRect) -> CGRect {
-            // Core Graphics counts y up from the bottom, like an unflipped root view.
-            let y = root.isFlipped ? bounds.height - rect.maxY : rect.minY - bounds.minY
-            return CGRect(x: (rect.minX - bounds.minX) * scaleX, y: y * scaleY, width: rect.width * scaleX, height: rect.height * scaleY)
-        }
-        context.draw(base, in: CGRect(x: 0, y: 0, width: base.width, height: base.height))
-        for frame in frames {
-            context.saveGState()
-            context.clip(to: pixels(frame.clip))
-            context.draw(frame.image, in: pixels(frame.rect))
-            context.restoreGState()
-        }
-        return context.makeImage()
+        return bitmap.representation(using: .png, properties: [:])
     }
 }
 
@@ -127,23 +112,16 @@ enum SnapshotTool {
 @MainActor
 enum VideoFrameCapture {
     struct Frame {
+        var player: PlayerLayerNSView
         var image: CGImage
-        /// Where the frame is drawn (aspect fit), in the root view's coordinates.
-        var rect: CGRect
-        /// The player view's visible part, in the root view's coordinates.
-        var clip: CGRect
     }
 
     static func frames(in root: NSView) async -> [Frame] {
         var frames: [Frame] = []
         for view in players(in: root) {
-            guard let layer = view.playerLayer, let item = layer.player?.currentItem, let asset = item.asset as? AVURLAsset,
-                  asset.url.isFileURL else { continue }
-            let presentation = item.presentationSize
-            let fitted = layer.videoRect.isEmpty && presentation.width > 0 && presentation.height > 0
-                ? AVMakeRect(aspectRatio: presentation, insideRect: view.bounds) : layer.videoRect
-            guard !fitted.isEmpty, let image = await image(of: asset, at: item.currentTime()) else { continue }
-            frames.append(Frame(image: image, rect: view.convert(fitted, to: root), clip: view.convert(view.visibleRect, to: root)))
+            guard let item = view.playerLayer?.player?.currentItem, let asset = item.asset as? AVURLAsset, asset.url.isFileURL,
+                  let image = await image(of: asset, at: item.currentTime()) else { continue }
+            frames.append(Frame(player: view, image: image))
         }
         return frames
     }
