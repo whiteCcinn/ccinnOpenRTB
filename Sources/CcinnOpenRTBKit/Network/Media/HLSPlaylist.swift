@@ -58,7 +58,8 @@ enum HLSPlaylist {
     /// the player to fetch itself); `data:` and other schemes stay as they are (none of them reaches the network through
     /// the player). `EXT-X-CONTENT-STEERING` is dropped: a steering manifest can swap the host of a routed URI for an
     /// origin's, and without it the player keeps the default pathway. Variables (`EXT-X-DEFINE`) are not expanded: a URI
-    /// that uses one cannot be resolved, so it fails closed.
+    /// that uses one cannot be resolved, so it fails closed. Attribute values are read quoted, single-quoted or bare, with
+    /// spaces around them; and any line still naming an http(s) URL after rewriting is dropped (fail closed).
     static func rewrite(_ text: String, base: URL, unresolved: String, route: (Reference) -> String) -> String {
         withoutActuallyEscaping(route) { route in
             rewriteLines(text, router: Router(base: base, unresolved: unresolved, route: route))
@@ -75,18 +76,31 @@ enum HLSPlaylist {
             if isFirst, line.hasPrefix("\u{FEFF}") { line.removeFirst() }
             isFirst = false
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            var produced: [String] = []
             if trimmed.hasPrefix("#EXT") {
                 let tag = trimmed.prefix { $0 != ":" }
                 if tag == "#EXT-X-CONTENT-STEERING" { continue }
                 if tag == "#EXT-X-STREAM-INF" { nextURIKind = .playlist }
-                line = rewriteAttributes(trimmed, kind: attributeKind(of: tag), route: route)
+                line = rewriteAttributes(trimmed, kind: attributeKind(of: tag), route: route, produced: &produced)
             } else if !trimmed.isEmpty, !trimmed.hasPrefix("#") {
                 line = route.rewritten(trimmed, kind: nextURIKind)
+                produced.append(line)
                 nextURIKind = .segment
             }
+            // Fail closed (safety review B2): whatever syntax a line uses, if an absolute web URL is still in it once the
+            // routes it was given are taken out, the player would fetch that origin itself — the line goes.
+            if holdsAnOriginURL(line, besides: produced) { continue }
             lines.append(line)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Whether `line`, without the route URLs it was given, still names an http(s) URL (any case, any syntax).
+    static func holdsAnOriginURL(_ line: String, besides routes: [String]) -> Bool {
+        var rest = line
+        for route in routes where !route.isEmpty { rest = rest.replacingOccurrences(of: route, with: "") }
+        let lowered = rest.lowercased()
+        return lowered.contains("http://") || lowered.contains("https://")
     }
 
     private static func attributeKind(of tag: Substring) -> Kind {
@@ -117,33 +131,45 @@ enum HLSPlaylist {
         }
     }
 
-    /// Rewrites the quoted `URI` and `SERVER-URI` attributes of one tag line; everything else is kept byte for byte.
-    private static func rewriteAttributes(_ line: String, kind: Kind, route: Router) -> String {
+    /// Rewrites the `URI` and `SERVER-URI` attributes of one tag line, and any other attribute holding an http(s) URL;
+    /// everything else is kept byte for byte. `produced` collects the routes written in.
+    private static func rewriteAttributes(_ line: String, kind: Kind, route: Router, produced: inout [String]) -> String {
         guard let colon = line.firstIndex(of: ":") else { return line }
         var output = String(line[...colon])
         var index = line.index(after: colon)
         var attributeStart = index
-        var inQuotes = false
+        var quote: Character?
         while index < line.endIndex {
             let character = line[index]
-            if character == "\"" {
-                inQuotes.toggle()
-            } else if character == ",", !inQuotes {
-                output += rewriteAttribute(line[attributeStart..<index], kind: kind, route: route) + ","
+            if let open = quote {
+                if character == open { quote = nil }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == "," {
+                output += rewriteAttribute(line[attributeStart..<index], kind: kind, route: route, produced: &produced) + ","
                 attributeStart = line.index(after: index)
             }
             index = line.index(after: index)
         }
-        output += rewriteAttribute(line[attributeStart...], kind: kind, route: route)
+        output += rewriteAttribute(line[attributeStart...], kind: kind, route: route, produced: &produced)
         return output
     }
 
-    private static func rewriteAttribute(_ attribute: Substring, kind: Kind, route: Router) -> String {
+    /// One `NAME=value` attribute: the value may be double-quoted (the spec's form), single-quoted or bare, with spaces
+    /// around it (safety review B2: AVFoundation reads those too). A rewritten value is written back in the canonical
+    /// quoted form.
+    private static func rewriteAttribute(_ attribute: Substring, kind: Kind, route: Router, produced: inout [String]) -> String {
         guard let equals = attribute.firstIndex(of: "=") else { return String(attribute) }
-        let name = attribute[..<equals].trimmingCharacters(in: .whitespaces)
-        let value = attribute[attribute.index(after: equals)...]
-        guard value.count >= 2, value.first == "\"", value.last == "\"" else { return String(attribute) }
-        let uri = String(value.dropFirst().dropLast())
+        let name = attribute[..<equals].trimmingCharacters(in: .whitespaces).uppercased()
+        let raw = attribute[attribute.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+        let uri: String
+        if raw.count >= 2, let first = raw.first, first == "\"" || first == "'", raw.last == first {
+            uri = String(raw.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        } else if !raw.isEmpty, !raw.contains("\""), !raw.contains("'") {
+            uri = raw
+        } else {
+            return String(attribute)
+        }
         let attributeKind: Kind
         switch name {
         case "URI", "SERVER-URI": attributeKind = kind
@@ -151,10 +177,12 @@ enum HLSPlaylist {
         case "X-ASSET-LIST": attributeKind = .assetList
         default:
             // Any other attribute that holds an absolute http(s) URL.
-            guard let scheme = URLText.scheme(uri), scheme == "http" || scheme == "https" else { return String(attribute) }
+            guard let scheme = URLText.scheme(uri)?.lowercased(), scheme == "http" || scheme == "https" else { return String(attribute) }
             attributeKind = .data
         }
-        return "\(attribute[..<equals])=\"\(route.rewritten(uri, kind: attributeKind))\""
+        let routed = route.rewritten(uri, kind: attributeKind)
+        produced.append(routed)
+        return "\(attribute[..<equals].trimmingCharacters(in: .whitespaces))=\"\(routed)\""
     }
 
     // MARK: Asset lists

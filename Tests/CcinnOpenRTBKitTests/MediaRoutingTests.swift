@@ -180,6 +180,53 @@ struct MediaRoutingTests {
         #expect(tree.filter { $0.status != nil }.count <= everyRequest.count)
     }
 
+    /// Safety review B2, on the wire with AVPlayer: an init section named with a space after `=` (and the other loose forms)
+    /// is fetched through the monitor — the origin never sees AVFoundation's own AppleCoreMedia agent.
+    @Test(arguments: ["URI= \"%@\"", "URI=%@", "URI='%@'", "URI=\"%@\" ,BYTERANGE=\"%@\""])
+    func looseAttributeFormsStillGoThroughTheMonitor(_ form: String) async throws {
+        let fixture = try HLSFixture.make()
+        let origin = try LoopbackHTTPServer { request in
+            switch request.path {
+            case "/v/init.mp4": .file(fixture.initSection, type: "video/mp4", for: request)
+            default:
+                if let index = Int(request.path.dropFirst("/v/seg".count).prefix { $0.isNumber }), fixture.segments.indices.contains(index) {
+                    .file(fixture.segments[index].data, type: "video/iso.segment", for: request)
+                } else {
+                    .text("not found", status: 404)
+                }
+            }
+        }
+        let port = try await origin.start()
+        defer { origin.stop() }
+        let initURL = "http://127.0.0.1:\(port)/v/init.mp4"
+        let attribute = form.contains("BYTERANGE")
+            ? String(format: form, initURL, "\(fixture.initSection.count)@0")
+            : String(format: form, initURL)
+        let playlist = fixture.mediaPlaylist
+            .replacingOccurrences(of: "#EXT-X-MAP:URI=\"init.mp4\"", with: "#EXT-X-MAP:\(attribute)")
+            .replacingOccurrences(of: "\nseg", with: "\nhttp://127.0.0.1:\(port)/v/seg")
+        let playlistServer = try LoopbackHTTPServer { _ in .text(playlist, type: "application/vnd.apple.mpegurl") }
+        let playlistPort = try await playlistServer.start()
+        defer { playlistServer.stop() }
+
+        let monitor = monitor()
+        let prepared = await monitor.prepareMedia("http://127.0.0.1:\(playlistPort)/v/variant.m3u8", trigger: "media file", source: "VAST",
+                                                  parentID: nil, userAgent: deviceUA)
+        let asset = AVURLAsset(url: try #require(prepared.playableURL))
+        try #require(prepared.resourceLoader).attach(to: asset)
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        player.isMuted = true
+        player.play()
+        defer { player.pause() }
+        _ = await eventually { origin.paths.contains("/v/seg1.m4s") || player.currentItem?.status == .failed }
+        player.replaceCurrentItem(with: nil)
+        await monitor.waitUntilIdle()
+        let wire = origin.requests + playlistServer.requests
+        #expect(wire.allSatisfy { !($0.header("User-Agent") ?? "").contains("AppleCoreMedia") },
+                "AVFoundation fetched an origin itself (\(form)): \(wire.map { "\($0.path) \($0.header("User-Agent") ?? "")" })")
+        #expect(wire.allSatisfy { $0.header("User-Agent") == deviceUA })
+    }
+
     /// HLS Interstitials (ads): the asset list a playlist names is routed, and so is every URI inside it. Checked over the
     /// proxy's own HTTP, without AVFoundation.
     @Test func interstitialAssetListsAndTheirAssetsAreRouted() async throws {

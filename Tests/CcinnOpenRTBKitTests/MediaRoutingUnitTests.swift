@@ -73,6 +73,35 @@ struct HLSPlaylistTests {
         #expect(lines[9] == "data:video/mp2t;base64,AAAA")
     }
 
+    /// Safety review B2 (on 0864bf9): attribute values the rewriter missed — a space after `=`, a space before the next
+    /// comma, single quotes, no quotes — were fetched by AVFoundation itself. They are routed now; and whatever syntax a
+    /// line uses, a line still holding an absolute http(s) URL after rewriting is dropped (fail closed).
+    @Test func attributeValueFormsAreAllRoutedAndAnythingLeftIsDropped() {
+        let forms = [
+            "#EXT-X-MAP:URI= \"http://o.example/B-space-init.mp4\"",
+            "#EXT-X-MAP:URI=\"http://o.example/x-init.mp4\" ,BYTERANGE=\"720@0\"",
+            "#EXT-X-MAP:URI='http://o.example/C-single-init.mp4'",
+            "#EXT-X-MAP:URI=http://o.example/A-unquoted-init.mp4",
+            "#EXT-X-KEY:METHOD=AES-128,URI=http://o.example/G-unquoted-key",
+            "#EXT-X-SESSION-DATA:DATA-ID=\"com.x\",URI=http://o.example/I-unquoted-session.json",
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"en\",URI = \"http://o.example/I-audio.m3u8\"",
+            "#EXT-X-PRELOAD-HINT:TYPE=PART;URI=http://o.example/semicolon.mp4",
+            "#EXT-X-FUTURE-TAG:<https://o.example/future>",
+        ]
+        let (output, references) = rewrite("#EXTM3U\n" + forms.joined(separator: "\n") + "\n#EXTINF:4,\nseg0.ts\n")
+        #expect(!output.lowercased().contains("o.example"), "an origin URL is left for the player: \(output)")
+        let routed = Set(references.map(\.url.absoluteString))
+        for name in ["B-space-init.mp4", "x-init.mp4", "C-single-init.mp4", "A-unquoted-init.mp4", "G-unquoted-key",
+                     "I-unquoted-session.json", "I-audio.m3u8"] {
+            #expect(routed.contains("http://o.example/\(name)"), "\(name) is routed: \(routed)")
+        }
+        #expect(output.contains("#EXT-X-MAP:URI=\"http://127.0.0.1:9/r/"), "the canonical quoted form: \(output)")
+        #expect(output.contains("BYTERANGE=\"720@0\""), "other attributes are kept")
+        #expect(output.contains("http://127.0.0.1:9/r/"), "segments still play")
+        // An unknown syntax holding an origin URL: the line goes (fail closed), nothing else does.
+        #expect(!output.contains("EXT-X-FUTURE-TAG") && !output.contains("semicolon"))
+    }
+
     /// HLS Interstitials (ads) name their assets in EXT-X-DATERANGE: AVFoundation would fetch X-ASSET-URI and X-ASSET-LIST
     /// itself. Every quoted http(s) attribute is routed; content steering (which can swap the host of a routed URI for an
     /// origin's) is dropped, and the default pathway plays.
