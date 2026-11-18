@@ -85,7 +85,7 @@ struct NetworkMonitorView: View {
         .searchable(text: $model.filter.text, placement: .toolbar, prompt: "Filter URL, trigger, source, status")
         .toolbar { toolbar(all: all) }
         .navigationTitle("Network")
-        .navigationSubtitle(monitor.mode == .real ? "Real mode — trackers are sent" : "Simulated mode — trackers are recorded, not sent")
+        .navigationSubtitle(NetworkPresentation.session(mode: monitor.mode, offline: monitor.offline).subtitle)
         .onAppear {
             if let layout = NetworkDemo.requestedLayout { model.layout = layout }
         }
@@ -228,8 +228,9 @@ private struct NetworkStatusBar: View {
             if all.count >= NetworkMonitor.defaultCapacity {
                 Text("Oldest requests dropped (limit \(NetworkMonitor.defaultCapacity.formatted()))").foregroundStyle(.orange)
             }
-            Badge(text: monitor.mode == .real ? "Real" : "Simulated", color: monitor.mode == .real ? .red : .purple,
-                  systemImage: monitor.mode == .real ? "antenna.radiowaves.left.and.right" : "circle.dashed")
+            let session = NetworkPresentation.session(mode: monitor.mode, offline: monitor.offline)
+            Badge(text: session.title, color: Theme.color(for: session.delivery), systemImage: session.systemImage)
+                .help(session.subtitle)
         }
         .font(.caption)
         .foregroundStyle(.secondary)

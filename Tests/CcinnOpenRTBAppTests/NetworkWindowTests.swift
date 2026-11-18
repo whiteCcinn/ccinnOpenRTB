@@ -129,3 +129,51 @@ struct NetworkDemoTests {
         }
     }
 }
+
+@Suite("Network presentation")
+struct NetworkPresentationTests {
+    private func entry(_ category: TrackerCategory, delivery: NetworkDelivery = .network, state: NetworkEntryState = .completed(status: 200),
+                       headers: [String: String] = ["User-Agent": "UA"], asSent: Bool = false) -> NetworkEntry {
+        NetworkEntry(sequence: 1, category: category, trigger: "t", source: "s", template: "https://x/", url: "https://x/", state: state,
+                     requestHeaders: headers, delivery: delivery, requestHeadersAsSent: asSent)
+    }
+
+    /// Content is fetched to render the ad (in both modes): it carries its own badge, never one that looks like a tracker's.
+    @Test func contentHasItsOwnBadgeTrackersKeepTheirCategory() {
+        let content = NetworkPresentation.categoryBadge(for: entry(.content))
+        #expect(content.text == "CONTENT")
+        #expect(content.isContent)
+        for category in TrackerCategory.allCases where category != .content {
+            let badge = NetworkPresentation.categoryBadge(for: entry(category))
+            #expect(!badge.isContent)
+            #expect(badge.text != "CONTENT")
+        }
+    }
+
+    @Test func theSessionStateNamesOffline() {
+        #expect(NetworkPresentation.session(mode: .simulated, offline: false).title == "Simulated")
+        #expect(NetworkPresentation.session(mode: .real, offline: false).title == "Real")
+        let offline = NetworkPresentation.session(mode: .simulated, offline: true)
+        #expect(offline.title == "Offline")
+        #expect(offline.subtitle.contains("not sent"))
+        #expect(offline.systemImage == Theme.icon(for: .offline))
+    }
+
+    @Test func headersSayWhetherTheyWentOverTheWire() {
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, asSent: true)) == "Request Headers (as sent)")
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.impression, delivery: .simulated, state: .simulated))
+            == "Request Headers (not sent)")
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, delivery: .offline, state: .blocked)) == "Request Headers (not sent)")
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, state: .pending)) == "Request Headers (to be sent)")
+        #expect(NetworkPresentation.requestHeadersTitle(for: entry(.content, state: .failed("refused"))) == "Request Headers (planned)")
+    }
+
+    /// Offline requests are a mode of their own: listed in the Mode filter, and the filter finds them.
+    @Test func offlineIsFilterable() {
+        #expect(NetworkDelivery.allCases.contains(.offline))
+        #expect(NetworkDelivery.offline.label == "Offline")
+        let entries = [entry(.content, delivery: .offline, state: .blocked), entry(.content), entry(.impression, delivery: .simulated, state: .simulated)]
+        let filter = NetworkFilter(deliveries: [.offline])
+        #expect(filter.apply(entries).map(\.delivery) == [.offline])
+    }
+}

@@ -354,8 +354,46 @@ struct MonitorVASTFetcherTests {
         #expect(firstEntry.parentID == root)
         #expect(secondEntry.parentID == first.requestID)
         #expect(firstEntry.category == .content)
-        #expect(firstEntry.trigger == "VAST wrapper")
+        #expect(firstEntry.trigger == MonitorVASTFetcher.wrapperTrigger, "without the source, every fetch keeps the wrapper label")
         #expect(transport.requests.allSatisfy { $0.headers["User-Agent"] == deviceUA })
+    }
+
+    private static func wrapper(_ tagURI: String) -> String {
+        "<VAST version=\"3.0\"><Ad id=\"w\"><Wrapper><AdSystem>W</AdSystem><VASTAdTagURI><![CDATA[\(tagURI)]]></VASTAdTagURI>"
+            + "<Impression><![CDATA[https://t.example/w-imp]]></Impression><Creatives/></Wrapper></Ad></VAST>"
+    }
+
+    private static let inline = "<VAST version=\"3.0\"><Ad id=\"i\"><InLine><AdSystem>I</AdSystem><AdTitle>T</AdTitle>"
+        + "<Impression><![CDATA[https://t.example/imp]]></Impression><Creatives/></InLine></Ad></VAST>"
+
+    /// The first hop of a `.url` source is the VAST tag; only hops a Wrapper's VASTAdTagURI produced are wrappers.
+    @Test func theTopLevelTagIsLabelledTagAndItsWrappersWrapper() async throws {
+        let transport = FakeTransport()
+        transport.respond("https://tag.example/vast", body: Self.wrapper("https://w.example/second"))
+        transport.respond("https://w.example/second", body: Self.inline)
+        let monitor = makeMonitor(transport: transport)
+        let markup = monitor.recordNavigation(url: "https://x", trigger: "seed", source: "test", parentID: nil)
+        let source = VASTSource.url("https://tag.example/vast")
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: deviceUA, source: "bid 0.0 › VAST", rootParentID: markup, resolving: source)
+        _ = await VASTResolver(fetcher: fetcher).resolve(source, parentRequestID: markup)
+
+        let fetched = monitor.liveEntries.filter { $0.category == .content }
+        #expect(fetched.map(\.url) == ["https://tag.example/vast", "https://w.example/second"])
+        #expect(fetched.map(\.trigger) == [MonitorVASTFetcher.tagTrigger, MonitorVASTFetcher.wrapperTrigger])
+        #expect(MonitorVASTFetcher.tagTrigger == "VAST tag")
+        #expect(fetched.first?.parentID == markup)
+        #expect(fetched.last?.parentID == fetched.first?.id)
+    }
+
+    /// Inline XML has no tag fetch: its Wrapper's VASTAdTagURI is a wrapper hop, even though it has the same parent.
+    @Test func aWrapperInInlineXMLIsLabelledWrapper() async throws {
+        let transport = FakeTransport()
+        transport.respond("https://w.example/first", body: Self.inline)
+        let monitor = makeMonitor(transport: transport)
+        let source = VASTSource.xml(Self.wrapper("https://w.example/first"))
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: deviceUA, resolving: source)
+        _ = await VASTResolver(fetcher: fetcher).resolve(source)
+        #expect(monitor.liveEntries.map(\.trigger) == [MonitorVASTFetcher.wrapperTrigger])
     }
 
     @Test func offlineDataChainsNeedNoNetwork() async throws {

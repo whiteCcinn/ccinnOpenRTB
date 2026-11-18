@@ -1,4 +1,5 @@
 import AVFoundation
+import CcinnOpenRTBKit
 import Foundation
 
 /// What a playback engine observed.
@@ -21,6 +22,9 @@ protocol PlaybackEngine: AnyObject {
     var avPlayer: AVPlayer? { get }
     /// Replaces the current media; events of earlier media stop.
     func load(_ url: URL)
+    /// Replaces the current media with `url` answered by `resourceLoader` (remote media from `NetworkMonitor.prepareMedia`:
+    /// the monitor fetches every byte); a `nil` loader is a plain `load(url)`.
+    func load(_ url: URL, resourceLoader: MediaResourceLoader?)
     func play()
     func pause()
     func setMuted(_ muted: Bool)
@@ -28,8 +32,18 @@ protocol PlaybackEngine: AnyObject {
     func stop()
 }
 
+extension PlaybackEngine {
+    func load(_ url: URL, resourceLoader: MediaResourceLoader?) {
+        load(url)
+    }
+}
+
 /// `AVPlayer` engine: a periodic time observer (0.1 s), item status KVO and end / failure notifications. Every observer is
 /// tied to a load token, so a late callback of replaced media is dropped; `stop()` removes them all.
+///
+/// Remote media never reaches AVFoundation's own networking: it arrives as a private-scheme URL with the kit's
+/// `MediaResourceLoader`, installed on the `AVURLAsset` and kept here while its item is current (AVFoundation holds its
+/// resource-loader delegate weakly).
 @MainActor
 final class AVPlaybackEngine: PlaybackEngine {
     static let tickInterval = CMTime(value: 1, timescale: 10)
@@ -41,6 +55,8 @@ final class AVPlaybackEngine: PlaybackEngine {
     private var statusObservation: NSKeyValueObservation?
     private var notificationObservers: [any NSObjectProtocol] = []
     private var isReady = false
+    /// The current item's resource loader (remote media).
+    private var resourceLoader: MediaResourceLoader?
 
     var avPlayer: AVPlayer? { player }
 
@@ -51,11 +67,18 @@ final class AVPlaybackEngine: PlaybackEngine {
     }
 
     func load(_ url: URL) {
+        load(url, resourceLoader: nil)
+    }
+
+    func load(_ url: URL, resourceLoader: MediaResourceLoader?) {
         detachItem()
         token &+= 1
         isReady = false
         let token = token
-        let item = AVPlayerItem(url: url)
+        let asset = AVURLAsset(url: url)
+        resourceLoader?.attach(to: asset)
+        self.resourceLoader = resourceLoader
+        let item = AVPlayerItem(asset: asset)
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             let status = item.status
             let duration = Self.seconds(item.duration)
@@ -102,6 +125,7 @@ final class AVPlaybackEngine: PlaybackEngine {
         statusObservation = nil
         for observer in notificationObservers { NotificationCenter.default.removeObserver(observer) }
         notificationObservers = []
+        resourceLoader = nil
     }
 
     private func statusChanged(_ status: AVPlayerItem.Status, duration: Double?, error: String?, token: Int) {

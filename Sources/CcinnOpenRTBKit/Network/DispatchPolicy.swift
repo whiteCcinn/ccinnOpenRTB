@@ -18,7 +18,7 @@ struct SendPermit: Sendable, Hashable {
 enum DispatchAction: Sendable, Hashable {
     /// Recorded only; nothing leaves the machine.
     case record(NetworkEntryState, NetworkDelivery, note: String?)
-    /// Sent by the monitor's transport.
+    /// Loaded by the monitor: served locally for a `.local` destination, otherwise sent by its transport.
     case send(SendPermit)
     /// Loaded by the renderer (Real-mode script trackers); the monitor records it and waits for the renderer's report.
     case renderer(note: String)
@@ -30,21 +30,40 @@ enum DispatchPolicy {
     static let scriptRealNote = "Injected by renderer"
     static let navigationNote = "Click-through: recorded, not followed in the simulator"
     static let creativeNote = "Creative requests are loaded by the web view"
+    static let offlineNote = "Offline: recorded, not sent"
+
+    /// Where a request would go: only a `.remote` one can leave the machine.
+    enum Destination: Sendable, Hashable {
+        /// `data:` and `ccinn-sample:` URLs, served on this Mac.
+        case local
+        /// Everything else.
+        case remote
+
+        init(url: String) {
+            switch URLText.scheme(url) {
+            case "data"?, SampleURL.scheme?: self = .local
+            default: self = .remote
+            }
+        }
+    }
 
     /// The decision for one request.
     /// - Trackers obey the mode: Simulated records, Real sends (script trackers are injected by the renderer).
-    /// - Content is always fetched (it is needed to render the ad).
+    /// - Content is fetched in both modes (it is needed to render the ad), except remote content when `offline`.
+    /// - Offline is Simulated tracking plus offline content: trackers are recorded whatever `mode` says.
     /// - Navigation and creative requests are never sent by the monitor.
-    static func action(for category: TrackerCategory, isScript: Bool, mode: TrackingMode) -> DispatchAction {
+    static func action(for category: TrackerCategory, isScript: Bool, mode: TrackingMode, offline: Bool = false,
+                       destination: Destination = .remote) -> DispatchAction {
         switch category {
         case .navigation:
             return .record(.simulated, .simulated, note: navigationNote)
         case .creative:
             return .record(.simulated, .simulated, note: creativeNote)
         case .content:
+            if offline, destination == .remote { return .record(.blocked, .offline, note: offlineNote) }
             return .send(SendPermit(category: category, mode: mode))
         default:
-            switch (mode, isScript) {
+            switch (offline ? .simulated : mode, isScript) {
             case (.simulated, false): return .record(.simulated, .simulated, note: simulatedNote)
             case (.simulated, true): return .record(.simulated, .simulated, note: scriptSimulatedNote)
             case (.real, true): return .renderer(note: scriptRealNote)
@@ -53,10 +72,13 @@ enum DispatchPolicy {
         }
     }
 
-    /// A permit for the next hop of a chain, re-checked against the mode at that moment: switching back to Simulated
-    /// stops a tracker's redirect chain before its next hop.
-    static func permit(for category: TrackerCategory, isScript: Bool, mode: TrackingMode) -> SendPermit? {
-        if case let .send(permit) = action(for: category, isScript: isScript, mode: mode) { return permit }
+    /// A permit for the next hop of a chain, re-checked against the mode and Offline at that moment: switching back to
+    /// Simulated stops a tracker's redirect chain before its next hop, and going Offline stops any chain.
+    static func permit(for category: TrackerCategory, isScript: Bool, mode: TrackingMode, offline: Bool = false,
+                       destination: Destination = .remote) -> SendPermit? {
+        if case let .send(permit) = action(for: category, isScript: isScript, mode: mode, offline: offline, destination: destination) {
+            return permit
+        }
         return nil
     }
 }

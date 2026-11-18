@@ -46,7 +46,7 @@ struct VASTPlayerModelTests {
         // Remote media: the player reported the load outcome to the monitor.
         let media = host.monitor.liveEntries.first { $0.url == "https://cdn.example/a.mp4" }
         #expect(media?.state == .completed(status: 200))
-        #expect(media?.delivery == .renderer)
+        #expect(media?.delivery == .network, "remote media is fetched by the monitor, not by AVPlayer")
         // Late engine noise after the end changes nothing.
         engine.tick(from: 3, to: 4)
         engine.send(.ended)

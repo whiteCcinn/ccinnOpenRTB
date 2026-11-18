@@ -83,7 +83,7 @@ struct NetworkTableView: View {
             Table(entries, selection: $selection) {
                 TableColumn("#") { NetworkCells.sequence($0) }.width(min: 28, ideal: 36, max: 70)
                 TableColumn("+ms") { NetworkCells.offset($0, origin: origin) }.width(min: 44, ideal: 56, max: 110)
-                TableColumn("Category") { CategoryBadge(category: $0.category) }.width(min: 80, ideal: 100, max: 140)
+                TableColumn("Category") { RequestCategoryBadge(entry: $0) }.width(min: 80, ideal: 100, max: 140)
                 TableColumn("Trigger") { Text($0.trigger).lineLimit(1).help($0.source) }.width(min: 70, ideal: 118, max: 260)
                 TableColumn("URL") { NetworkCells.url($0) }.width(min: 100, ideal: 180)
                 TableColumn("Mode") { DeliveryBadge(delivery: $0.delivery) }.width(min: 70, ideal: 88, max: 120)
@@ -118,7 +118,7 @@ struct NetworkTreeView: View {
                 TableColumn("Request") { node in
                     HStack(spacing: 6) {
                         NetworkCells.sequence(node.entry)
-                        CategoryBadge(category: node.entry.category)
+                        RequestCategoryBadge(entry: node.entry)
                         Text(node.entry.trigger).lineLimit(1)
                     }
                     .help(node.entry.source)

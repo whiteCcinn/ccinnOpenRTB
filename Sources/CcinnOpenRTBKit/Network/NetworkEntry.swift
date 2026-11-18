@@ -12,7 +12,7 @@ public enum TrackingMode: String, Sendable, Hashable, Codable {
 public enum NetworkEntryState: Sendable, Hashable {
     /// A tracker in Simulated mode: recorded, never sent.
     case simulated
-    /// A creative request stopped by the simulated-mode sandbox.
+    /// Stopped before it was sent: a creative request by the Simulated-mode sandbox, remote content by Offline.
     case blocked
     case pending
     case completed(status: Int)
@@ -29,10 +29,13 @@ public enum NetworkDelivery: String, Sendable, Hashable, Codable, CaseIterable {
     case blocked
     /// Served without the network: a `data:` URL or built-in sample media.
     case local
-    /// Loaded by the renderer itself: AVPlayer media, allowed creative loads, injected script trackers.
+    /// Loaded by the renderer itself: allowed creative loads, injected script trackers. (Remote AVPlayer media is fetched
+    /// by the monitor: `network`.)
     case renderer
     /// Opened in the default browser (Real-mode click-through with "Open click-throughs in browser" on).
     case browser
+    /// Remote content recorded and not sent because the session is Offline.
+    case offline
 
     /// Short label for badges.
     public var label: String {
@@ -43,6 +46,7 @@ public enum NetworkDelivery: String, Sendable, Hashable, Codable, CaseIterable {
         case .local: "Local"
         case .renderer: "Renderer"
         case .browser: "Browser"
+        case .offline: "Offline"
         }
     }
 }
@@ -65,7 +69,11 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
     public var replacedMacros: [String]
     public var unknownMacros: [String]
     public var isScript: Bool
+    /// The request headers: as sent over the wire when `requestHeadersAsSent`, otherwise the ones the request was (or
+    /// would have been) sent with, before the HTTP stack added its own.
     public var requestHeaders: [String: String]
+    /// `requestHeaders` are the headers that went over the wire (reported by the transport).
+    public var requestHeadersAsSent: Bool
     public var responseHeaders: [String: String]
     public var responseBytes: Int?
     public var mimeType: String?
@@ -85,7 +93,7 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
                 state: NetworkEntryState, replacedMacros: [String] = [], unknownMacros: [String] = [], isScript: Bool = false,
                 requestHeaders: [String: String] = [:], responseHeaders: [String: String] = [:], responseBytes: Int? = nil,
                 mimeType: String? = nil, redirectLocation: String? = nil, delivery: NetworkDelivery = .simulated,
-                sessionMode: TrackingMode = .simulated, note: String? = nil, timings: HTTPTimings? = nil) {
+                sessionMode: TrackingMode = .simulated, note: String? = nil, timings: HTTPTimings? = nil, requestHeadersAsSent: Bool = false) {
         self.id = id
         self.parentID = parentID
         self.sequence = sequence
@@ -102,6 +110,7 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
         self.unknownMacros = unknownMacros
         self.isScript = isScript
         self.requestHeaders = requestHeaders
+        self.requestHeadersAsSent = requestHeadersAsSent
         self.responseHeaders = responseHeaders
         self.responseBytes = responseBytes
         self.mimeType = mimeType

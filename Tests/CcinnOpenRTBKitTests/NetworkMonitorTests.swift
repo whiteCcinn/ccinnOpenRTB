@@ -21,6 +21,32 @@ struct DispatchPolicyTests {
         #expect(DispatchPolicy.permit(for: .impression, isScript: true, mode: .real) == nil)
     }
 
+    /// Offline = Simulated tracking + offline content: no permit for any remote request, whatever the mode says; local
+    /// content (`data:`, `ccinn-sample:`) is still served.
+    @Test(arguments: TrackerCategory.allCases, [TrackingMode.simulated, .real])
+    func offlineIssuesNoPermitForARemoteRequest(category: TrackerCategory, mode: TrackingMode) {
+        for isScript in [false, true] {
+            #expect(DispatchPolicy.permit(for: category, isScript: isScript, mode: mode, offline: true) == nil, "\(category) \(mode)")
+            if category.isTracker {
+                let action = DispatchPolicy.action(for: category, isScript: isScript, mode: mode, offline: true)
+                #expect(action == .record(.simulated, .simulated, note: isScript ? DispatchPolicy.scriptSimulatedNote : DispatchPolicy.simulatedNote))
+            }
+        }
+        #expect(DispatchPolicy.action(for: .content, isScript: false, mode: mode, offline: true)
+            == .record(.blocked, .offline, note: DispatchPolicy.offlineNote))
+        let local = DispatchPolicy.action(for: .content, isScript: false, mode: mode, offline: true, destination: .local)
+        #expect({ if case .send = local { true } else { false } }(), "\(local)")
+        #expect(DispatchPolicy.permit(for: .content, isScript: false, mode: mode, offline: true, destination: .local) != nil)
+    }
+
+    @Test func destinationsAreLocalOnlyForDataAndSampleURLs() {
+        #expect(DispatchPolicy.Destination(url: "data:text/xml,<VAST/>") == .local)
+        #expect(DispatchPolicy.Destination(url: "CCINN-SAMPLE://image/icon.png") == .local)
+        #expect(DispatchPolicy.Destination(url: "https://cdn.example/a.mp4") == .remote)
+        #expect(DispatchPolicy.Destination(url: "//cdn.example/a.mp4") == .remote)
+        #expect(DispatchPolicy.Destination(url: "ftp://cdn.example/a.mp4") == .remote)
+    }
+
     @Test(arguments: [TrackingMode.simulated, .real])
     func contentIsAlwaysFetchedNavigationAndCreativeNever(mode: TrackingMode) {
         #expect(DispatchPolicy.permit(for: .content, isScript: false, mode: mode) != nil)
@@ -99,7 +125,8 @@ struct SimulatedModeTests {
         #expect(monitor.entry(id: id)?.note == "Not sent: switched to Simulated mode")
     }
 
-    /// Switching to Simulated while a redirect chain runs: the next hop is recorded, not sent.
+    /// Switching to Simulated while a redirect chain runs: the hop in flight is cancelled (even if its 302 still
+    /// arrives) and the next hop is neither sent nor recorded.
     @Test func switchingToSimulatedMidChainStopsTheNextHop() async {
         let transport = FakeTransport()
         let monitor = makeMonitor(transport: transport)
@@ -109,10 +136,8 @@ struct SimulatedModeTests {
         let id = monitor.dispatch(tracker(.impression, "https://t.example/imp"), userAgent: deviceUA)
         await monitor.waitUntilIdle()
         #expect(transport.requestedURLs == ["https://t.example/imp"])
-        let hop = monitor.entries.last
-        #expect(hop?.parentID == id)
-        #expect(hop?.state == .simulated)
-        #expect(hop?.redirectLocation == "https://hop.example/next")
+        #expect(monitor.entries.count == 1)
+        #expect(monitor.entry(id: id)?.state == .failed("Cancelled: \(NetworkMonitor.simulatedCancellation)"))
     }
 
     @Test func contentIsStillFetchedInSimulatedMode() async throws {
@@ -372,9 +397,14 @@ struct ContentTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
         try? FileManager.default.removeItem(at: file)
 
+        // Remote media: a private URL only its resource loader answers (the monitor fetches every byte).
         let remote = await monitor.prepareMedia("https://cdn.example/ad.mp4", trigger: "media", source: "VAST", parentID: nil, userAgent: deviceUA)
-        #expect(remote.playableURL?.absoluteString == "https://cdn.example/ad.mp4")
+        #expect(remote.playableURL?.scheme?.hasPrefix(MediaResourceLoader.schemePrefix) == true)
+        #expect(remote.resourceLoader?.url == remote.playableURL)
+        #expect(remote.resourceLoader?.remoteURL.absoluteString == "https://cdn.example/ad.mp4")
+        #expect(sample.resourceLoader == nil && data.resourceLoader == nil)
         #expect(monitor.entry(id: remote.entryID)?.state == .pending)
+        #expect(monitor.entry(id: remote.entryID)?.delivery == .network)
         monitor.finishRendererLoad(remote.entryID, responseBytes: 1234, mimeType: "video/mp4")
         #expect(monitor.entry(id: remote.entryID)?.state == .completed(status: 0))
         #expect(monitor.entry(id: remote.entryID)?.responseBytes == 1234)

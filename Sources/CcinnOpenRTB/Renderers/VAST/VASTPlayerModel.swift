@@ -309,7 +309,7 @@ final class VASTPlayerModel {
             adActive = true
             phase = .loading
             engine.setMuted(isMuted)
-            engine.load(url)
+            engine.load(url, resourceLoader: prepared.resourceLoader)
             startReadyTimeout()
             return await withCheckedContinuation { continuation in outcome = continuation }
         }

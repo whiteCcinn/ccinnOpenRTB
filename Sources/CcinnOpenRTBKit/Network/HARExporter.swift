@@ -83,6 +83,7 @@ public enum HARExporter {
                 template: entry.template,
                 macros: HARMacros(replaced: entry.replacedMacros, unknown: entry.unknownMacros),
                 isScript: entry.isScript,
+                requestHeadersAsSent: entry.requestHeadersAsSent,
                 redirectLocation: entry.redirectLocation,
                 error: error
             )
@@ -220,6 +221,8 @@ struct HARCustom: Codable, Sendable {
     var template: String
     var macros: HARMacros
     var isScript: Bool
+    /// `request.headers` are the headers that went over the wire (otherwise: the headers it was, or would be, sent with).
+    var requestHeadersAsSent: Bool
     var redirectLocation: String?
     var error: String?
 }

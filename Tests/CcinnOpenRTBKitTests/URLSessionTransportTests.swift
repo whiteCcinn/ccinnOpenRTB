@@ -141,6 +141,44 @@ struct URLSessionTransportTests {
         await #expect(throws: (any Error).self) { _ = try await task.value }
     }
 
+    /// No authentication challenge is ever answered (Basic, Digest, Negotiate, NTLM), even when a credential is at hand:
+    /// one stored for the protection space, or user info in the URL. The 401 comes back as the response, once.
+    @Test(arguments: ["Basic realm=\"ads\"", "Digest realm=\"ads\", nonce=\"1\"", "Negotiate", "NTLM"])
+    func authenticationChallengesAreCancelledNotAnswered(_ challenge: String) async throws {
+        let server = try LoopbackHTTPServer { _ in .text("denied", status: 401, headers: ["WWW-Authenticate": challenge]) }
+        let port = try await server.start()
+        defer { server.stop() }
+        let storage = URLCredentialStorage()
+        let space = URLProtectionSpace(host: "127.0.0.1", port: Int(port), protocol: "http", realm: "ads",
+                                       authenticationMethod: NSURLAuthenticationMethodHTTPBasic)
+        storage.setDefaultCredential(URLCredential(user: "user", password: "secret", persistence: .forSession), for: space)
+        let configuration = URLSessionTransport.defaultConfiguration()
+        configuration.urlCredentialStorage = storage
+        let transport = URLSessionTransport(configuration: configuration)
+
+        for url in ["http://127.0.0.1:\(port)/vast", "http://user:secret@127.0.0.1:\(port)/vast"] {
+            let response = try await transport.perform(HTTPRequest(url: try #require(URL(string: url)), timeout: 10, maxBodyBytes: 1_024))
+            #expect(response.status == 401, "\(url)")
+        }
+        #expect(server.requests.count == 2, "one request per URL, never retried with credentials: \(server.requests)")
+        #expect(server.requests.allSatisfy { $0.header("Authorization") == nil }, "\(server.requests)")
+    }
+
+    @Test func monitorRecordsTheUnansweredChallengeAs401() async throws {
+        let server = try LoopbackHTTPServer { _ in .text("denied", status: 401, headers: ["WWW-Authenticate": "Negotiate"]) }
+        let port = try await server.start()
+        defer { server.stop() }
+        let monitor = await MainActor.run { NetworkMonitor(transport: URLSessionTransport(), publishInterval: .zero) }
+        await #expect(throws: NetworkMonitorError.self) {
+            _ = try await monitor.fetchContent("http://127.0.0.1:\(port)/vast", trigger: "VAST tag", source: "VAST", parentID: nil,
+                                               userAgent: deviceUA)
+        }
+        let entry = try #require(await monitor.liveEntries.first)
+        #expect(entry.status == 401)
+        #expect(entry.responseHeader("WWW-Authenticate") == "Negotiate")
+        #expect(server.requests.count == 1)
+    }
+
     /// A task that completes before `start` stored the continuation still resumes (no hang).
     @Test func completionBeforeStartStillResumes() async throws {
         let exchange = Exchange(maxBodyBytes: 10)

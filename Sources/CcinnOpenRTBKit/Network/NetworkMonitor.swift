@@ -8,6 +8,10 @@ import RTBKit
 /// - Simulated mode never sends a tracker: `DispatchPolicy` is the only source of the `SendPermit` that the single
 ///   transport call site (`send(_:permit:)`) requires, and it issues none for Simulated-mode trackers. A tracker's
 ///   redirect chain re-checks the mode before every hop.
+/// - Offline (`offline`) is Simulated tracking plus offline content: remote content is recorded and not sent
+///   (`NetworkDelivery.offline`, `NetworkMonitorError.offline`); only `data:` and `ccinn-sample:` URLs load.
+/// - Leaving Real mode cancels every tracker in flight at once (no further redirect hop is sent); going Offline cancels
+///   every request in flight; `cancelInFlightTrackers(reason:)` does the first on demand (Render, Reset).
 /// - `entries` is published coalesced (at most every `publishInterval`, 50 ms by default) so bursts do not thrash
 ///   SwiftUI. `flush()` publishes at once; `NetworkMonitor(publishInterval: .zero)` publishes synchronously (tests).
 ///   `entry(id:)` and `liveEntries` read the log directly.
@@ -18,37 +22,93 @@ public final class NetworkMonitor {
     public static let defaultCapacity = 10_000
     public static let maxRedirects = 10
     /// Content (VAST, images, markup) larger than this fails.
-    public static let maxContentBytes = 32 << 20
+    public nonisolated static let maxContentBytes = 32 << 20
     /// Tracker bodies are read up to this size and then truncated (the size read is still recorded).
     public static let maxTrackerBodyBytes = 1 << 20
+    /// What an en-US iPhone sends.
+    public nonisolated static let defaultAcceptLanguage = "en-US,en;q=0.9"
+    /// The size of each byte-range request for progressive media.
+    public nonisolated static let defaultMediaChunkBytes = 2 << 20
+
+    /// Why trackers in flight are cancelled when the session leaves Real mode.
+    public nonisolated static let simulatedCancellation = "switched to Simulated mode"
+    /// Why every request in flight is cancelled when the session goes Offline.
+    public nonisolated static let offlineCancellation = "the session went Offline"
 
     /// The published (coalesced) entries, in sequence order.
     public private(set) var entries: [NetworkEntry] = []
-    public var mode: TrackingMode = .simulated
+
+    /// Whether trackers are sent. Leaving `.real` cancels every tracker in flight; choosing `.real` leaves Offline.
+    public var mode: TrackingMode {
+        get { trackingMode }
+        set {
+            trackingMode = newValue
+            if newValue == .real {
+                isOffline = false
+            } else {
+                cancelInFlightTrackers(reason: Self.simulatedCancellation)
+            }
+        }
+    }
+
+    /// Offline: Simulated tracking plus offline content. Turning it on switches to Simulated mode, closes the creative's
+    /// own network and cancels every request in flight; remote content is then recorded and not sent.
+    public var offline: Bool {
+        get { isOffline }
+        set {
+            guard newValue != isOffline else { return }
+            isOffline = newValue
+            guard newValue else { return }
+            trackingMode = .simulated
+            cancelLoads(reason: Self.offlineCancellation) { _ in true }
+        }
+    }
     /// Seconds allowed for each request hop (Settings ▸ Network ▸ Request timeout); used clamped to 0.1…300.
     public var requestTimeout: TimeInterval = 15
+    /// `Accept-Language` of every request the monitor sends, set explicitly so the Mac's locale never leaks through
+    /// CFNetwork's default. The simulated device's language when the session knows it; `defaultAcceptLanguage` otherwise.
+    public var acceptLanguage: String = NetworkMonitor.defaultAcceptLanguage
+
+    private var trackingMode: TrackingMode = .simulated
+    private var isOffline = false
 
     @ObservationIgnored private var log: NetworkLog
     @ObservationIgnored private var bodies = ResponseBodyStore()
     @ObservationIgnored private let transport: any HTTPTransport
     @ObservationIgnored private let clock: any NetworkClock
     @ObservationIgnored private let samples: any SampleMediaProviding
+    /// The files `data:` media is written to for the player, deleted when the render ends.
+    @ObservationIgnored private let mediaFiles: MediaTemporaryFiles
+    /// Routes remote media for the player through the monitor; created with the first remote media.
+    @ObservationIgnored private var mediaRouterStorage: MediaRouter?
+    /// The size of each byte-range request for progressive media (tests make it small).
+    @ObservationIgnored var mediaChunkBytes = NetworkMonitor.defaultMediaChunkBytes
     @ObservationIgnored private let publishInterval: Duration
     @ObservationIgnored private var publishScheduled = false
     @ObservationIgnored private var dirty = false
     /// Incremented by `clear()`; in-flight work started under an older generation stops recording.
     @ObservationIgnored private var generation = 0
-    @ObservationIgnored private var inFlight: [UUID: Task<Void, Never>] = [:]
+    /// Every load in progress (trackers and content), by root entry id.
+    @ObservationIgnored private var activeLoads: [UUID: ActiveLoad] = [:]
+    /// Loads cancelled while in flight, with the error they end with; their entries are already finished.
+    @ObservationIgnored private var cancelledLoads: [UUID: NetworkMonitorError] = [:]
     /// Entries whose outcome the renderer reports (`finishRendererLoad`).
     @ObservationIgnored private var rendererLoads: Set<UUID> = []
 
-    public init(transport: any HTTPTransport = URLSessionTransport.shared, clock: any NetworkClock = SystemNetworkClock(),
-                samples: any SampleMediaProviding = SampleMedia.shared, publishInterval: Duration = .milliseconds(50),
-                capacity: Int = NetworkMonitor.defaultCapacity) {
+    public convenience init(transport: any HTTPTransport = URLSessionTransport.shared, clock: any NetworkClock = SystemNetworkClock(),
+                            samples: any SampleMediaProviding = SampleMedia.shared, publishInterval: Duration = .milliseconds(50),
+                            capacity: Int = NetworkMonitor.defaultCapacity) {
+        self.init(transport: transport, clock: clock, samples: samples, publishInterval: publishInterval, capacity: capacity,
+                  mediaFiles: MediaTemporaryFiles())
+    }
+
+    init(transport: any HTTPTransport, clock: any NetworkClock = SystemNetworkClock(), samples: any SampleMediaProviding,
+         publishInterval: Duration, capacity: Int = NetworkMonitor.defaultCapacity, mediaFiles: MediaTemporaryFiles) {
         self.transport = transport
         self.clock = clock
         self.samples = samples
         self.publishInterval = publishInterval
+        self.mediaFiles = mediaFiles
         log = NetworkLog(capacity: capacity)
     }
 
@@ -63,8 +123,8 @@ public final class NetworkMonitor {
     /// The stored response body (≤ 512 KiB per entry, 32 MiB overall) for previews.
     public func responseBody(for id: UUID) -> Data? { bodies.body(for: id) }
 
-    /// Requests started by `dispatch` that are still being sent.
-    public var inFlightCount: Int { inFlight.count }
+    /// Requests the monitor is still loading (trackers and content).
+    public var inFlightCount: Int { activeLoads.count }
 
     /// Publishes pending changes to `entries` now.
     public func flush() {
@@ -74,11 +134,11 @@ public final class NetworkMonitor {
         entries = log.entries
     }
 
-    /// Waits until every request started by `dispatch` has finished (tests, export).
+    /// Waits until every request in flight has finished (tests, export).
     public func waitUntilIdle() async {
-        while let (id, task) = inFlight.first {
-            await task.value
-            inFlight[id] = nil
+        while let (id, load) = activeLoads.first {
+            _ = await load.task.value
+            if activeLoads[id]?.task == load.task { activeLoads[id] = nil }
         }
     }
 
@@ -91,7 +151,8 @@ public final class NetworkMonitor {
                                  trigger: request.trigger, source: request.source, template: request.template, url: request.url,
                                  state: .pending, replacedMacros: request.replacedMacros, unknownMacros: request.unknownMacros,
                                  isScript: request.isScript, sessionMode: mode)
-        switch DispatchPolicy.action(for: request.category, isScript: request.isScript, mode: mode) {
+        let destination = DispatchPolicy.Destination(url: request.url)
+        switch DispatchPolicy.action(for: request.category, isScript: request.isScript, mode: mode, offline: offline, destination: destination) {
         case let .record(state, delivery, note):
             entry.state = state
             entry.delivery = delivery
@@ -100,24 +161,17 @@ public final class NetworkMonitor {
         case let .renderer(note):
             entry.delivery = .renderer
             entry.note = note
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             rendererLoads.insert(stored.id)
             return stored.id
         case let .send(permit):
             entry.delivery = .network
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
             let isTracker = request.category.isTracker
             let limit = isTracker ? Self.maxTrackerBodyBytes : Self.maxContentBytes
-            let token = generation
-            let task = Task { [weak self] in
-                guard let self else { return }
-                _ = await self.load(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: !isTracker)
-                // After `clear()` the id may belong to a newer request's task: leave that one alone.
-                if self.generation == token { self.inFlight[stored.id] = nil }
-            }
-            inFlight[stored.id] = task
+            startLoad(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: !isTracker)
             return stored.id
         }
     }
@@ -127,16 +181,19 @@ public final class NetworkMonitor {
     /// Fetches content needed to render (VAST wrappers, media, images, win-notice markup) in both modes. `data:` URLs are
     /// decoded and `ccinn-sample://` URLs served locally (still recorded). A tracker `category` (e.g. `.win` for
     /// win-notice markup) obeys the mode: in Simulated mode it is recorded and `notSentInSimulatedMode` is thrown.
+    /// Offline, remote content is recorded and `offline` is thrown.
     public func fetchContent(_ url: String, category: TrackerCategory = .content, trigger: String, source: String, parentID: UUID?,
                              userAgent: String) async throws -> (data: Data, entryID: UUID) {
         var entry = NetworkEntry(parentID: parentID, sequence: 0, startedAt: clock.now(), category: category, trigger: trigger, source: source,
                                  template: url, url: url, state: .pending, sessionMode: mode)
-        switch DispatchPolicy.action(for: category, isScript: false, mode: mode) {
+        switch DispatchPolicy.action(for: category, isScript: false, mode: mode, offline: offline, destination: DispatchPolicy.Destination(url: url)) {
         case let .record(state, delivery, note):
             entry.state = state
             entry.delivery = delivery
             entry.note = note
+            if delivery == .offline { entry.requestHeaders = requestHeaders(userAgent: userAgent) }
             let stored = append(entry)
+            if delivery == .offline { throw NetworkMonitorError.offline(entryID: stored.id) }
             if category.isTracker { throw NetworkMonitorError.notSentInSimulatedMode(entryID: stored.id) }
             throw NetworkMonitorError.notFetchable(entryID: stored.id)
         case .renderer:
@@ -145,18 +202,26 @@ public final class NetworkMonitor {
             throw NetworkMonitorError.notFetchable(entryID: stored.id)
         case let .send(permit):
             entry.delivery = .network
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
             let stored = append(entry)
-            let limit = Self.maxContentBytes
-            let outcome = await load(stored, permit: permit, userAgent: userAgent, maxBodyBytes: limit, failOnTruncation: true)
-            return (try outcome.get(), stored.id)
+            guard DispatchPolicy.Destination(url: url) == .remote else {
+                // data: and ccinn-sample: never touch the network: served in the caller's task, nothing to cancel.
+                return (try await load(stored, permit: permit, userAgent: userAgent, headers: [:], maxBodyBytes: Self.maxContentBytes,
+                                       failOnTruncation: true).get().body, stored.id)
+            }
+            let task = startLoad(stored, permit: permit, userAgent: userAgent, maxBodyBytes: Self.maxContentBytes, failOnTruncation: true)
+            let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+            return (try outcome.get().body, stored.id)
         }
     }
 
-    /// Prepares media for a player (AVPlayer): `ccinn-sample://` becomes the generated local file, `data:` a temporary
-    /// file, and `http(s)` stays remote (the player streams it; report the outcome with `finishRendererLoad`).
-    public func prepareMedia(_ url: String, trigger: String, source: String, parentID: UUID?,
-                             userAgent: String) async -> (playableURL: URL?, entryID: UUID) {
+    /// Prepares media for a player (AVPlayer): `ccinn-sample://` becomes the generated local file and `data:` a temporary
+    /// file (deleted when the render ends). `http(s)` media gets a private-scheme `playableURL` that only its
+    /// `resourceLoader` answers: open it with `AVURLAsset` and `resourceLoader.attach(to:)`, then every byte the player
+    /// needs (byte ranges, redirects, HLS playlists, keys and segments) is fetched by the monitor, through the dispatch
+    /// policy, with the device's headers and no cookies, and recorded under the media entry. Report the player's outcome
+    /// with `finishRendererLoad`. Offline, remote media is recorded and not prepared (`failure` is `offline`).
+    public func prepareMedia(_ url: String, trigger: String, source: String, parentID: UUID?, userAgent: String) async -> PreparedMedia {
         var entry = NetworkEntry(parentID: parentID, sequence: 0, startedAt: clock.now(), category: .content, trigger: trigger, source: source,
                                  template: url, url: url, state: .pending, sessionMode: mode)
         let token = generation
@@ -166,16 +231,17 @@ public final class NetworkMonitor {
             let stored = append(entry)
             guard let asset = SampleURL.parse(url) else {
                 finish(stored.id, failure: .sampleUnavailable("unknown sample \(url.prefix(120))"), token: token)
-                return (nil, stored.id)
+                return PreparedMedia(entryID: stored.id, failure: .sampleUnavailable("unknown sample"))
             }
             do {
                 let file = try await samples.fileURL(for: asset)
                 let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.intValue
                 finishLocal(stored.id, bytes: size, mimeType: asset.mimeType, note: Self.sampleNote, body: nil, token: token)
-                return (file, stored.id)
+                return PreparedMedia(playableURL: file, entryID: stored.id)
             } catch {
-                finish(stored.id, failure: .sampleUnavailable(error.localizedDescription), token: token)
-                return (nil, stored.id)
+                let failure = NetworkMonitorError.sampleUnavailable(error.localizedDescription)
+                finish(stored.id, failure: failure, token: token)
+                return PreparedMedia(entryID: stored.id, failure: failure)
             }
         case "data"?:
             entry.delivery = .local
@@ -183,34 +249,82 @@ public final class NetworkMonitor {
             entry.url = entry.template
             let stored = append(entry)
             guard let decoded = DataURL.decode(url) else {
-                finish(stored.id, failure: .invalidURL("malformed data: URL"), token: token)
-                return (nil, stored.id)
+                let failure = NetworkMonitorError.invalidURL("malformed data: URL")
+                finish(stored.id, failure: failure, token: token)
+                return PreparedMedia(entryID: stored.id, failure: failure)
             }
-            let file = Self.temporaryMediaFile(for: decoded.mimeType)
             do {
-                try await Self.write(decoded.data, to: file)
+                let file = try await mediaFiles.write(decoded.data, mimeType: decoded.mimeType)
                 finishLocal(stored.id, bytes: decoded.data.count, mimeType: decoded.mimeType, note: Self.dataURLNote, body: nil, token: token)
-                return (file, stored.id)
+                return PreparedMedia(playableURL: file, entryID: stored.id)
             } catch {
-                finish(stored.id, failure: .transport(error.localizedDescription), token: token)
-                return (nil, stored.id)
+                let failure = NetworkMonitorError.transport(error.localizedDescription)
+                finish(stored.id, failure: failure, token: token)
+                return PreparedMedia(entryID: stored.id, failure: failure)
             }
         case "http"?, "https"?:
-            entry.delivery = .renderer
-            entry.note = "Streamed by the player"
-            entry.requestHeaders = Self.requestHeaders(userAgent: userAgent)
+            entry.requestHeaders = requestHeaders(userAgent: userAgent)
+            if case let .record(state, delivery, note) = DispatchPolicy.action(for: .content, isScript: false, mode: mode, offline: offline) {
+                entry.state = state
+                entry.delivery = delivery
+                entry.note = note
+                let stored = append(entry)
+                return PreparedMedia(entryID: stored.id, failure: delivery == .offline ? .offline(entryID: stored.id) : .notFetchable(entryID: stored.id))
+            }
+            entry.delivery = .network
+            entry.note = MediaRouter.mediaNote
             let stored = append(entry)
-            guard let playable = URLText.requestURL(url) else {
-                finish(stored.id, failure: .invalidURL(url), token: token)
-                return (nil, stored.id)
+            guard let remote = URLText.requestURL(url) else {
+                let failure = NetworkMonitorError.invalidURL(url)
+                finish(stored.id, failure: failure, token: token)
+                return PreparedMedia(entryID: stored.id, failure: failure)
             }
             rendererLoads.insert(stored.id)
-            return (playable, stored.id)
+            let router = mediaRouterStorage ?? MediaRouter(monitor: self)
+            mediaRouterStorage = router
+            let loader = router.makeLoader(for: remote, media: MediaContext(entryID: stored.id, source: source, trigger: trigger, userAgent: userAgent))
+            return PreparedMedia(playableURL: loader.url, entryID: stored.id, resourceLoader: loader)
         default:
             let stored = append(entry)
-            finish(stored.id, failure: .unsupportedScheme(URLText.scheme(url) ?? ""), token: token)
-            return (nil, stored.id)
+            let failure = NetworkMonitorError.unsupportedScheme(URLText.scheme(url) ?? "")
+            finish(stored.id, failure: failure, token: token)
+            return PreparedMedia(entryID: stored.id, failure: failure)
         }
+    }
+
+    /// One request the player's remote media needs (a byte range, an HLS playlist, key or segment), decided by the
+    /// dispatch policy like any content and recorded as a child of `part.parentID`. Returns the root entry and the final
+    /// response. Cancelled when the caller is (the player cancelled), by Offline and by `clear()`.
+    func fetchMediaPart(_ part: MediaPartRequest) async -> (entryID: UUID, result: Result<LoadedResponse, NetworkMonitorError>) {
+        let url = part.url.absoluteString
+        var headers: [String: String] = [:]
+        if let range = part.range { headers["Range"] = range.header }
+        var entry = NetworkEntry(parentID: part.parentID, sequence: 0, startedAt: clock.now(), category: .content, trigger: part.trigger,
+                                 source: part.source, template: url, url: url, state: .pending,
+                                 requestHeaders: requestHeaders(userAgent: part.userAgent).merging(headers) { _, part in part }, sessionMode: mode)
+        switch DispatchPolicy.action(for: .content, isScript: false, mode: mode, offline: offline, destination: DispatchPolicy.Destination(url: url)) {
+        case let .record(state, delivery, note):
+            entry.state = state
+            entry.delivery = delivery
+            entry.note = note
+            let stored = append(entry)
+            return (stored.id, .failure(delivery == .offline ? .offline(entryID: stored.id) : .notFetchable(entryID: stored.id)))
+        case .renderer:
+            let stored = append(entry)
+            return (stored.id, .failure(.notFetchable(entryID: stored.id)))
+        case let .send(permit):
+            entry.delivery = .network
+            let stored = append(entry)
+            let task = startLoad(stored, permit: permit, userAgent: part.userAgent, headers: headers, maxBodyBytes: part.maxBodyBytes,
+                                 failOnTruncation: false)
+            let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+            return (stored.id, result)
+        }
+    }
+
+    /// Changes the trigger of a media request once its response says what it is (an HLS playlist).
+    func relabel(_ id: UUID, trigger: String) {
+        update(id) { $0.trigger = trigger }
     }
 
     /// Reports the outcome of a load the renderer performed itself: player media from `prepareMedia`, a creative request
@@ -251,11 +365,29 @@ public final class NetworkMonitor {
 
     // MARK: Session
 
+    /// Cancels every tracker in flight (not content): its entry is finished at once as cancelled with `reason`, and no
+    /// further redirect hop is sent. Leaving Real mode does this with `simulatedCancellation`; the session also calls it
+    /// when a render ends (Render, Reset, a new generation).
+    public func cancelInFlightTrackers(reason: String) {
+        cancelLoads(reason: reason) { $0.isTracker }
+    }
+
+    /// The session's render ended (Render, Reset, a new generation): what the monitor prepared for it is released: the
+    /// temporary files of its `data:` media, and the routes of its remote media (their loaders and proxy routes answer
+    /// nothing more, and their requests in flight are cancelled). Call it before the next render prepares its media.
+    public func endRender() {
+        mediaFiles.removeAll()
+        mediaRouterStorage?.invalidate()
+    }
+
     /// Empties the log and restarts the sequence; requests in flight stop following redirects and are not recorded.
+    /// Ends the render too (`endRender`).
     public func clear() {
+        endRender()
         generation &+= 1
-        for task in inFlight.values { task.cancel() }
-        inFlight.removeAll()
+        for load in activeLoads.values { load.task.cancel() }
+        activeLoads.removeAll()
+        cancelledLoads.removeAll()
         rendererLoads.removeAll()
         log.removeAll()
         bodies.removeAll()
@@ -277,11 +409,51 @@ public final class NetworkMonitor {
 
     // MARK: Loading
 
+    /// Starts `load` in its own task, registered in `activeLoads` so a mode switch, Offline or `clear()` can cancel it.
+    @discardableResult
+    private func startLoad(_ root: NetworkEntry, permit: SendPermit, userAgent: String, headers: [String: String] = [:], maxBodyBytes: Int,
+                           failOnTruncation: Bool) -> Task<Result<LoadedResponse, NetworkMonitorError>, Never> {
+        // Inherits the main actor: the body cannot start before the registration below.
+        let task = Task { [weak self] () -> Result<LoadedResponse, NetworkMonitorError> in
+            guard let self else { return .failure(.cleared) }
+            return await self.load(root, permit: permit, userAgent: userAgent, headers: headers, maxBodyBytes: maxBodyBytes,
+                                   failOnTruncation: failOnTruncation)
+        }
+        activeLoads[root.id] = ActiveLoad(task: task, isTracker: root.category.isTracker, currentEntryID: root.id)
+        return task
+    }
+
+    /// Cancels the matching loads, and the load stops without recording anything more. A hop already handed to the
+    /// transport is finished at once as cancelled; one not sent yet is recorded as not sent (Simulated, or Offline).
+    private func cancelLoads(reason: String, where matches: (ActiveLoad) -> Bool) {
+        let now = clock.now()
+        for (id, load) in activeLoads where matches(load) {
+            activeLoads[id] = nil
+            load.task.cancel()
+            guard load.isSending else {
+                cancelledLoads[id] = markNotSent(load.currentEntryID, isTracker: load.isTracker, reason: reason)
+                continue
+            }
+            let error = NetworkMonitorError.cancelled(reason)
+            cancelledLoads[id] = error
+            update(load.currentEntryID) { entry in
+                guard entry.state == .pending else { return }
+                entry.finishedAt = now
+                entry.state = .failed(error.errorDescription ?? reason)
+            }
+        }
+    }
+
     /// Loads `root` and follows redirects by hand: one recorded child entry per hop, at most `maxRedirects`, loops
-    /// refused. The dispatch policy is asked again, against the current mode, right before every hop is sent, so a
-    /// tracker is never sent after a switch to Simulated mode, not even its first hop.
-    private func load(_ root: NetworkEntry, permit _: SendPermit, userAgent: String, maxBodyBytes: Int,
-                      failOnTruncation: Bool) async -> Result<Data, NetworkMonitorError> {
+    /// refused. The dispatch policy is asked again, against the current mode and Offline, right before every hop is
+    /// sent, so a tracker is never sent after a switch to Simulated mode, not even its first hop. `headers` are added to
+    /// the monitor's own (e.g. `Range`).
+    private func load(_ root: NetworkEntry, permit _: SendPermit, userAgent: String, headers extraHeaders: [String: String], maxBodyBytes: Int,
+                      failOnTruncation: Bool) async -> Result<LoadedResponse, NetworkMonitorError> {
+        defer {
+            activeLoads[root.id] = nil
+            cancelledLoads[root.id] = nil
+        }
         let token = generation
         var currentID = root.id
         var currentURL = root.url
@@ -307,28 +479,29 @@ public final class NetworkMonitor {
                 return .failure(error)
             }
             guard token == generation else { return .failure(.cleared) }
-            guard let permit = DispatchPolicy.permit(for: root.category, isScript: root.isScript, mode: mode) else {
-                update(currentID) { entry in
-                    entry.state = .simulated
-                    entry.delivery = .simulated
-                    entry.requestHeaders = [:]
-                    entry.note = "Not sent: switched to Simulated mode"
-                }
-                return .failure(.notSentInSimulatedMode(entryID: currentID))
+            if let cancelled = cancelledLoads[root.id] { return .failure(cancelled) }
+            guard let permit = DispatchPolicy.permit(for: root.category, isScript: root.isScript, mode: mode, offline: offline) else {
+                return .failure(markNotSent(currentID, isTracker: root.category.isTracker, reason: Self.simulatedCancellation))
             }
             visited.insert(requestURL.absoluteString)
 
-            let request = HTTPRequest(url: requestURL, headers: Self.requestHeaders(userAgent: userAgent),
-                                      timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
+            let headers = requestHeaders(userAgent: userAgent).merging(extraHeaders) { _, extra in extra }
+            let request = HTTPRequest(url: requestURL, headers: headers, timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
+            update(currentID) { $0.requestHeaders = headers }
+            activeLoads[root.id]?.isSending = true
             let response: HTTPResponse
             do {
                 response = try await send(request, permit: permit)
             } catch {
+                // A cancelled load's entry is already finished, with its reason.
+                if let cancelled = cancelledLoads[root.id] { return .failure(cancelled) }
                 let failure = Self.monitorError(error)
                 finish(currentID, failure: failure, token: token)
                 return .failure(token == generation ? failure : .cleared)
             }
             guard token == generation else { return .failure(.cleared) }
+            if let cancelled = cancelledLoads[root.id] { return .failure(cancelled) }
+            activeLoads[root.id]?.isSending = false
 
             record(response, for: currentID, maxBodyBytes: maxBodyBytes)
 
@@ -338,7 +511,7 @@ public final class NetworkMonitor {
                 let nextScheme = URLText.scheme(nextURL)
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
                                        source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL, state: .pending,
-                                       isScript: root.isScript, requestHeaders: Self.requestHeaders(userAgent: userAgent),
+                                       isScript: root.isScript, requestHeaders: requestHeaders(userAgent: userAgent),
                                        redirectLocation: location, delivery: .network, sessionMode: mode)
                 let stop: NetworkMonitorError? = if next == nil {
                     .invalidURL(location)
@@ -362,7 +535,9 @@ public final class NetworkMonitor {
                 }
                 hops += 1
                 hop.note = "Redirect hop \(hops)"
+                hop.requestHeaders = requestHeaders(userAgent: userAgent).merging(extraHeaders) { _, extra in extra }
                 currentID = append(hop).id
+                activeLoads[root.id]?.currentEntryID = currentID
                 currentURL = nextURL
                 continue
             }
@@ -373,8 +548,31 @@ public final class NetworkMonitor {
                 return .failure(error)
             }
             guard (200..<300).contains(response.status) else { return .failure(.httpStatus(response.status, entryID: currentID)) }
-            return .success(response.body)
+            return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
+                                           entryID: currentID, truncated: response.truncated))
         }
+    }
+
+    /// Records a hop that will not be sent, because the mode or Offline changed (or the session cancelled trackers)
+    /// before it went out: Offline content as offline, anything else as simulated.
+    private func markNotSent(_ id: UUID, isTracker: Bool, reason: String) -> NetworkMonitorError {
+        if offline, !isTracker {
+            update(id) { entry in
+                entry.state = .blocked
+                entry.delivery = .offline
+                entry.requestHeadersAsSent = false
+                entry.note = DispatchPolicy.offlineNote
+            }
+            return .offline(entryID: id)
+        }
+        update(id) { entry in
+            entry.state = .simulated
+            entry.delivery = .simulated
+            entry.requestHeaders = [:]
+            entry.requestHeadersAsSent = false
+            entry.note = "Not sent: \(reason)"
+        }
+        return .notSentInSimulatedMode(entryID: id)
     }
 
     /// The only place a request reaches the transport. `permit` is the dispatch policy's proof that it may be sent.
@@ -403,6 +601,10 @@ public final class NetworkMonitor {
             entry.responseBytes = response.body.count
             entry.mimeType = response.mimeType
             entry.timings = response.timings
+            if let sent = response.sentHeaders {
+                entry.requestHeaders = sent
+                entry.requestHeadersAsSent = true
+            }
             if response.truncated {
                 let limit = ByteCountFormatter.string(fromByteCount: Int64(maxBodyBytes), countStyle: .binary)
                 entry.note = Self.joined(entry.note, "Body truncated at \(limit)")
@@ -411,7 +613,7 @@ public final class NetworkMonitor {
         bodies.store(response.body, for: id)
     }
 
-    private func loadDataURL(_ url: String, entryID: UUID, maxBodyBytes: Int, token: Int) -> Result<Data, NetworkMonitorError> {
+    private func loadDataURL(_ url: String, entryID: UUID, maxBodyBytes: Int, token: Int) -> Result<LoadedResponse, NetworkMonitorError> {
         update(entryID) { entry in
             entry.delivery = .local
             entry.requestHeaders = [:]
@@ -429,10 +631,10 @@ public final class NetworkMonitor {
             return .failure(error)
         }
         finishLocal(entryID, bytes: decoded.data.count, mimeType: decoded.mimeType, note: Self.dataURLNote, body: decoded.data, token: token)
-        return .success(decoded.data)
+        return .success(LoadedResponse(body: decoded.data, status: 200, headers: ["Content-Type": decoded.mimeType], url: nil, entryID: entryID))
     }
 
-    private func loadSample(_ url: String, entryID: UUID, token: Int) async -> Result<Data, NetworkMonitorError> {
+    private func loadSample(_ url: String, entryID: UUID, token: Int) async -> Result<LoadedResponse, NetworkMonitorError> {
         update(entryID) { entry in
             entry.delivery = .local
             entry.requestHeaders = [:]
@@ -446,7 +648,7 @@ public final class NetworkMonitor {
             let file = try await samples.fileURL(for: asset)
             let data = try await Self.readFile(file, limit: Self.maxContentBytes)
             finishLocal(entryID, bytes: data.count, mimeType: asset.mimeType, note: Self.sampleNote, body: data, token: token)
-            return .success(data)
+            return .success(LoadedResponse(body: data, status: 200, headers: ["Content-Type": asset.mimeType], url: nil, entryID: entryID))
         } catch {
             let failure = (error as? NetworkMonitorError) ?? .sampleUnavailable(error.localizedDescription)
             finish(entryID, failure: failure, token: token)
@@ -511,11 +713,23 @@ public final class NetworkMonitor {
     nonisolated static let sampleNote = "Local sample (generated on first use)"
     nonisolated static let dataURLNote = "data: URL decoded locally"
 
-    nonisolated static func requestHeaders(userAgent: String) -> [String: String] {
+    /// The headers the monitor sets on a request (the HTTP stack adds `Host`, `Accept-Encoding` and `Connection`).
+    func requestHeaders(userAgent: String) -> [String: String] {
+        Self.requestHeaders(userAgent: userAgent, language: acceptLanguage)
+    }
+
+    nonisolated static func requestHeaders(userAgent: String, language: String) -> [String: String] {
         var headers = ["Accept": "*/*"]
-        let agent = userAgent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !agent.isEmpty, !agent.contains(where: { $0 == "\r" || $0 == "\n" }) { headers["User-Agent"] = agent }
+        if let agent = headerValue(userAgent) { headers["User-Agent"] = agent }
+        headers["Accept-Language"] = headerValue(language) ?? defaultAcceptLanguage
         return headers
+    }
+
+    /// `value` trimmed, or `nil` when empty or when it could split the header (CR, LF).
+    nonisolated static func headerValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: { $0 == "\r" || $0 == "\n" }) else { return nil }
+        return trimmed
     }
 
     nonisolated static func isRedirect(_ status: Int) -> Bool {
@@ -551,19 +765,6 @@ public final class NetworkMonitor {
         return String(url.prefix(200)) + "…(\(url.utf8.count) bytes)"
     }
 
-    nonisolated static func temporaryMediaFile(for mimeType: String) -> URL {
-        let ext = switch mimeType {
-        case "video/mp4": "mp4"
-        case "video/quicktime": "mov"
-        case "audio/mp4", "audio/x-m4a", "audio/aac": "m4a"
-        case "audio/mpeg", "audio/mp3": "mp3"
-        case "application/x-mpegurl", "application/vnd.apple.mpegurl": "m3u8"
-        case "video/webm": "webm"
-        default: "bin"
-        }
-        return FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-media-\(UUID().uuidString).\(ext)")
-    }
-
     /// Reads a file off the main actor, refusing anything above `limit`.
     nonisolated static func readFile(_ url: URL, limit: Int) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
@@ -573,9 +774,27 @@ public final class NetworkMonitor {
         }.value
     }
 
-    nonisolated static func write(_ data: Data, to url: URL) async throws {
-        try await Task.detached(priority: .userInitiated) {
-            try data.write(to: url, options: .atomic)
-        }.value
-    }
+}
+
+/// What a load produced: the response of its final hop.
+struct LoadedResponse: Sendable {
+    var body: Data
+    var status: Int
+    var headers: [String: String]
+    /// The URL that answered (after redirects); `nil` when served locally.
+    var url: URL?
+    /// The entry of the final hop.
+    var entryID: UUID
+    /// The body was cut at the request's `maxBodyBytes`.
+    var truncated = false
+}
+
+/// One load in progress.
+struct ActiveLoad {
+    let task: Task<Result<LoadedResponse, NetworkMonitorError>, Never>
+    let isTracker: Bool
+    /// The current hop (the root, then each redirect hop).
+    var currentEntryID: UUID
+    /// The current hop has been handed to the transport.
+    var isSending = false
 }

@@ -6,6 +6,10 @@ public enum NetworkMonitorError: Error, Sendable, Equatable, LocalizedError {
     case notSentInSimulatedMode(entryID: UUID)
     /// Navigation and creative requests are recorded, never fetched by the monitor.
     case notFetchable(entryID: UUID)
+    /// Remote content while the session is Offline: recorded as `entryID`, nothing sent.
+    case offline(entryID: UUID)
+    /// Stopped while in flight (a switch to Simulated mode for trackers, Offline for everything); the reason says why.
+    case cancelled(String)
     case invalidURL(String)
     case unsupportedScheme(String)
     case httpStatus(Int, entryID: UUID)
@@ -23,6 +27,8 @@ public enum NetworkMonitorError: Error, Sendable, Equatable, LocalizedError {
         switch self {
         case .notSentInSimulatedMode: "Not sent: trackers are only recorded in Simulated mode."
         case .notFetchable: "Navigation and creative requests are not fetched by the monitor."
+        case .offline: "Offline: content requests are recorded, not sent. Only data: URLs and built-in samples load."
+        case let .cancelled(reason): "Cancelled: \(reason)"
         case let .invalidURL(url): "Invalid URL: \(url.prefix(200))"
         case let .unsupportedScheme(scheme): "Unsupported URL scheme “\(scheme.prefix(40))”."
         case let .httpStatus(status, _): "The server answered with status \(status)."
