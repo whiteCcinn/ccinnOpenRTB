@@ -278,6 +278,31 @@ struct AdSessionTests {
         #expect(harness.recorder.events == [.won])
     }
 
+    /// AdTech review: markup fetched after the win (AdCOM `display.curl`, the nurl response) is not the exchange's to
+    /// substitute: an OpenRTB `${…}` left in it stays literal, and the Inspector warns. Inline adm is substituted.
+    @Test func openRTBMacrosLeftInFetchedMarkupAreWarnedAbout() async throws {
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")]))
+        curl.transport.respond("https://cdn.example/creative.html",
+                               body: #"<img src="https://t.example/px?p=${AUCTION_PRICE}&id=${AUCTION_ID}"><script>var w = `${width}`;</script>"#)
+        await curl.paste()
+        await curl.renderAndWait()
+        #expect(curl.session.phase == .ready)
+        let issue = try #require(curl.session.renderIssues.first { $0.code == "openrtb.macro.unsubstituted" })
+        #expect(issue.severity == .warning)
+        #expect(issue.message.contains("${AUCTION_PRICE}") && issue.message.contains("${AUCTION_ID}") && !issue.message.contains("${width}"))
+        #expect(issue.message.contains("display.curl"))
+        guard case let .html(markup) = curl.session.renderRequest?.candidate.markup else {
+            Issue.record("the fetched HTML is rendered")
+            return
+        }
+        #expect(markup.contains("${AUCTION_PRICE}"), "sent as written")
+
+        let inline = SessionHarness(Fixtures.input([Fixtures.candidate(.html(#"<img src="https://t.example/px?p=${AUCTION_PRICE}">"#))]))
+        await inline.paste()
+        await inline.renderAndWait()
+        #expect(!inline.session.renderIssues.contains { $0.code == "openrtb.macro.unsubstituted" })
+    }
+
     // MARK: Network relationships
 
     /// The request that delivered the markup (AdCOM `display.curl`, or the nurl win notice) is the parent of the bid's

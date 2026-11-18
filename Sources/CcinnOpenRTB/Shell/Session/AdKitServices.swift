@@ -11,8 +11,10 @@ struct AdKitServices: Sendable {
     var parseNative: @Sendable (_ json: String, _ hints: NativeRequestHints?) -> (ad: NativeAd?, issues: [ValidationIssue])
     /// `VASTParser.parse(xml)` (inspector and Real-mode host list before resolution).
     var parseVAST: @Sendable (_ xml: String) -> (document: VASTDocument?, issues: [ValidationIssue])
-    /// `VASTResolver(fetcher:).resolve(source, parentRequestID:)`.
-    var resolveVAST: @Sendable (_ source: VASTSource, _ fetcher: any VASTFetcher, _ parentRequestID: UUID?) async -> ResolvedVAST
+    /// `VASTResolver(fetcher:macroContext:).resolve(source, parentRequestID:)`: the player expands VAST `[…]` macros in
+    /// each request URI (the tag, every VASTAdTagURI) when it fetches it (VAST 4.1 §6.1).
+    var resolveVAST: @Sendable (_ source: VASTSource, _ fetcher: any VASTFetcher, _ parentRequestID: UUID?, _ macroContext: MacroContext) async
+        -> ResolvedVAST
     /// `TrackingPlan.requests(for:candidate:native:vast:context:options:)`.
     var trackingRequests: @Sendable (_ event: AdLifecycleEvent, _ candidate: AdCandidate, _ native: NativeAd?, _ vast: ResolvedVAST?,
                                      _ context: MacroContext, _ options: TrackingPlanOptions) -> [TrackerRequest]
@@ -34,7 +36,9 @@ extension AdKitServices {
         parseInput: { text, request in InputParser.parse(text, request: request) },
         parseNative: { json, hints in NativeParser.parse(json, hints: hints) },
         parseVAST: { xml in VASTParser.parse(xml) },
-        resolveVAST: { source, fetcher, parent in await VASTResolver(fetcher: fetcher).resolve(source, parentRequestID: parent) },
+        resolveVAST: { source, fetcher, parent, context in
+            await VASTResolver(fetcher: fetcher, macroContext: context).resolve(source, parentRequestID: parent)
+        },
         trackingRequests: { event, candidate, native, vast, context, options in
             TrackingPlan.requests(for: event, candidate: candidate, native: native, vast: vast, context: context, options: options.kitOptions)
         },

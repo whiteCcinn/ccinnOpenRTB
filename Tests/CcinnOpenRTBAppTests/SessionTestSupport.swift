@@ -103,7 +103,7 @@ enum Fixtures {
             },
             parseNative: { _, _ in (native, []) },
             parseVAST: { _ in (VASTDocument(ads: [VASTAd(body: .inline(VASTInline(impressions: ["https://imp.vast.example/i"])))]), []) },
-            resolveVAST: { source, _, _ in
+            resolveVAST: { source, _, _, _ in
                 recorder.recordResolution(source)
                 if let gate { await gate.wait() }
                 return resolved
@@ -146,6 +146,7 @@ enum Fixtures {
 final class CountingTransport: HTTPTransport {
     private struct State {
         var bodies: [String: String] = [:]
+        var prefixBodies: [(prefix: String, body: String)] = []
         var requests: [HTTPRequest] = []
     }
 
@@ -154,10 +155,14 @@ final class CountingTransport: HTTPTransport {
 
     func respond(_ url: String, body: String) { state.withLockUnchecked { $0.bodies[url] = body } }
 
+    /// Answers every URL that starts with `prefix` (a URL whose query the player expands at request time).
+    func respondByPrefix(_ prefix: String, body: String) { state.withLockUnchecked { $0.prefixBodies.append((prefix, body)) } }
+
     func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
         let body = state.withLockUnchecked { state -> String? in
             state.requests.append(request)
-            return state.bodies[request.url.absoluteString]
+            let url = request.url.absoluteString
+            return state.bodies[url] ?? state.prefixBodies.first { url.hasPrefix($0.prefix) }?.body
         }
         return HTTPResponse(status: 200, headers: ["Content-Type": "text/plain"], body: Data((body ?? "").utf8))
     }

@@ -549,12 +549,16 @@ final class AdSession: AdRenderingHost {
             phase = .preparing("Resolving VAST…")
             let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: sourceRoot(candidate) + " › VAST",
                                              rootParentID: markupEntryID)
-            let resolved = await services.resolveVAST(source, fetcher, markupEntryID)
+            let resolved = await services.resolveVAST(source, fetcher, markupEntryID, macroContext(for: candidate, input: input, adIndex: nil))
             guard token == generation else { return }
             vast = resolved
             renderIssues = resolved.issues
         default:
             break
+        }
+        if markupEntryID != nil,
+           let leftover = Self.unsubstitutedMacroIssue(in: candidate.markup, deliveredBy: fromWinNotice ? "nurl" : "display.curl") {
+            renderIssues.append(leftover)
         }
 
         prepared = PreparedAd(candidate: candidate, native: native, vast: vast, markupEntryID: markupEntryID, markupFromWinNotice: fromWinNotice,
@@ -584,6 +588,26 @@ final class AdSession: AdRenderingHost {
         if !expanded.unknown.isEmpty { notes.append("unknown, left as is: " + Set(expanded.unknown).sorted().joined(separator: ", ")) }
         if !notes.isEmpty { log("adm macros: " + notes.joined(separator: "; "), origin: "exchange", outcome: .fired(requests: 0)) }
         return expanded.url == text ? nil : rebuild(expanded.url)
+    }
+
+    /// HTML or Native markup fetched after the win (`display.curl`, the nurl response) still carrying OpenRTB `${…}`
+    /// macros: they stay literal — only the exchange substitutes them, and only in the bid response (OpenRTB 2.6 §4.4).
+    /// VAST documents get the resolver's own warning.
+    nonisolated static func unsubstitutedMacroIssue(in markup: AdMarkup, deliveredBy: String) -> ValidationIssue? {
+        let text: String
+        switch markup {
+        case let .html(document), let .native(document): text = document
+        case .vast, .image, .none: return nil
+        }
+        let macros = MacroExpander.unsubstitutedOpenRTBMacros(in: text)
+        guard !macros.isEmpty else { return nil }
+        let shownLimit = 5
+        let shown = macros.prefix(shownLimit).joined(separator: ", ") + (macros.count > shownLimit ? ", …" : "")
+        return ValidationIssue(.warning, code: "openrtb.macro.unsubstituted",
+                               message: "Unsubstituted OpenRTB macro in the markup delivered by \(deliveredBy): \(shown) stays literal in the creative "
+                                   + "and its trackers. Only the exchange substitutes ${…}, and only in the bid response (OpenRTB 2.6 §4.4); "
+                                   + "markup fetched after the win must arrive filled in.",
+                               path: deliveredBy)
     }
 
     /// Right after a VAST resolution (decisions.md): the Error URLs of `adFailures` once, then — when no ad could be
@@ -840,7 +864,8 @@ final class AdSession: AdRenderingHost {
         let label = sourceRoot(prepared.candidate) + " › native video"
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent)
         let resolve = services.resolveVAST
-        let task = Task { await resolve(source, fetcher, parent) }
+        let context = macroContext(for: prepared.candidate, input: renderInput, adIndex: nil)
+        let task = Task { await resolve(source, fetcher, parent, context) }
         nativeVideoResolution = (source, task)
         let resolved = await task.value
         guard token == generation, phase == .ready else { return resolved }
@@ -890,8 +915,9 @@ final class AdSession: AdRenderingHost {
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidateID) › native video (Real-mode review)",
                                          rootParentID: parent)
         let resolve = services.resolveVAST
+        let context = realModeCandidate.map { macroContext(for: $0, input: parsed, adIndex: nil) } ?? MacroContext()
         Task { [weak self] in
-            let resolved = await resolve(source, fetcher, parent)
+            let resolved = await resolve(source, fetcher, parent, context)
             guard let self, let pending = self.reviewedNativeVideo, pending.candidateID == candidateID, pending.revision == revision,
                   pending.source == source else { return }
             self.reviewedNativeVideo = (candidateID, revision, source, resolved)
