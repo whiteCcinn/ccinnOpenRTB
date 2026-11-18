@@ -141,18 +141,26 @@ private struct SavedRequestsFooter: View {
             if let error = library.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
             }
+            if let notice = library.lastNotice {
+                Label(notice, systemImage: "checkmark.circle").foregroundStyle(.secondary)
+            }
             if !library.unreadableFiles.isEmpty {
                 Label("\(library.unreadableFiles.count) file(s) in the folder could not be read and are not listed.",
                       systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                     .help(library.unreadableFiles.joined(separator: "\n"))
             }
-            HStack {
-                Text("\(library.requests.count) saved · private to your account").foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Text("\(library.requests.count) saved").foregroundStyle(.secondary)
                 Spacer()
+                Button("Import…") { SavedRequestTransfer.importArchive(into: library) }
+                    .help("Import an export from another Mac: every request in it, merged by id (a newer copy wins)")
+                Button("Export All…") { SavedRequestTransfer.exportAll(from: library) }
+                    .disabled(library.requests.isEmpty)
+                    .help("Write every saved request and its response to one file, to import on another Mac")
                 Button("Show Folder") { showFolder() }
-                    .buttonStyle(.link)
             }
+            .buttonStyle(.link)
         }
         .font(.caption)
         .padding(.horizontal, 10)

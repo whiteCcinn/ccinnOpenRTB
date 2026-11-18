@@ -79,6 +79,10 @@ private struct ClientRequestMenu: View {
             Divider()
             Button("Copy as curl") { copyCurl() }
                 .disabled(!client.problems.isEmpty)
+            Divider()
+            Button("Export All Saved Requests…") { SavedRequestTransfer.exportAll(from: client.library) }
+                .disabled(client.library.requests.isEmpty)
+            Button("Import Saved Requests…") { SavedRequestTransfer.importArchive(into: client.library) }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -144,10 +148,12 @@ private struct ClientNotices: View {
     var body: some View {
         let blocking = client.problems.filter { $0 != .missingURL }.map(\.message)
         let notes = [client.sendWarning, client.library.lastError].compactMap { $0 }
-        if !blocking.isEmpty || !notes.isEmpty {
+        let info = client.library.lastNotice
+        if !blocking.isEmpty || !notes.isEmpty || info != nil {
             VStack(alignment: .leading, spacing: 3) {
                 ForEach(blocking, id: \.self) { Label($0, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
                 ForEach(notes, id: \.self) { Label($0, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                if let info { Label(info, systemImage: "checkmark.circle").foregroundStyle(.secondary) }
             }
             .font(.caption)
             .frame(maxWidth: .infinity, alignment: .leading)

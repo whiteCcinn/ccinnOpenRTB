@@ -641,3 +641,193 @@ struct ClientPresentationTests {
         #expect(ClientPresentation.filter(saved, by: "nothing").isEmpty)
     }
 }
+
+// MARK: - Export and import
+
+@Suite("Saved requests: archive")
+struct SavedRequestArchiveTests {
+    private func saved(_ name: String, updatedAt: TimeInterval, id: UUID = UUID()) -> SavedRequest {
+        let date = Date(timeIntervalSince1970: updatedAt)
+        let response = ClientResponse(status: 200, headers: ["Content-Type": "application/json"], body: videoResponse,
+                                      bodyBytes: videoResponse.utf8.count, durationMilliseconds: 42.5, receivedAt: date, url: endpoint)
+        return SavedRequest(id: id, name: name, createdAt: date, updatedAt: date, request: request(),
+                            exchange: ClientExchange(requestBody: rewardedVideoRequest, response: response, deviceID: "iphone-18-pro"))
+    }
+
+    @Test func anArchiveRoundTripsEveryRequestExactly() throws {
+        let requests = [saved("A", updatedAt: 1_800_000_000), saved("B", updatedAt: 1_800_000_100)]
+        let data = try SavedRequestArchive.encode(requests, exportedAt: Date(timeIntervalSince1970: 1_800_000_200), appVersion: "1.1.0")
+
+        let decoded = try SavedRequestArchive.decode(data)
+
+        #expect(decoded.requests == requests)
+        #expect(decoded.unreadable == 0)
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(root["format"] as? String == SavedRequestArchive.formatIdentifier)
+        #expect(root["version"] as? Int == SavedRequestArchive.currentVersion)
+        #expect(root["appVersion"] as? String == "1.1.0")
+    }
+
+    /// Dates are kept to the millisecond.
+    @Test func datesKeepMilliseconds() throws {
+        let precise = saved("A", updatedAt: 1_800_000_000.123_456)
+        let data = try SavedRequestArchive.encode([precise], exportedAt: Date(), appVersion: "1.1.0")
+        let back = try #require(try SavedRequestArchive.decode(data).requests.first)
+        #expect(abs(back.updatedAt.timeIntervalSince(precise.updatedAt)) < SavedRequestCoding.datePrecision)
+        #expect(!SavedRequestCoding.isNewer(back.updatedAt, than: precise.updatedAt))
+        #expect(!SavedRequestCoding.isNewer(precise.updatedAt, than: back.updatedAt))
+    }
+
+    /// One damaged request does not cost the others.
+    @Test func damagedEntriesAreSkippedAndCounted() throws {
+        let good = saved("Good", updatedAt: 1_800_000_000)
+        let data = try SavedRequestArchive.encode([good], exportedAt: Date(), appVersion: "1.1.0")
+        var root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var entries = try #require(root["requests"] as? [Any])
+        entries.append(["name": "no id"])
+        entries.append(42)
+        root["requests"] = entries
+        let damaged = try JSONSerialization.data(withJSONObject: root)
+
+        let decoded = try SavedRequestArchive.decode(damaged)
+
+        #expect(decoded.requests == [good])
+        #expect(decoded.unreadable == 2)
+    }
+
+    /// A single saved-request file (copied from the Requests folder) imports too.
+    @Test func aSingleSavedRequestFileIsAccepted() throws {
+        let one = saved("One", updatedAt: 1_800_000_000)
+        let data = try SavedRequestCoding.encoder().encode(one)
+        #expect(try SavedRequestArchive.decode(data).requests == [one])
+    }
+
+    @Test func otherFilesAreRefusedWithAReason() throws {
+        #expect(throws: SavedRequestArchive.Failure.notAnArchive) { try SavedRequestArchive.decode(Data("not json".utf8)) }
+        #expect(throws: SavedRequestArchive.Failure.notAnArchive) { try SavedRequestArchive.decode(Data(#"{"id":"x","seatbid":[]}"#.utf8)) }
+        #expect(throws: SavedRequestArchive.Failure.notAnArchive) {
+            try SavedRequestArchive.decode(Data(#"{"format":"something.else","version":1,"requests":[]}"#.utf8))
+        }
+        #expect(throws: SavedRequestArchive.Failure.newerVersion(99)) {
+            try SavedRequestArchive.decode(Data(#"{"format":"\#(SavedRequestArchive.formatIdentifier)","version":99,"requests":[]}"#.utf8))
+        }
+        #expect(throws: SavedRequestArchive.Failure.tooLarge(limit: 16)) { try SavedRequestArchive.decode(Data(count: 17), maxBytes: 16) }
+        #expect(SavedRequestArchive.Failure.notAnArchive.message.isEmpty == false)
+    }
+}
+
+@MainActor
+@Suite("Saved requests: export and import", .serialized)
+struct SavedRequestMigrationTests {
+    private func saved(_ name: String, updatedAt: TimeInterval, id: UUID = UUID()) -> SavedRequest {
+        let date = Date(timeIntervalSince1970: updatedAt)
+        return SavedRequest(id: id, name: name, createdAt: date, updatedAt: date, request: request(), exchange: nil)
+    }
+
+    /// Switching computers: export everything on one Mac, import it with one click on the other.
+    @Test func everythingMovesToAnotherMac() async throws {
+        let old = TemporaryDirectory()
+        let new = TemporaryDirectory()
+        defer { old.cleanUp(); new.cleanUp() }
+        let source = SavedRequestLibrary(store: SavedRequestStore(directory: old.url))
+        for (index, name) in ["Banner", "Native", "Rewarded video"].enumerated() {
+            #expect(await source.save(saved(name, updatedAt: 1_800_000_000 + Double(index))))
+        }
+
+        let archive = try #require(await source.exportArchive(appVersion: "1.1.0"))
+        let target = SavedRequestLibrary(store: SavedRequestStore(directory: new.url))
+        let result = try await target.importArchive(archive)
+
+        #expect(result == SavedRequestLibrary.ImportResult(added: 3, updated: 0, unchanged: 0, unreadable: 0, failed: 0))
+        #expect(target.requests == source.requests)
+        let relaunched = SavedRequestLibrary(store: SavedRequestStore(directory: new.url))
+        await relaunched.loadIfNeeded()
+        #expect(relaunched.requests == source.requests)
+        #expect(target.lastNotice == "Imported 3 requests.")
+    }
+
+    /// Merged by id: the more recently updated copy wins, so importing twice changes nothing and never loses newer work.
+    @Test func importingMergesByIDAndKeepsTheNewer() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let sharedOld = UUID()
+        let sharedNew = UUID()
+        #expect(await library.save(saved("Local is newer", updatedAt: 2_000, id: sharedNew)))
+        #expect(await library.save(saved("Local is older", updatedAt: 1_000, id: sharedOld)))
+        let incoming = [saved("Archive is newer", updatedAt: 3_000, id: sharedOld), saved("Archive is older", updatedAt: 1_500, id: sharedNew),
+                        saved("Only in the archive", updatedAt: 500)]
+        let archive = try SavedRequestArchive.encode(incoming, exportedAt: Date(), appVersion: "1.1.0")
+
+        let first = try await library.importArchive(archive)
+        let second = try await library.importArchive(archive)
+
+        #expect(first == SavedRequestLibrary.ImportResult(added: 1, updated: 1, unchanged: 1, unreadable: 0, failed: 0))
+        #expect(second == SavedRequestLibrary.ImportResult(added: 0, updated: 0, unchanged: 3, unreadable: 0, failed: 0))
+        #expect(Set(library.requests.map(\.name)) == ["Archive is newer", "Local is newer", "Only in the archive"])
+        #expect(library.lastNotice == "Nothing new: 3 requests are already here.")
+    }
+
+    /// Re-importing your own fresh export (dates with sub-millisecond parts in memory) changes nothing.
+    @Test func reimportingAFreshExportChangesNothing() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        for offset in [0.000_4, 0.000_6, 0.123_456] {
+            #expect(await library.save(saved("At \(offset)", updatedAt: 1_800_000_000 + offset)))
+        }
+
+        let archive = try #require(await library.exportArchive(appVersion: "1.1.0"))
+        let result = try await library.importArchive(archive)
+
+        #expect(result == SavedRequestLibrary.ImportResult(added: 0, updated: 0, unchanged: 3, unreadable: 0, failed: 0))
+    }
+
+    @Test func aFileThatIsNotAnArchiveChangesNothing() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        #expect(await library.save(saved("Kept", updatedAt: 1)))
+
+        await #expect(throws: SavedRequestArchive.Failure.notAnArchive) { try await library.importArchive(Data("{}".utf8)) }
+
+        #expect(library.requests.map(\.name) == ["Kept"])
+    }
+
+    /// One click on the new Mac: the exported file is read and imported; a file that cannot be read says why.
+    @Test func importingAFileReadsItAndSaysWhatHappened() async throws {
+        let old = TemporaryDirectory()
+        let new = TemporaryDirectory()
+        defer { old.cleanUp(); new.cleanUp() }
+        let source = SavedRequestLibrary(store: SavedRequestStore(directory: old.url))
+        #expect(await source.save(saved("Banner", updatedAt: 1)))
+        let file = old.url.deletingLastPathComponent().appendingPathComponent("export.json")
+        try await source.exportArchive(to: file, appVersion: "1.1.0")
+        let target = SavedRequestLibrary(store: SavedRequestStore(directory: new.url))
+
+        let result = try await target.importArchive(contentsOf: file)
+        #expect(result.added == 1)
+        #expect(target.requests.map(\.name) == ["Banner"])
+
+        let missing = old.url.deletingLastPathComponent().appendingPathComponent("missing.json")
+        await #expect(throws: SavedRequestArchive.Failure.self) { try await target.importArchive(contentsOf: missing) }
+        #expect(target.lastError != nil)
+        #expect(target.lastNotice == nil)
+        #expect(target.requests.map(\.name) == ["Banner"])
+    }
+
+    /// The export holds credentials: written readable only by the user.
+    @Test func theExportFileIsPrivate() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        #expect(await library.save(saved("A", updatedAt: 1)))
+        let file = directory.url.deletingLastPathComponent().appendingPathComponent("export.json")
+
+        try await library.exportArchive(to: file, appVersion: "1.1.0")
+
+        #expect(directory.permissions(file) == 0o600)
+        #expect(try SavedRequestArchive.decode(Data(contentsOf: file)).requests.map(\.name) == ["A"])
+        #expect(library.lastNotice == "Exported 1 request.")
+    }
+}

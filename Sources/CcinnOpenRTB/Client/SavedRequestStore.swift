@@ -38,7 +38,7 @@ actor SavedRequestStore {
         let files = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
                                                     options: [.skipsHiddenFiles])
             .filter { $0.pathExtension.lowercased() == "json" }
-        let decoder = Self.decoder()
+        let decoder = SavedRequestCoding.decoder()
         var byID: [UUID: SavedRequest] = [:]
         var unreadable: [String] = []
         for file in files {
@@ -54,8 +54,24 @@ actor SavedRequestStore {
 
     func write(_ request: SavedRequest) throws {
         try prepareDirectory()
+        try write(request, encoder: SavedRequestCoding.encoder())
+    }
+
+    /// Writes every request (an import); returns the ids that could not be written. Throws only when the folder itself
+    /// cannot be prepared.
+    func write(_ requests: [SavedRequest]) throws -> Set<UUID> {
+        try prepareDirectory()
+        let encoder = SavedRequestCoding.encoder()
+        var failed: Set<UUID> = []
+        for request in requests {
+            do { try write(request, encoder: encoder) } catch { failed.insert(request.id) }
+        }
+        return failed
+    }
+
+    private func write(_ request: SavedRequest, encoder: JSONEncoder) throws {
         let file = fileURL(for: request.id)
-        try Self.encoder().encode(request).write(to: file, options: [.atomic])
+        try encoder.encode(request).write(to: file, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
@@ -86,31 +102,5 @@ actor SavedRequestStore {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-    }
-
-    /// ISO 8601 with milliseconds: readable, and ordered within a second.
-    private static let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-
-    /// Pretty-printed with sorted keys: a saved request reads and diffs well as a file.
-    private static func encoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .custom { date, encoder in
-            var container = encoder.singleValueContainer()
-            try container.encode(date.formatted(dateStyle))
-        }
-        return encoder
-    }
-
-    /// Reads dates with or without fractional seconds (a hand-edited file).
-    private static func decoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let text = try container.decode(String.self)
-            if let date = (try? Date(text, strategy: dateStyle)) ?? (try? Date(text, strategy: .iso8601)) { return date }
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not an ISO 8601 date: \(text.prefix(40))")
-        }
-        return decoder
     }
 }
