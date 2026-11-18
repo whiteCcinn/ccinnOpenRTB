@@ -178,7 +178,7 @@ struct RealModeAcceptanceTests {
             #expect(trackers.contains { $0.category == .error && $0.url.contains("code=901") }, "\(listing)")
         }
 
-        let audit = NetworkAudit(entries: entries, candidate: prepared.candidate, vast: prepared.vast, markupRequestID: prepared.markupEntryID)
+        let audit = NetworkAudit(entries: entries, prepared: prepared)
         let violations = audit.all(driver.actions)
         #expect(violations.isEmpty, "\(violations.joined(separator: "\n"))\n\(listing)")
 

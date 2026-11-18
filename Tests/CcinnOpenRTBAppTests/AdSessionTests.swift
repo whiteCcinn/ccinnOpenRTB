@@ -1,5 +1,6 @@
 import CcinnOpenRTBKit
 import Foundation
+import os
 import RTBKit
 import Testing
 @testable import CcinnOpenRTB
@@ -345,6 +346,46 @@ struct AdSessionTests {
         await curl.paste()
         await curl.renderAndWait()
         #expect(curl.session.renderRequest?.candidate.markup == .html(adm))
+    }
+
+    /// OpenRTB 2.6 §4.4: the exchange substitutes its `${…}` auction macros in the bid's inline markup, whatever its kind,
+    /// before the device sees it — so the Native parser and the VAST resolver read the substituted markup. VAST `[…]`
+    /// macros are the player's, filled when a tracker fires (the fake kit only knows `${AUCTION_PRICE}`).
+    @Test func inlineNativeAndVASTAdmAreSubstitutedBeforeTheyAreParsed() async {
+        let nativeJSON = #"{"native":{"imptrackers":["https://i.example/?p=${AUCTION_PRICE}"]}}"#
+        let parsed = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let native = SessionHarness(Fixtures.input([Fixtures.candidate(.native(nativeJSON), format: .native)])) { services in
+            services.parseNative = { json, _ in
+                parsed.withLock { $0.append(json) }
+                return (Fixtures.native, [])
+            }
+        }
+        await native.paste()
+        await native.renderAndWait()
+        let substitutedJSON = #"{"native":{"imptrackers":["https://i.example/?p=2.5"]}}"#
+        #expect(parsed.withLock { $0 }.contains(substitutedJSON), "\(parsed.withLock { $0 })")
+        #expect(native.session.renderRequest?.candidate.markup == .native(substitutedJSON))
+        #expect(native.session.prepared?.candidate.markup == .native(nativeJSON), "the bid keeps its own markup")
+        #expect(!native.session.renderIsStale)
+
+        let vastXML = "<VAST><Ad><InLine><Impression>https://i.example/?p=${AUCTION_PRICE}&amp;cb=[CACHEBUSTING]</Impression></InLine></Ad></VAST>"
+        let substitutedXML = "<VAST><Ad><InLine><Impression>https://i.example/?p=2.5&amp;cb=[CACHEBUSTING]</Impression></InLine></Ad></VAST>"
+        let vast = SessionHarness(Fixtures.input([Fixtures.candidate(.vast(.xml(vastXML)), format: .video)]))
+        await vast.paste()
+        await vast.renderAndWait()
+        #expect(vast.recorder.resolutions == [.xml(substitutedXML)], "resolved from the substituted XML; [CACHEBUSTING] waits for the player")
+        #expect(vast.session.renderRequest?.candidate.markup == .vast(.xml(substitutedXML)))
+    }
+
+    /// Markup the DSP returns after the win (the nurl response, AdCOM `display.curl`) is the device's own fetch: the
+    /// exchange never sees it, so it is used as delivered, whatever its kind.
+    @Test func markupFetchedAfterTheWinIsNotSubstituted() async {
+        let vastXML = "<VAST><Ad><InLine><Impression>https://i.example/?p=${AUCTION_PRICE}</Impression></InLine></Ad></VAST>"
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, format: .video, markupURL: "https://cdn.example/vast.xml")]))
+        curl.transport.respond("https://cdn.example/vast.xml", body: vastXML)
+        await curl.paste()
+        await curl.renderAndWait()
+        #expect(curl.recorder.resolutions == [.xml(vastXML)])
     }
 
     @Test func theShellsPlanOptionsBecomeTheKitsInOnePlace() {

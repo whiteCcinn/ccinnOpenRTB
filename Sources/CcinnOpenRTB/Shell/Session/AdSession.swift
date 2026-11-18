@@ -492,9 +492,11 @@ final class AdSession: AdRenderingHost {
             fireWonIfExchangeSendsIt(input: input)
         }
 
+        // What the device receives: inline adm with the exchange's macros substituted; markup fetched after the win as is.
+        let deviceMarkup = markupEntryID == nil ? substituteExchangeMacros(in: candidate.markup, candidate: candidate, input: input) : nil
         var native: NativeAd?
         var vast: ResolvedVAST?
-        switch candidate.markup {
+        switch deviceMarkup ?? candidate.markup {
         case let .native(json):
             let hints = nativeHints(for: candidate)
             let parseNative = services.parseNative
@@ -516,10 +518,6 @@ final class AdSession: AdRenderingHost {
             break
         }
 
-        var deviceMarkup: AdMarkup?
-        if markupEntryID == nil, case let .html(adm) = candidate.markup {
-            deviceMarkup = .html(substituteExchangeMacros(in: adm, candidate: candidate, input: input))
-        }
         prepared = PreparedAd(candidate: candidate, native: native, vast: vast, markupEntryID: markupEntryID, markupFromWinNotice: fromWinNotice,
                               deviceMarkup: deviceMarkup)
         viewability = ViewabilityController(kind: Self.viewabilityKind(markup: candidate.markup, format: candidate.format))
@@ -529,16 +527,24 @@ final class AdSession: AdRenderingHost {
         if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: "bid \(candidate.id) › VAST") }
     }
 
-    /// The exchange's substitution of OpenRTB macros (`${AUCTION_PRICE}` …) in inline HTML `adm` before the device gets it
-    /// (OpenRTB 2.6 §4.4), so the creative's own requests carry the values. Markup fetched by reference is as delivered;
-    /// Native and VAST markup keep their templates, which the tracking plan expands per tracker.
-    private func substituteExchangeMacros(in adm: String, candidate: AdCandidate, input: ParsedInput) -> String {
-        let expanded = services.expandMarkup(adm, macroContext(for: candidate, input: input, adIndex: nil))
+    /// The exchange's substitution of its OpenRTB `${…}` auction macros in the bid's inline `adm` — HTML, Native JSON or
+    /// VAST XML — before the device gets it (OpenRTB 2.6 §4.4; OpenRTB 3.0 likewise for `${OPENRTB_*}`). VAST `[…]` macros
+    /// are the player's and stay until a tracker fires. `nil` when nothing changes (or the markup is a reference).
+    private func substituteExchangeMacros(in markup: AdMarkup, candidate: AdCandidate, input: ParsedInput) -> AdMarkup? {
+        let text: String
+        let rebuild: (String) -> AdMarkup
+        switch markup {
+        case let .html(adm): (text, rebuild) = (adm, AdMarkup.html)
+        case let .native(json): (text, rebuild) = (json, AdMarkup.native)
+        case let .vast(.xml(xml)): (text, rebuild) = (xml, { .vast(.xml($0)) })
+        case .vast(.url), .image, .none: return nil
+        }
+        let expanded = services.expandMarkup(text, macroContext(for: candidate, input: input, adIndex: nil))
         var notes: [String] = []
         if !expanded.replaced.isEmpty { notes.append("substituted " + Set(expanded.replaced).sorted().joined(separator: ", ")) }
         if !expanded.unknown.isEmpty { notes.append("unknown, left as is: " + Set(expanded.unknown).sorted().joined(separator: ", ")) }
         if !notes.isEmpty { log("adm macros: " + notes.joined(separator: "; "), origin: "exchange", outcome: .fired(requests: 0)) }
-        return expanded.url
+        return expanded.url == text ? nil : rebuild(expanded.url)
     }
 
     /// Right after a VAST resolution (decisions.md): the Error URLs of `adFailures` once, then — when no ad could be

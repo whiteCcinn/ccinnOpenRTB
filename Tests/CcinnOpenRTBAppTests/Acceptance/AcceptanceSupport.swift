@@ -372,6 +372,21 @@ struct NetworkAudit {
     let vast: ResolvedVAST?
     let markupRequestID: UUID?
 
+    /// The audit of a prepared ad: its VAST hop 0 is the markup as the device received it (the exchange's macros
+    /// substituted in an inline adm).
+    init(entries: [NetworkEntry], prepared: PreparedAd) {
+        var candidate = prepared.candidate
+        if let deviceMarkup = prepared.deviceMarkup { candidate.markup = deviceMarkup }
+        self.init(entries: entries, candidate: candidate, vast: prepared.vast, markupRequestID: prepared.markupEntryID)
+    }
+
+    init(entries: [NetworkEntry], candidate: AdCandidate, vast: ResolvedVAST?, markupRequestID: UUID?) {
+        self.entries = entries
+        self.candidate = candidate
+        self.vast = vast
+        self.markupRequestID = markupRequestID
+    }
+
     private var byID: [UUID: NetworkEntry] { Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
 
     private static let trackerCategories: Set<TrackerCategory> = [.win, .billing, .loss, .impression, .viewability, .event, .click, .error,

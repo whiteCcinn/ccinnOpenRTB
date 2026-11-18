@@ -78,7 +78,7 @@ struct SampleAcceptanceTests {
         #expect(!creative.contains { $0.url.contains("${") }, "the exchange substitutes OpenRTB macros in adm:\n\(listing)")
 
         guard played, let prepared = harness.session.prepared else { return }
-        let audit = NetworkAudit(entries: entries, candidate: prepared.candidate, vast: prepared.vast, markupRequestID: prepared.markupEntryID)
+        let audit = NetworkAudit(entries: entries, prepared: prepared)
         let violations = audit.all(driver.actions)
         #expect(violations.isEmpty, "\(violations.joined(separator: "\n"))\n\(listing)")
         #expect(entries.contains { $0.category == .billing } == (prepared.candidate.billingURL != nil && !sampleID.contains("vpaid")),
