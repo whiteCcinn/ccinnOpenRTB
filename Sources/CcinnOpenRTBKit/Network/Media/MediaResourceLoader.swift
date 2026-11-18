@@ -24,7 +24,8 @@ public final class MediaResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
     public let remoteURL: URL
     let queue: DispatchQueue
     private let chunkBytes: Int
-    private let fetch: @Sendable (ByteRange?, Int) async -> Result<MediaPart, NetworkMonitorError>
+    /// Fetches a byte range (`nil`: the whole resource) through the monitor, at most the given number of bytes.
+    let fetch: @Sendable (ByteRange?, Int) async -> Result<MediaPart, NetworkMonitorError>
     // All mutable state lives behind this lock (hence `@unchecked Sendable`); AVAssetResourceLoadingRequest objects are
     // only touched on `queue`.
     private let state = OSAllocatedUnfairLock(uncheckedState: State())

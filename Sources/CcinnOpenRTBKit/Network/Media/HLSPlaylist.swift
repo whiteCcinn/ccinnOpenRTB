@@ -14,7 +14,11 @@ enum HLSPlaylist {
         case key
         /// `EXT-X-MAP` (initialization section).
         case map
-        /// `EXT-X-SESSION-DATA`, `EXT-X-CONTENT-STEERING` and any other tag's URI.
+        /// An HLS Interstitial's asset (`EXT-X-DATERANGE` `X-ASSET-URI`): a playlist.
+        case interstitial
+        /// An HLS Interstitial's asset list (`X-ASSET-LIST`): JSON naming more URIs.
+        case assetList
+        /// `EXT-X-SESSION-DATA` and any other attribute holding an http(s) URL.
         case data
 
         /// The request's trigger in the Network window.
@@ -24,6 +28,8 @@ enum HLSPlaylist {
             case .segment: "HLS segment"
             case .key: "HLS key"
             case .map: "HLS init section"
+            case .interstitial: "HLS interstitial"
+            case .assetList: "HLS asset list"
             case .data: "HLS data"
             }
         }
@@ -46,10 +52,13 @@ enum HLSPlaylist {
         return bytes.starts(with: Array("#EXTM3U".utf8))
     }
 
-    /// `text` with every URI replaced by `route(reference)` (URI lines, and the `URI` / `SERVER-URI` attributes of
-    /// tags). Relative URIs are resolved against `base`. http(s) references are offered to `route`; one that cannot be
-    /// resolved becomes `unresolved` (never left for the player to fetch itself); `data:` and other schemes stay as they
-    /// are (none of them reaches the network through the player).
+    /// `text` with every URI replaced by `route(reference)`: URI lines, the `URI`, `X-ASSET-URI` and `X-ASSET-LIST`
+    /// attributes of tags, and any other quoted attribute holding an http(s) URL. Relative URIs are resolved against
+    /// `base`. http(s) references are offered to `route`; one that cannot be resolved becomes `unresolved` (never left for
+    /// the player to fetch itself); `data:` and other schemes stay as they are (none of them reaches the network through
+    /// the player). `EXT-X-CONTENT-STEERING` is dropped: a steering manifest can swap the host of a routed URI for an
+    /// origin's, and without it the player keeps the default pathway. Variables (`EXT-X-DEFINE`) are not expanded: a URI
+    /// that uses one cannot be resolved, so it fails closed.
     static func rewrite(_ text: String, base: URL, unresolved: String, route: (Reference) -> String) -> String {
         withoutActuallyEscaping(route) { route in
             rewriteLines(text, router: Router(base: base, unresolved: unresolved, route: route))
@@ -68,6 +77,7 @@ enum HLSPlaylist {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("#EXT") {
                 let tag = trimmed.prefix { $0 != ":" }
+                if tag == "#EXT-X-CONTENT-STEERING" { continue }
                 if tag == "#EXT-X-STREAM-INF" { nextURIKind = .playlist }
                 line = rewriteAttributes(trimmed, kind: attributeKind(of: tag), route: route)
             } else if !trimmed.isEmpty, !trimmed.hasPrefix("#") {
@@ -132,8 +142,49 @@ enum HLSPlaylist {
         guard let equals = attribute.firstIndex(of: "=") else { return String(attribute) }
         let name = attribute[..<equals].trimmingCharacters(in: .whitespaces)
         let value = attribute[attribute.index(after: equals)...]
-        guard name == "URI" || name == "SERVER-URI", value.count >= 2, value.first == "\"", value.last == "\"" else { return String(attribute) }
+        guard value.count >= 2, value.first == "\"", value.last == "\"" else { return String(attribute) }
         let uri = String(value.dropFirst().dropLast())
-        return "\(attribute[..<equals])=\"\(route.rewritten(uri, kind: kind))\""
+        let attributeKind: Kind
+        switch name {
+        case "URI", "SERVER-URI": attributeKind = kind
+        case "X-ASSET-URI": attributeKind = .interstitial
+        case "X-ASSET-LIST": attributeKind = .assetList
+        default:
+            // Any other attribute that holds an absolute http(s) URL.
+            guard let scheme = URLText.scheme(uri), scheme == "http" || scheme == "https" else { return String(attribute) }
+            attributeKind = .data
+        }
+        return "\(attribute[..<equals])=\"\(route.rewritten(uri, kind: attributeKind))\""
+    }
+
+    // MARK: Asset lists
+
+    /// An HLS Interstitials asset list (JSON) with every URI routed: `URI` values (relative ones resolved against `base`)
+    /// and any other absolute http(s) string. `nil` when `data` is not JSON.
+    static func rewriteAssetList(_ data: Data, base: URL, route: (URL) -> String) -> Data? {
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { return nil }
+        let rewritten = withoutActuallyEscaping(route) { route in rewriteJSON(object, key: nil, base: base, route: route) }
+        return try? JSONSerialization.data(withJSONObject: rewritten, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+    }
+
+    /// JSONSerialization refuses nesting deeper than a few hundred levels, so the recursion is bounded.
+    private static func rewriteJSON(_ value: Any, key: String?, base: URL, route: (URL) -> String) -> Any {
+        switch value {
+        case let dictionary as [String: Any]:
+            return dictionary.reduce(into: [String: Any]()) { result, pair in
+                result[pair.key] = rewriteJSON(pair.value, key: pair.key, base: base, route: route)
+            }
+        case let array as [Any]:
+            return array.map { rewriteJSON($0, key: key, base: base, route: route) }
+        case let string as String:
+            let scheme = URLText.scheme(string)
+            let isAbsoluteWeb = scheme == "http" || scheme == "https"
+            guard isAbsoluteWeb || (key == "URI" && scheme == nil),
+                  let url = URL(string: string, relativeTo: base)?.absoluteURL ?? URLText.requestURL(string),
+                  let resolved = url.scheme?.lowercased(), resolved == "http" || resolved == "https" else { return string }
+            return route(url)
+        default:
+            return value
+        }
     }
 }

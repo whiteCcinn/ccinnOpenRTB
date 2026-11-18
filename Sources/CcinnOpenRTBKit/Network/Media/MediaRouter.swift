@@ -105,11 +105,13 @@ final class MediaRouter {
         let label = range.map { " › " + Self.label(of: $0) } ?? ""
         let request = MediaPartRequest(url: url, range: range, parentID: media.entryID, trigger: media.trigger, source: media.source + label,
                                        userAgent: media.userAgent, maxBodyBytes: maxBodyBytes)
-        return await fetch(request, media: media, generation: generation)
+        return await fetch(request, kind: nil, media: media, generation: generation)
     }
 
-    /// Sends `request` through the monitor; a playlist comes back whole and rewritten.
-    private func fetch(_ request: MediaPartRequest, media: MediaContext, generation: Int) async -> Result<MediaPart, NetworkMonitorError> {
+    /// Sends `request` through the monitor; a playlist comes back whole and rewritten, and so does an HLS Interstitials
+    /// asset list (JSON naming more URIs).
+    private func fetch(_ request: MediaPartRequest, kind: HLSPlaylist.Kind?, media: MediaContext,
+                       generation: Int) async -> Result<MediaPart, NetworkMonitorError> {
         guard generation == self.generation, let monitor else { return .failure(.cancelled(Self.endedReason)) }
         let (entryID, result) = await monitor.fetchMediaPart(request)
         guard generation == self.generation else { return .failure(.cancelled(Self.endedReason)) }
@@ -119,6 +121,11 @@ final class MediaRouter {
         // Only a body that starts at offset 0 can be recognised by its signature; a declared playlist type always counts.
         let startsAtZero = response.status != 206 || contentRange?.start == 0
         guard HLSPlaylist.isPlaylist(startsAtZero ? response.body : Data(), mimeType: mimeType) else {
+            if kind == .assetList || mimeType == "application/json", startsAtZero, !response.truncated,
+               let list = await rewrittenAssetList(response, request: request, entryID: entryID, media: media, generation: generation) {
+                return .success(MediaPart(status: 200, mimeType: mimeType ?? "application/json", body: list, contentRange: nil, isPlaylist: false,
+                                          truncated: false))
+            }
             return .success(MediaPart(status: response.status, mimeType: mimeType, body: response.body, contentRange: contentRange,
                                       isPlaylist: false, truncated: response.truncated))
         }
@@ -149,6 +156,15 @@ final class MediaRouter {
         }
         return .success(MediaPart(status: 200, mimeType: mimeType ?? "application/vnd.apple.mpegurl", body: Data(rewritten.utf8),
                                   contentRange: nil, isPlaylist: true, truncated: false))
+    }
+
+    /// A JSON asset list with every URI routed; `nil` when it is no JSON (served as it is: the player reads no URI from it).
+    private func rewrittenAssetList(_ response: LoadedResponse, request: MediaPartRequest, entryID: UUID, media: MediaContext,
+                                    generation: Int) async -> Data? {
+        guard let port = try? await proxyPort(), generation == self.generation else { return nil }
+        return HLSPlaylist.rewriteAssetList(response.body, base: response.url ?? request.url) { url in
+            route(HLSPlaylist.Reference(url: url, kind: .playlist), parentID: entryID, media: media, port: port)
+        }
     }
 
     private static let emptyPart = MediaPart(status: 0, mimeType: nil, body: Data(), contentRange: nil, isPlaylist: false, truncated: false)
@@ -202,7 +218,7 @@ final class MediaRouter {
         let part = MediaPartRequest(url: resource.url, range: request.range, parentID: resource.parentID, trigger: resource.kind.label,
                                     source: resource.media.source + " › " + resource.kind.label, userAgent: resource.media.userAgent,
                                     maxBodyBytes: NetworkMonitor.maxContentBytes)
-        switch await fetch(part, media: resource.media, generation: generation) {
+        switch await fetch(part, kind: resource.kind, media: resource.media, generation: generation) {
         case let .success(fetched):
             guard !fetched.truncated else { return .status(502) }
             var headers = ["Content-Type": fetched.mimeType ?? "application/octet-stream", "Cache-Control": "no-store"]

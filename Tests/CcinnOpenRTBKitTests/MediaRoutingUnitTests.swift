@@ -73,6 +73,25 @@ struct HLSPlaylistTests {
         #expect(lines[9] == "data:video/mp2t;base64,AAAA")
     }
 
+    /// HLS Interstitials (ads) name their assets in EXT-X-DATERANGE: AVFoundation would fetch X-ASSET-URI and X-ASSET-LIST
+    /// itself. Every quoted http(s) attribute is routed; content steering (which can swap the host of a routed URI for an
+    /// origin's) is dropped, and the default pathway plays.
+    @Test func interstitialsAndOtherURLAttributesAreRoutedSteeringIsDropped() {
+        let media = "#EXTM3U\n#EXT-X-CONTENT-STEERING:SERVER-URI=\"https://steer.example/s.json\",PATHWAY-ID=\"A\"\n"
+            + "#EXT-X-DATERANGE:ID=\"ad1\",CLASS=\"com.apple.hls.interstitial\",START-DATE=\"2026-01-01T00:00:00Z\","
+            + "X-ASSET-URI=\"ads/ad1.m3u8\",X-RESUME-OFFSET=0\n"
+            + "#EXT-X-DATERANGE:ID=\"ad2\",CLASS=\"com.apple.hls.interstitial\",START-DATE=\"2026-01-01T00:00:10Z\","
+            + "X-ASSET-LIST=\"https://ads.example/list.json\",X-COM-EXAMPLE-BEACON=\"https://beacon.example/b\"\n"
+            + "#EXTINF:4,\nseg0.ts\n"
+        let (output, references) = rewrite(media)
+        #expect(!output.contains("EXT-X-CONTENT-STEERING"))
+        #expect(!output.contains("example"), "\(output)")
+        #expect(references.map(\.url.absoluteString) == ["https://cdn.example/hls/ads/ad1.m3u8", "https://ads.example/list.json",
+                                                         "https://beacon.example/b", "https://cdn.example/hls/seg0.ts"])
+        #expect(references.map(\.kind) == [.interstitial, .assetList, .data, .segment])
+        #expect(output.contains("CLASS=\"com.apple.hls.interstitial\""), "other attributes are kept")
+    }
+
     @Test func playlistsAreRecognisedByTypeOrSignature() {
         #expect(HLSPlaylist.isPlaylist(Data(), mimeType: "application/vnd.apple.mpegurl"))
         #expect(HLSPlaylist.isPlaylist(Data(), mimeType: "Application/X-MpegURL"))
@@ -190,5 +209,28 @@ struct MediaLoopbackProxyTests {
         #expect(body == Data("ok".utf8))
         let (_, unknown) = try await session.data(from: try #require(URL(string: "http://127.0.0.1:\(port)/other")))
         #expect((unknown as? HTTPURLResponse)?.statusCode == 404)
+    }
+}
+
+@Suite("HLS asset lists")
+struct HLSAssetListTests {
+    /// An interstitial asset list is JSON naming more URIs (relative ones resolve against the list's URL): each is routed.
+    @Test func everyURIOfAnAssetListIsRouted() throws {
+        let json = #"{"ASSETS":[{"URI":"ad1/index.m3u8","DURATION":15},{"URI":"https://other.example/ad2.m3u8","DURATION":10}],"#
+            + #""X-TRACKING":{"start":"https://t.example/s","note":"plain text"}}"#
+        let list = Data(json.utf8)
+        var routed: [URL] = []
+        let base = try #require(URL(string: "https://ads.example/lists/l.json"))
+        let rewritten = HLSPlaylist.rewriteAssetList(list, base: base) { url in
+            routed.append(url)
+            return "http://127.0.0.1:9/r/\(routed.count)"
+        }
+        let output = try #require(rewritten)
+        #expect(routed.map(\.absoluteString).sorted() == ["https://ads.example/lists/ad1/index.m3u8", "https://other.example/ad2.m3u8",
+                                                          "https://t.example/s"])
+        let text = String(decoding: output, as: UTF8.self)
+        #expect(!text.contains("example"), "\(text)")
+        #expect(text.contains("plain text"))
+        #expect(HLSPlaylist.rewriteAssetList(Data("not json".utf8), base: base) { _ in "" } == nil)
     }
 }

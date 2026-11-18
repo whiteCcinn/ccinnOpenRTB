@@ -180,6 +180,35 @@ struct MediaRoutingTests {
         #expect(tree.filter { $0.status != nil }.count <= everyRequest.count)
     }
 
+    /// HLS Interstitials (ads): the asset list a playlist names is routed, and so is every URI inside it. Checked over the
+    /// proxy's own HTTP, without AVFoundation.
+    @Test func interstitialAssetListsAndTheirAssetsAreRouted() async throws {
+        let transport = FakeTransport()
+        let master = "#EXTM3U\n#EXT-X-DATERANGE:ID=\"ad\",CLASS=\"com.apple.hls.interstitial\",START-DATE=\"2026-01-01T00:00:00Z\","
+            + "X-ASSET-LIST=\"lists/l.json\"\n#EXT-X-STREAM-INF:BANDWIDTH=1\nv.m3u8\n"
+        transport.respond("https://cdn.example/m.m3u8", headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: master)
+        transport.respond("https://cdn.example/lists/l.json", headers: ["Content-Type": "application/json"],
+                          body: #"{"ASSETS":[{"URI":"../ads/ad1.m3u8","DURATION":15}]}"#)
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let prepared = await monitor.prepareMedia("https://cdn.example/m.m3u8", trigger: "media file", source: "VAST", parentID: nil,
+                                                  userAgent: deviceUA)
+        let loader = try #require(prepared.resourceLoader)
+        let playlist = try await loader.fetch(nil, NetworkMonitor.maxContentBytes).get()
+        #expect(playlist.isPlaylist)
+        let text = String(decoding: playlist.body, as: UTF8.self)
+        #expect(!text.contains("cdn.example"), "\(text)")
+        let listURL = try #require(text.split(separator: "\"").first { $0.hasPrefix("http://127.0.0.1:") && $0.hasSuffix("/l.json") })
+        let (body, response) = try await URLSession(configuration: .ephemeral).data(from: try #require(URL(string: String(listURL))))
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let list = String(decoding: body, as: UTF8.self)
+        #expect(!list.contains("example"), "\(list)")
+        #expect(list.contains("http://127.0.0.1:"))
+        let entries = monitor.liveEntries
+        let listEntry = try #require(entries.first { $0.url == "https://cdn.example/lists/l.json" })
+        #expect(listEntry.trigger == "HLS asset list")
+        #expect(entries.first { $0.id == listEntry.parentID }?.url == "https://cdn.example/m.m3u8")
+    }
+
     /// (d) Offline: a player that already has its URL gets nothing; nothing connects.
     @Test func offlineStopsMediaThatWasAlreadyPrepared() async throws {
         let file = try await sampleAudio()
