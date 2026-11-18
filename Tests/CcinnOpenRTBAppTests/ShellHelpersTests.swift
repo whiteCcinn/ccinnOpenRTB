@@ -1,3 +1,4 @@
+import CcinnOpenRTBKit
 import Foundation
 import RTBKit
 import Testing
@@ -46,7 +47,7 @@ struct LaunchOptionsTests {
         let options = LaunchOptions(arguments: ["CcinnOpenRTB", "--sample", "vast-pod", "--device", "iphone-duo", "--placement", "rewarded",
                                                 "--mode", "simulated", "--landscape", "--folded", "--spanned", "--visibility", "0.4",
                                                 "--zoom", "0.5", "--snapshot", "/tmp/a.png", "--snapshot-delay", "2.5", "--quit-after-snapshot",
-                                                "--open-network", "--no-render"])
+                                                "--open-network", "--no-render", "--export-har", "/tmp/a.har"])
         #expect(options.sampleID == "vast-pod")
         #expect(options.deviceID == "iphone-duo")
         #expect(options.placement == .rewarded)
@@ -58,7 +59,27 @@ struct LaunchOptionsTests {
         #expect(options.snapshotDelay == 2.5)
         #expect(options.quitAfterSnapshot && options.opensNetworkWindow)
         #expect(!options.renders)
+        #expect(options.harPath == "/tmp/a.har")
         #expect(options.isEmpty == false)
+        #expect(LaunchOptions(arguments: ["app", "--export-har", "/tmp/b.har"]).isEmpty == false)
+    }
+
+    /// `--export-har <file>` writes the window's network log (HAR 1.2 with the `_ccinn` relationships) after the
+    /// snapshot, for checks of the real app.
+    @MainActor
+    @Test func theNetworkLogIsExportedAsHAR() async throws {
+        let monitor = NetworkMonitor(transport: CountingTransport(), publishInterval: .zero)
+        let parent = monitor.dispatch(TrackerRequest(category: .win, trigger: "win", source: "bid 0.0", template: "https://w.example/",
+                                                     url: "https://w.example/"), userAgent: "UA")
+        monitor.recordNavigation(url: "https://l.example/", trigger: "click", source: "bid 0.0", parentID: parent)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-har-\(UUID().uuidString).har")
+        defer { try? FileManager.default.removeItem(at: file) }
+        await LaunchCoordinator.exportNetwork(of: monitor, to: file)
+        let document = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let entries = try #require((document["log"] as? [String: Any])?["entries"] as? [[String: Any]])
+        #expect(entries.count == 2)
+        let custom = entries.compactMap { $0["_ccinn"] as? [String: Any] }
+        #expect(custom.count == 2 && custom[1]["parent"] as? String == custom[0]["id"] as? String)
     }
 
     @Test func placementsAreMatchedLooselyAndNonsenseIsIgnored() {

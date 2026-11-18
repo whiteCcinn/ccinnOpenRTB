@@ -6,7 +6,10 @@ import RTBKit
 ///
 ///     --sample <id>  --device <id>  --placement <name>  --mode simulated|real
 ///     --landscape  --folded  --spanned  --visibility <0…1>  --zoom fit|<scale>  --no-render
-///     --snapshot <file.png> [--snapshot-delay <s>] [--quit-after-snapshot]  --open-network
+///     --snapshot <file.png> [--snapshot-delay <s>] [--quit-after-snapshot]  --open-network  --export-har <file.har>
+///
+/// `--export-har` writes the window's network log (HAR 1.2, relationships in `_ccinn`) after the snapshot, or after the
+/// snapshot delay when there is none.
 ///
 /// `--mode real` only shows the confirmation: the command line can never switch Real mode on by itself.
 struct LaunchOptions: Equatable {
@@ -27,6 +30,7 @@ struct LaunchOptions: Equatable {
     var snapshotDelay = LaunchOptions.defaultSnapshotDelay
     var quitAfterSnapshot = false
     var opensNetworkWindow = false
+    var harPath: String?
     var isEmpty = true
 
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
@@ -51,8 +55,9 @@ struct LaunchOptions: Equatable {
         if let delay = value("--snapshot-delay").flatMap(Double.init), delay.isFinite, delay >= 0 { snapshotDelay = delay }
         quitAfterSnapshot = flag("--quit-after-snapshot")
         opensNetworkWindow = flag("--open-network")
+        harPath = value("--export-har")
         let known = ["--sample", "--device", "--placement", "--mode", "--landscape", "--folded", "--spanned", "--visibility", "--zoom",
-                     "--no-render", "--snapshot", "--open-network"]
+                     "--no-render", "--snapshot", "--open-network", "--export-har"]
         isEmpty = !known.contains(where: arguments.contains)
     }
 
