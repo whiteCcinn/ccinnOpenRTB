@@ -667,6 +667,38 @@ struct AdSessionTests {
             == "Win, billing or loss notices for auction auction-1 were already sent this session (2). Sending again may double-count at the DSP.")
     }
 
+    /// Safety review: a new render, a Reset or a Lose ends the previous play at once — its Real-mode trackers still in
+    /// flight are cancelled (no late hit, no further redirect hop), not left to finish under the next render.
+    @Test(arguments: ["render", "reset", "lose"])
+    func aNewPlayCancelsTheLastPlaysTrackersInFlight(_ action: String) async throws {
+        let transport = HangingTransport()
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let services = Fixtures.services(Fixtures.input([display]), recorder: KitRecorder())
+        let session = AdSession(services: services, monitor: monitor, clock: ManualSessionClock(), browser: RecordingBrowser(),
+                                opensClickThroughs: { false }, parseDebounce: .zero)
+        session.responseText = "response"
+        await session.parseNow()
+        session.requestRealMode()
+        session.confirmRealMode(try #require(session.realModeConfirmation))
+        session.render()
+        #expect(await Wait.until { monitor.liveEntries.contains { $0.category == .win && $0.state == .pending } })
+        switch action {
+        case "render": session.render()
+        case "reset": session.reset()
+        default: session.lose(LossReason.lossReasons[0])
+        }
+        let win = try #require(monitor.liveEntries.first { $0.category == .win })
+        // Already on the wire: finished as cancelled. Not handed to the transport yet: recorded as not sent.
+        switch win.state {
+        case let .failed(reason):
+            #expect(reason.contains("Cancelled") && reason.contains(AdSession.playEndedCancellation), "\(reason)")
+        case .simulated:
+            #expect(win.note == "Not sent: \(AdSession.playEndedCancellation)")
+        default:
+            Issue.record("\(action): the previous play's win is still \(win.state)")
+        }
+    }
+
     // MARK: Click-throughs
 
     @Test func clickThroughsAreRecordedAndOpenedOnlyInRealModeWithTheSetting() async throws {
@@ -1211,5 +1243,13 @@ struct OutOfRangeEventIndexTests {
         }
         harness.session.navigate(to: "https://landing.example/", trigger: "companion", source: "test", vastAdIndex: .max)
         #expect(harness.session.lifecycleLog.count >= 5)
+    }
+}
+
+/// A server that never answers (until the request is cancelled).
+final class HangingTransport: HTTPTransport {
+    func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
+        try await Task.sleep(for: .seconds(60))
+        return HTTPResponse(status: 204, headers: [:], body: Data())
     }
 }

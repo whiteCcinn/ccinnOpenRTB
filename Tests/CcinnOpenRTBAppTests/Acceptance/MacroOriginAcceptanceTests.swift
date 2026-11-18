@@ -91,6 +91,9 @@ struct MacroOriginAcceptanceTests {
         let fetched = try #require(transport.requests.first { $0.url.absoluteString.hasPrefix("https://ad.example/inline.xml") })
         #expect(fetched.url.absoluteString.range(of: #"\?cb="# + Self.cacheBuster + #"&p=1\.5$"#, options: .regularExpression) != nil,
                 "the player expands [CACHEBUSTING] in the request URI; the exchange already put the price in the adm: \(fetched.url)")
+        let hop = try #require(harness.monitor.liveEntries.first { $0.url == fetched.url.absoluteString })
+        #expect(hop.template == "https://ad.example/inline.xml?cb=[CACHEBUSTING]&p=1.5", "the URI as written next to the URL sent")
+        #expect(hop.trigger == MonitorVASTFetcher.wrapperTrigger)
         let impressions = harness.monitor.liveEntries.isEmpty ? [] : try await { () async throws -> [NetworkEntry] in
             _ = try await firedImpression(harness)
             return harness.monitor.liveEntries.filter { $0.category == .impression }
@@ -109,6 +112,9 @@ struct MacroOriginAcceptanceTests {
                                        transport: transport)
         let fetched = try #require(transport.requests.first)
         #expect(fetched.url.absoluteString.range(of: #"cb="# + Self.cacheBuster + "$", options: .regularExpression) != nil, "\(fetched.url)")
+        let tag = try #require(harness.monitor.liveEntries.first { $0.url == fetched.url.absoluteString })
+        #expect(tag.template == "https://ad.example/tag.xml?cb=[CACHEBUSTING]")
+        #expect(tag.trigger == MonitorVASTFetcher.tagTrigger, "the pasted tag is the VAST tag, not a wrapper")
         let impression = try await firedImpression(harness)
         #expect(impression.url == "https://t.example/imp?p=${AUCTION_PRICE}")
         #expect(harness.session.renderIssues.contains { $0.code == "vast.macro.openrtb.unsubstituted" })

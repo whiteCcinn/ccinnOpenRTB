@@ -430,9 +430,16 @@ final class AdSession: AdRenderingHost {
         deliver([.loss(reason: reason.code)], origin: "manual")
     }
 
+    /// Why the last play's trackers in flight are cancelled when a new play (Render, Reset, Lose) starts.
+    nonisolated static let playEndedCancellation = "a new render started"
+
     private func startGeneration() {
         renderTask?.cancel()
         viewabilityTimer?.cancel()
+        // The last play ends here: its trackers still in flight are cancelled (no late hit, no further hop) and what the
+        // monitor prepared for it (media routes, data: media files) is released before the next render prepares its own.
+        monitor.cancelInFlightTrackers(reason: Self.playEndedCancellation)
+        monitor.endRender()
         generation &+= 1
         prepared = nil
         renderIssues = []
@@ -548,7 +555,7 @@ final class AdSession: AdRenderingHost {
         case let .vast(source):
             phase = .preparing("Resolving VAST…")
             let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: sourceRoot(candidate) + " › VAST",
-                                             rootParentID: markupEntryID)
+                                             rootParentID: markupEntryID, resolving: source)
             let resolved = await services.resolveVAST(source, fetcher, markupEntryID, macroContext(for: candidate, input: input, adIndex: nil))
             guard token == generation else { return }
             vast = resolved
@@ -862,7 +869,7 @@ final class AdSession: AdRenderingHost {
         let token = generation
         let parent = prepared.markupEntryID
         let label = sourceRoot(prepared.candidate) + " › native video"
-        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent)
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: label, rootParentID: parent, resolving: source)
         let resolve = services.resolveVAST
         let context = macroContext(for: prepared.candidate, input: renderInput, adIndex: nil)
         let task = Task { await resolve(source, fetcher, parent, context) }
@@ -913,7 +920,7 @@ final class AdSession: AdRenderingHost {
         reviewedNativeVideo = (candidateID, revision, source, nil)
         let parent = candidateID == prepared?.candidate.id ? prepared?.markupEntryID : nil
         let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, source: "bid \(candidateID) › native video (Real-mode review)",
-                                         rootParentID: parent)
+                                         rootParentID: parent, resolving: source)
         let resolve = services.resolveVAST
         let context = realModeCandidate.map { macroContext(for: $0, input: parsed, adIndex: nil) } ?? MacroContext()
         Task { [weak self] in

@@ -358,6 +358,23 @@ struct MonitorVASTFetcherTests {
         #expect(transport.requests.allSatisfy { $0.headers["User-Agent"] == deviceUA })
     }
 
+    /// AdTech review: the player expands VAST `[…]` macros in a request URI when it fetches it; the entry shows the URI as
+    /// written (its template) next to the URL actually sent.
+    @Test func theEntryKeepsTheURIAsWrittenNextToTheURLSent() async throws {
+        let transport = FakeTransport()
+        transport.respond("https://a.example/tag.xml?cb=12345678", body: "<VAST version=\"4.1\"/>")
+        let monitor = makeMonitor(transport: transport)
+        let fetcher = MonitorVASTFetcher(monitor: monitor, userAgent: deviceUA, source: "bid 0.0 › VAST", resolving: .url("https://a.example/tag.xml?cb=[CACHEBUSTING]"))
+        let fetched = try await fetcher.fetchVAST("https://a.example/tag.xml?cb=12345678", template: "https://a.example/tag.xml?cb=[CACHEBUSTING]",
+                                                  parentRequestID: nil)
+        let entryID = try #require(fetched.requestID)
+        let entry = try #require(monitor.entry(id: entryID))
+        #expect(entry.url == "https://a.example/tag.xml?cb=12345678")
+        #expect(entry.template == "https://a.example/tag.xml?cb=[CACHEBUSTING]")
+        #expect(entry.trigger == MonitorVASTFetcher.tagTrigger)
+        #expect(transport.requests.map(\.url.absoluteString) == ["https://a.example/tag.xml?cb=12345678"])
+    }
+
     private static func wrapper(_ tagURI: String) -> String {
         "<VAST version=\"3.0\"><Ad id=\"w\"><Wrapper><AdSystem>W</AdSystem><VASTAdTagURI><![CDATA[\(tagURI)]]></VASTAdTagURI>"
             + "<Impression><![CDATA[https://t.example/w-imp]]></Impression><Creatives/></Wrapper></Ad></VAST>"

@@ -43,9 +43,16 @@ public struct MonitorVASTFetcher: VASTFetcher {
     }
 
     public func fetchVAST(_ url: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
+        try await fetchVAST(url, template: url, parentRequestID: parentRequestID)
+    }
+
+    /// The resolver's call: `url` is sent (the player's VAST macros expanded), `template` is the URI as written; the entry
+    /// shows both.
+    public func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
         let monitor = monitor
         let (data, entryID) = try await monitor.fetchContent(url, category: .content, trigger: label(parentRequestID: parentRequestID),
-                                                             source: source, parentID: parentRequestID ?? rootParentID, userAgent: userAgent)
+                                                             source: source, parentID: parentRequestID ?? rootParentID, userAgent: userAgent,
+                                                             template: template)
         // The root entry's Content-Type describes the body only when it was not redirected.
         let root = await monitor.entry(id: entryID)
         let contentType = root.flatMap { (200..<300).contains($0.status ?? 0) ? $0.responseHeader("Content-Type") : nil }

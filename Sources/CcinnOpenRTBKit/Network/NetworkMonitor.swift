@@ -183,9 +183,9 @@ public final class NetworkMonitor {
     /// win-notice markup) obeys the mode: in Simulated mode it is recorded and `notSentInSimulatedMode` is thrown.
     /// Offline, remote content is recorded and `offline` is thrown.
     public func fetchContent(_ url: String, category: TrackerCategory = .content, trigger: String, source: String, parentID: UUID?,
-                             userAgent: String) async throws -> (data: Data, entryID: UUID) {
+                             userAgent: String, template: String? = nil) async throws -> (data: Data, entryID: UUID) {
         var entry = NetworkEntry(parentID: parentID, sequence: 0, startedAt: clock.now(), category: category, trigger: trigger, source: source,
-                                 template: url, url: url, state: .pending, sessionMode: mode)
+                                 template: template ?? url, url: url, state: .pending, sessionMode: mode)
         switch DispatchPolicy.action(for: category, isScript: false, mode: mode, offline: offline, destination: DispatchPolicy.Destination(url: url)) {
         case let .record(state, delivery, note):
             entry.state = state

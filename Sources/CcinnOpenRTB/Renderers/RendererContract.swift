@@ -125,7 +125,7 @@ extension AdRenderingHost {
     func rendererLog(_ entry: RendererLogEntry) {}
 
     func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
-        await VASTResolver(fetcher: MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent)).resolve(source)
+        await VASTResolver(fetcher: MonitorVASTFetcher(monitor: monitor, userAgent: device.userAgent, resolving: source)).resolve(source)
     }
 }
 
