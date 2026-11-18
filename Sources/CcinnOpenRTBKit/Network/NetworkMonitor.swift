@@ -83,6 +83,8 @@ public final class NetworkMonitor {
     @ObservationIgnored private let transport: any HTTPTransport
     @ObservationIgnored private let clock: any NetworkClock
     @ObservationIgnored private let samples: any SampleMediaProviding
+    /// The files `data:` media is written to for the player, deleted when the render ends.
+    @ObservationIgnored private let mediaFiles: MediaTemporaryFiles
     @ObservationIgnored private let publishInterval: Duration
     @ObservationIgnored private var publishScheduled = false
     @ObservationIgnored private var dirty = false
@@ -95,13 +97,20 @@ public final class NetworkMonitor {
     /// Entries whose outcome the renderer reports (`finishRendererLoad`).
     @ObservationIgnored private var rendererLoads: Set<UUID> = []
 
-    public init(transport: any HTTPTransport = URLSessionTransport.shared, clock: any NetworkClock = SystemNetworkClock(),
-                samples: any SampleMediaProviding = SampleMedia.shared, publishInterval: Duration = .milliseconds(50),
-                capacity: Int = NetworkMonitor.defaultCapacity) {
+    public convenience init(transport: any HTTPTransport = URLSessionTransport.shared, clock: any NetworkClock = SystemNetworkClock(),
+                            samples: any SampleMediaProviding = SampleMedia.shared, publishInterval: Duration = .milliseconds(50),
+                            capacity: Int = NetworkMonitor.defaultCapacity) {
+        self.init(transport: transport, clock: clock, samples: samples, publishInterval: publishInterval, capacity: capacity,
+                  mediaFiles: MediaTemporaryFiles())
+    }
+
+    init(transport: any HTTPTransport, clock: any NetworkClock = SystemNetworkClock(), samples: any SampleMediaProviding,
+         publishInterval: Duration, capacity: Int = NetworkMonitor.defaultCapacity, mediaFiles: MediaTemporaryFiles) {
         self.transport = transport
         self.clock = clock
         self.samples = samples
         self.publishInterval = publishInterval
+        self.mediaFiles = mediaFiles
         log = NetworkLog(capacity: capacity)
     }
 
@@ -238,9 +247,8 @@ public final class NetworkMonitor {
                 finish(stored.id, failure: failure, token: token)
                 return PreparedMedia(entryID: stored.id, failure: failure)
             }
-            let file = Self.temporaryMediaFile(for: decoded.mimeType)
             do {
-                try await Self.write(decoded.data, to: file)
+                let file = try await mediaFiles.write(decoded.data, mimeType: decoded.mimeType)
                 finishLocal(stored.id, bytes: decoded.data.count, mimeType: decoded.mimeType, note: Self.dataURLNote, body: nil, token: token)
                 return PreparedMedia(playableURL: file, entryID: stored.id)
             } catch {
@@ -320,8 +328,16 @@ public final class NetworkMonitor {
         cancelLoads(reason: reason) { $0.isTracker }
     }
 
+    /// The session's render ended (Render, Reset, a new generation): what the monitor prepared for it is released, i.e.
+    /// the temporary files of its `data:` media. Call it before the next render prepares its media.
+    public func endRender() {
+        mediaFiles.removeAll()
+    }
+
     /// Empties the log and restarts the sequence; requests in flight stop following redirects and are not recorded.
+    /// Ends the render too (`endRender`).
     public func clear() {
+        endRender()
         generation &+= 1
         for load in activeLoads.values { load.task.cancel() }
         activeLoads.removeAll()
@@ -703,19 +719,6 @@ public final class NetworkMonitor {
         return String(url.prefix(200)) + "…(\(url.utf8.count) bytes)"
     }
 
-    nonisolated static func temporaryMediaFile(for mimeType: String) -> URL {
-        let ext = switch mimeType {
-        case "video/mp4": "mp4"
-        case "video/quicktime": "mov"
-        case "audio/mp4", "audio/x-m4a", "audio/aac": "m4a"
-        case "audio/mpeg", "audio/mp3": "mp3"
-        case "application/x-mpegurl", "application/vnd.apple.mpegurl": "m3u8"
-        case "video/webm": "webm"
-        default: "bin"
-        }
-        return FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-media-\(UUID().uuidString).\(ext)")
-    }
-
     /// Reads a file off the main actor, refusing anything above `limit`.
     nonisolated static func readFile(_ url: URL, limit: Int) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
@@ -725,11 +728,6 @@ public final class NetworkMonitor {
         }.value
     }
 
-    nonisolated static func write(_ data: Data, to url: URL) async throws {
-        try await Task.detached(priority: .userInitiated) {
-            try data.write(to: url, options: .atomic)
-        }.value
-    }
 }
 
 /// What a load produced: the response of its final hop.
