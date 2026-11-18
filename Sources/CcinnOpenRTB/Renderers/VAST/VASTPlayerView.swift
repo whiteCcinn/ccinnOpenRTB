@@ -109,6 +109,9 @@ private struct VideoPlayerLayout: View {
                 }
                 PlayerOverlay(model: model, compact: arrangement.playerFrame.height < 160)
                     .frame(width: arrangement.playerFrame.width, height: arrangement.playerFrame.height)
+                if model.endCard == nil {
+                    IconsOverlay(model: model, host: host, size: arrangement.playerFrame.size)
+                }
                 if let below, let frame = arrangement.companionFrame, let item = model.currentItem {
                     CompanionView(choice: below, adIndex: item.adIndex, player: model, host: host, source: item.source)
                         .frame(width: frame.width, height: frame.height)
@@ -137,6 +140,58 @@ private struct VideoPlayerLayout: View {
         let remaining = size.height - playerHeight - CompanionArrangement.spacing
         guard remaining > 0 else { return nil }
         return CompanionPicker.pick(item.companions, fitting: CGSize(width: size.width, height: remaining))
+    }
+}
+
+/// The current ad's industry icons (AdChoices …) at their positions over the video. An icon counts as shown — its
+/// IconViewTracking — once its image is on screen; a click fires IconClickTracking and opens IconClickThrough.
+struct IconsOverlay: View {
+    let model: VASTPlayerModel
+    let host: any AdRenderingHost
+    let size: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(model.visibleIcons) { icon in
+                let frame = icon.frame(in: size)
+                IconImageView(icon: icon, model: model, host: host)
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: frame.minX, y: frame.minY)
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+}
+
+private struct IconImageView: View {
+    let icon: PlayerIcon
+    let model: VASTPlayerModel
+    let host: any AdRenderingHost
+    @State private var state: RemoteImageState = .loading
+
+    var body: some View {
+        // A ZStack, not a Group: an empty Group is no view, and its task would never start.
+        ZStack {
+            Color.clear
+            if let image = state.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.iconClicked(icon) }
+                    .help(icon.program ?? "Ad icon")
+                    .accessibilityLabel(icon.program ?? "Ad icon")
+                    .accessibilityAddTraits(.isButton)
+            }
+        }
+        .task(id: icon) {
+            guard let item = model.currentItem else { return }
+            let loaded = await RemoteImageLoader.load(icon.imageURL, host: host, trigger: "VAST icon",
+                                                      source: item.source + " › Icon " + (icon.program ?? "\(icon.iconIndex &+ 1)"),
+                                                      origin: .document(requestID: model.documentRequestID(adIndex: item.adIndex)))
+            state = loaded
+            if loaded.image != nil { model.iconAppeared(icon) }
+        }
     }
 }
 

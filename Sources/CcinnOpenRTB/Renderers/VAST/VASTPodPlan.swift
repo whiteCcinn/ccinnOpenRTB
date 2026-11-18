@@ -36,6 +36,8 @@ struct VASTPodItem: Equatable, Sendable {
     /// 602 when a creative's `CompanionAds@required` cannot be met by the companions this player shows (none on CTV):
     /// the ad must not play (VAST 4.1 §3.13.1).
     var companionRequirementError: VASTErrorCode? = nil
+    /// The industry icons the player draws over this ad (`VASTIconPlan`).
+    var icons: [PlayerIcon] = []
 
     /// The error an ad without a linear creative reports: 201 (expected linear, got non-linear) or 400.
     var missingLinearError: VASTErrorCode { isNonLinearOnly ? .unexpectedLinearity : .linearError }
@@ -61,7 +63,8 @@ enum VASTPodPlan {
             return VASTPodItem(adIndex: index, title: ad.inline.adTitle, advertiser: ad.inline.adSystem, linear: linear,
                                isNonLinearOnly: linear == nil && creatives.contains(where: \.hasNonLinear), companions: companions,
                                mediaParentID: parentID(of: ad, in: vast), source: label, progressOffsets: progress,
-                               companionRequirementError: ad.inline.companionRequirementError(canShow: canShowCompanion))
+                               companionRequirementError: ad.inline.companionRequirementError(canShow: canShowCompanion),
+                               icons: VASTIconPlan.icons(ad.icons))
         }
     }
 

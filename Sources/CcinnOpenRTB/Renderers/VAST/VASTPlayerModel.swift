@@ -93,6 +93,8 @@ final class VASTPlayerModel {
     @ObservationIgnored private var viewedCompanions: Set<[Int]> = []
     /// Companions reported shown before their ad started, viewed right after the ad's `creativeView`.
     @ObservationIgnored private var pendingCompanionViews: [(choice: CompanionChoice, adIndex: Int)] = []
+    /// The current ad's icons already shown (IconViewTracking fires once per icon).
+    @ObservationIgnored private var shownIcons: Set<Int> = []
     @ObservationIgnored private var lastStatus: PlaybackStatus?
     @ObservationIgnored private var userPaused = false
     @ObservationIgnored private var hiddenPaused = false
@@ -116,6 +118,27 @@ final class VASTPlayerModel {
     var isTornDown: Bool { stopped }
     var adNumber: Int { (currentItem?.adIndex ?? 0) + 1 }
     var showsLearnMore: Bool { configuration.allowsClickThrough && currentItem?.clickThrough != nil && phase == .playing }
+
+    /// The industry icons on screen now: the current ad's, from its first frame, each in its offset/duration window. None
+    /// on CTV.
+    var visibleIcons: [PlayerIcon] {
+        guard !configuration.isCTV, currentAdStarted, phase == .playing, let item = currentItem else { return [] }
+        return item.icons.filter { $0.isVisible(at: playhead) }
+    }
+
+    /// An icon is on screen: its IconViewTracking, once.
+    func iconAppeared(_ icon: PlayerIcon) {
+        guard !stopped, let item = currentItem, item.icons.contains(icon), shownIcons.insert(icon.iconIndex).inserted else { return }
+        log(.info, "Ad \(item.adIndex &+ 1): icon \(icon.program ?? "") shown")
+        host?.report(.iconView(adIndex: item.adIndex, iconIndex: icon.iconIndex))
+    }
+
+    /// A click on an icon: its IconClickTracking, then the IconClickThrough navigation (the tracking plan).
+    func iconClicked(_ icon: PlayerIcon) {
+        guard !stopped, let item = currentItem, item.icons.contains(icon) else { return }
+        log(.info, "Ad \(item.adIndex &+ 1): icon \(icon.program ?? "") clicked")
+        host?.report(.iconClick(adIndex: item.adIndex, iconIndex: icon.iconIndex))
+    }
     var remaining: Double { PlayerClock.remaining(playhead: playhead, duration: duration) }
     var progress: Double { PlayerClock.fraction(playhead: playhead, duration: duration) }
     /// The engine's player, for the video layer.
@@ -329,6 +352,7 @@ final class VASTPlayerModel {
         currentItem = item
         currentAdStarted = false
         pendingCompanionViews.removeAll()
+        shownIcons.removeAll()
         playhead = 0
         duration = item.declaredDuration
         isReady = false

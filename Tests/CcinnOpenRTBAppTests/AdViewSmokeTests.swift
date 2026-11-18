@@ -157,3 +157,35 @@ struct CompanionNetworkParentTests {
         #expect(!creative.isEmpty && creative.allSatisfy { $0.parentID == hop }, "\(creative.map(\.dumpLine))")
     }
 }
+
+/// VAST icons on screen (SwiftUI): the icon's image is fetched under the hop that delivered its document, and its
+/// IconViewTracking fires once the image is shown.
+@MainActor
+@Suite("VAST icon view (SwiftUI)", .serialized)
+struct VASTIconViewTests {
+    @Test func theIconIsFetchedUnderItsHopAndViewedWhenShown() async throws {
+        let host = RecordingHost()
+        let hop = UUID()
+        var ad = RendererFixtures.linearAd(duration: 10)
+        ad.origin = [VASTAdOrigin(hop: 0, ad: 0)]
+        ad.icons = [VASTIcon(program: "AdChoices", width: 40, height: 15, xPosition: .right, yPosition: .top,
+                             resources: [.staticResource(url: "ccinn-sample://image/40x15.png", creativeType: "image/png")],
+                             clickThrough: "https://privacy.example/")]
+        let vast = ResolvedVAST(chain: [VASTHop(url: "https://ads.example/inline.xml", requestID: hop)], ads: [ad])
+        let configuration = VASTPlayerConfiguration(placement: .interstitial, device: RendererFixtures.phone,
+                                                    playerSize: CGSize(width: 390, height: 219), audioOnly: false, source: "bid 0.0 › VAST")
+        let engine = FakeEngine()
+        let model = VASTPlayerModel(vast: vast, configuration: configuration, host: host, engine: engine,
+                                    chooseMedia: { files, _, _, _ in files.first.map(VASTMediaSelector.Choice.play) ?? .unsupported(.noSupportedMedia) })
+        model.start()
+        #expect(await Wait.until { !engine.loaded.isEmpty })
+        engine.send(.ready(duration: 10))
+        engine.tick(from: 0, to: 1)
+        let harness = WindowHarness(IconsOverlay(model: model, host: host, size: CGSize(width: 390, height: 219)), size: CGSize(width: 390, height: 219))
+        defer { harness.close() }
+        #expect(await Wait.until(timeout: .seconds(20)) { host.events.contains(.iconView(adIndex: 0, iconIndex: 0)) },
+                "\(host.events) \(host.monitor.liveEntries.map(\.dumpLine))")
+        let image = host.monitor.liveEntries.filter { $0.url == "ccinn-sample://image/40x15.png" }
+        #expect(image.count == 1 && image.allSatisfy { $0.parentID == hop && $0.trigger == "VAST icon" }, "\(image.map(\.dumpLine))")
+    }
+}
