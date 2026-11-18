@@ -16,16 +16,18 @@ import Foundation
 ///
 /// Exchange-side and SDK trackers substitute OpenRTB `${…}` macros only; VAST `[…]` macros are the player's.
 ///
-/// Parents (decisions.md "Network relationships"): every request this plan builds (auction notices, AdCOM events,
-/// Native trackers, click trackers and the navigation) is a child of `options.markupRequestID`, the request that
-/// delivered the markup (nil for inline `adm`). A tracker never parents a navigation: one click's requests are siblings
-/// sharing the trigger "click". VAST requests come from `VASTTrackingPlan` unchanged, each a child of its VAST hop.
+/// Parents (decisions.md "Network relationships"): a request's parent is the request that delivered the document
+/// containing its URL. The pasted bid response has none, so its URLs (nurl/purl, burl, lurl, AdCOM `display.event`, the
+/// AdCOM banner link) are roots. URLs inside the markup (Native trackers, clicktrackers and link) are children of
+/// `options.markupRequestID`, the nurl/purl or `display.curl` request that delivered it. A tracker never parents a
+/// navigation: one click's requests are siblings sharing the trigger "click". VAST requests come from
+/// `VASTTrackingPlan` unchanged, each a child of its VAST hop.
 public enum TrackingPlan {
     public struct Options: Sendable, Hashable {
         /// The exchange sends the win notice (`nurl`) itself.
         public var exchangeSendsWinNotice: Bool
-        /// The network entry of the request that delivered the markup (`nurl`/`purl` or `display.curl`), the parent of
-        /// every non-VAST request; `nil` when the markup is inline in the bid response.
+        /// The network entry of the request that delivered the markup (`nurl`/`purl` or `display.curl`), the parent of the
+        /// URLs inside that markup; `nil` when the markup is inline in the bid response.
         public var markupRequestID: UUID?
 
         public init(exchangeSendsWinNotice: Bool = true, markupRequestID: UUID? = nil) {
@@ -36,42 +38,45 @@ public enum TrackingPlan {
 
     public static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, native: NativeAd?, vast: ResolvedVAST?,
                                 context: MacroContext, options: Options = Options()) -> [TrackerRequest] {
-        let factory = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
+        // One factory per document: the pasted response (no parent) and the markup (its delivering request, if any).
+        let response = TrackerRequestFactory(candidate: candidate, context: context)
+        let markup = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
         switch event {
         case .won:
             guard options.exchangeSendsWinNotice else { return [] }
-            return AuctionTracking.win(candidate, factory: factory)
+            return AuctionTracking.win(candidate, factory: response)
         case .rendered:
-            return AuctionTracking.billing(candidate, factory: factory)
-                + AdcomTracking.rendered(candidate.adcomEvents, factory: factory)
-                + (native.map { NativeTracking.impression($0, factory: factory) } ?? [])
+            return AuctionTracking.billing(candidate, factory: response)
+                + AdcomTracking.rendered(candidate.adcomEvents, factory: response)
+                + (native.map { NativeTracking.impression($0, factory: markup) } ?? [])
         case let .viewable(level):
-            return AdcomTracking.viewable(candidate.adcomEvents, level: level, factory: factory)
-                + (native.map { NativeTracking.viewable($0, level: level, factory: factory) } ?? [])
+            return AdcomTracking.viewable(candidate.adcomEvents, level: level, factory: response)
+                + (native.map { NativeTracking.viewable($0, level: level, factory: markup) } ?? [])
         case let .click(assetID):
-            return displayClick(assetID: assetID, candidate: candidate, native: native, factory: factory)
+            return displayClick(assetID: assetID, candidate: candidate, native: native, response: response, markup: markup)
         case .closed:
             return []
         case let .loss(reason):
             var lossContext = context
             lossContext.lossReason = reason
-            return AuctionTracking.loss(candidate, reason: reason,
-                                        factory: TrackerRequestFactory(candidate: candidate, context: lossContext, parentID: options.markupRequestID))
+            return AuctionTracking.loss(candidate, reason: reason, factory: TrackerRequestFactory(candidate: candidate, context: lossContext))
         case .video, .videoViewability, .videoClick, .companionView, .companionClick, .error:
             guard let vast else { return [] }
             return VASTTrackingPlan.requests(for: event, vast: vast, candidate: candidate, context: context,
-                                             source: vastSource(native: native, factory: factory))
+                                             source: vastSource(native: native, factory: response))
         }
     }
 
     /// Display and Native clicks. HTML creatives open their own destination (`mraid.open`, `window.open`, links), which the
-    /// renderer records as a navigation; VAST clicks are `.videoClick`.
-    private static func displayClick(assetID: Int?, candidate: AdCandidate, native: NativeAd?, factory: TrackerRequestFactory) -> [TrackerRequest] {
+    /// renderer records as a navigation; VAST clicks are `.videoClick`. The Native link is in the markup; the AdCOM
+    /// banner link is in the bid response.
+    private static func displayClick(assetID: Int?, candidate: AdCandidate, native: NativeAd?, response: TrackerRequestFactory,
+                                     markup: TrackerRequestFactory) -> [TrackerRequest] {
         switch candidate.markup {
         case .native:
-            return native.map { NativeTracking.click($0, assetID: assetID, factory: factory) } ?? []
+            return native.map { NativeTracking.click($0, assetID: assetID, factory: markup) } ?? []
         case let .image(banner):
-            return banner.link.map { AdcomTracking.click($0, factory: factory) } ?? []
+            return banner.link.map { AdcomTracking.click($0, factory: response) } ?? []
         case .html, .vast, .none:
             return []
         }

@@ -3,7 +3,8 @@ import Foundation
 /// Builds `TrackerRequest`s for exchange-side trackers (OpenRTB notices, AdCOM events, Native trackers and clicks):
 /// only OpenRTB `${…}` macros are substituted there, as an exchange would (`MacroExpander.expandOpenRTB`).
 ///
-/// Every request it builds gets `parentID`: the request that delivered the markup (`TrackingPlan.Options.markupRequestID`).
+/// A factory serves the URLs of one document: every request it builds gets `parentID`, the request that delivered that
+/// document (`nil` for the pasted bid response and for markup carried inline in it).
 struct TrackerRequestFactory {
     let context: MacroContext
     let parentID: UUID?
