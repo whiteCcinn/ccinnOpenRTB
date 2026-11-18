@@ -150,8 +150,8 @@ enum OpenRTBMacro: String, CaseIterable {
     var isPrice: Bool { self == .auctionPrice || self == .openRTBPrice }
 }
 
-/// VAST 4.x macros (VAST 4.1 §6.2 and 4.2). Values the player does not model come from `MacroContext.custom["[NAME]"]`
-/// (request-derived) or are `-1`.
+/// VAST 4.x macros (VAST 4.1 §6.2 and 4.2, and the IAB macro list VAST 4.3 §6.2 refers to). Values the player does not
+/// model come from `MacroContext.custom["[NAME]"]` (request-derived) or are `-1`.
 enum VASTMacro: String, CaseIterable {
     // Generic
     case timestamp = "TIMESTAMP", cacheBusting = "CACHEBUSTING"
@@ -169,6 +169,7 @@ enum VASTMacro: String, CaseIterable {
     case omidPartner = "OMIDPARTNER", mediaMime = "MEDIAMIME", playerCapabilities = "PLAYERCAPABILITIES", clickType = "CLICKTYPE"
     case playerState = "PLAYERSTATE", inventoryState = "INVENTORYSTATE", playerSize = "PLAYERSIZE", clickPosition = "CLICKPOS"
     case limitAdTracking = "LIMITADTRACKING", regulations = "REGULATIONS", gdprConsent = "GDPRCONSENT"
+    case gppString = "GPPSTRING", gppSectionID = "GPPSECTIONID"
     // Errors and verification
     case errorCode = "ERRORCODE", reason = "REASON"
 

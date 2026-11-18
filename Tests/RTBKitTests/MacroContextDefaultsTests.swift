@@ -82,6 +82,40 @@ struct MacroContextDefaultsTests {
         #expect(MacroExpander.expand("[LATLONG]|[DEVICEIP]|[GDPRCONSENT]|[DEVICEUA]", context: context).url == "-1|-1|-1|UA")
     }
 
+    /// VAST 4.1/4.2 §6.11 "Regulation Info": `[REGULATIONS]` is an Array<string>, the "List of applicable regulations",
+    /// whose possible values are `coppa` and `gdpr`. The list is complete only when both flags are given; with either
+    /// one unknown it cannot be told, so the macro stays unknown (-1). Both 0 is a known, empty list.
+    @Test(arguments: [
+        (Optional(true), Optional(true), "coppa,gdpr"), (false, true, "gdpr"), (true, false, "coppa"), (false, false, ""),
+        (nil, true, "-1"), (true, nil, "-1"), (nil, false, "-1"), (nil, nil, "-1"),
+    ])
+    func regulationsListOnlyWhenBothFlagsAreKnown(coppa: Bool?, gdpr: Bool?, expected: String) {
+        let request = BidRequestSummary(id: "r", impressions: [], gdprApplies: gdpr, coppa: coppa)
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(MacroExpander.expand("[REGULATIONS]", context: context).url == expected)
+    }
+
+    /// `[GPPSTRING]` (string) and `[GPPSECTIONID]` (Array<integer>) are in the IAB VAST macro list, which VAST 4.3 §6.2
+    /// makes the reference ("Please reference the Macro list in GitHub"); the IAB examples are used here.
+    @Test func gppMacrosComeFromRegs() {
+        let request = BidRequestSummary(id: "r", impressions: [], gppString: "DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA",
+                                        gppSectionIDs: [5, 7])
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(context.customLists["[GPPSECTIONID]"] == ["5", "7"])
+        #expect(MacroExpander.expand("s=[GPPSTRING]&sid=[GPPSECTIONID]", context: context).url
+            == "s=DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA&sid=5,7")
+        let none = MacroContext.simulatorDefaults(candidate: bid, request: BidRequestSummary(id: "r", impressions: []), device: phone)
+        #expect(MacroExpander.expand("s=[GPPSTRING]&sid=[GPPSECTIONID]&r=[REGULATIONS]", context: none).url == "s=-1&sid=-1&r=-1")
+    }
+
+    /// No VAST 4.x or OpenRTB macro carries the US Privacy string: it stays a request fact.
+    @Test func usPrivacyIsNotAMacro() {
+        let request = BidRequestSummary(id: "r", impressions: [], usPrivacy: "1YNN")
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(!context.custom.values.contains("1YNN"))
+        #expect(!context.customLists.values.contains { $0.contains("1YNN") })
+    }
+
     /// The simulator's player plays VAST 2.0–4.2 (AdCOM Creative Subtypes), listed as an Array<integer>.
     @Test func supportedVASTVersionsAreAList() {
         let context = MacroContext.simulatorDefaults(candidate: bid, request: nil, device: phone)

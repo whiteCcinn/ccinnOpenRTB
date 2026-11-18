@@ -77,6 +77,7 @@ enum BidRequestReader {
         let source = request.object("source", log: &facts.log)
         facts.transactionID = nonEmpty(source?.string("tid", log: &facts.log)) ?? nonEmpty(source?.object("ext", log: &facts.log)?.string("tid", log: &facts.log))
         facts.blockedCategories = request.strings("bcat", log: &facts.log) ?? []
+        facts.readRegs(request.object("regs", log: &facts.log))
         log = facts.log
         return facts.summary
     }
@@ -140,6 +141,7 @@ enum BidRequestReader {
         facts.gdprConsent = nonEmpty(context?.object("user", log: &facts.log)?.string("consent", log: &facts.log))
         facts.transactionID = nonEmpty(request.object("source", log: &facts.log)?.string("tid", log: &facts.log))
         facts.blockedCategories = context?.object("restrictions", log: &facts.log)?.strings("bcat", log: &facts.log) ?? []
+        facts.readRegs(context?.object("regs", log: &facts.log))
         log = facts.log
         return facts.summary
     }
@@ -251,6 +253,35 @@ private struct RequestFacts {
         guard let content else { return }
         if draft.contentID == nil { draft.contentID = BidRequestReader.nonEmpty(content.string("id", log: &log)) }
         if draft.contentURL == nil { draft.contentURL = BidRequestReader.nonEmpty(content.string("url", log: &log)) }
+    }
+
+    /// OpenRTB 2.6 §3.2.3 / AdCOM 1.0 Regs: `coppa`, `gdpr`, `gpp`, `gpp_sid`, and 2.6 `us_privacy`. 2.5-era requests
+    /// carried `gdpr` and `us_privacy` in `regs.ext` (IAB GDPR and US Privacy extensions); the standard field wins.
+    mutating func readRegs(_ regs: JSONObjectReader?) {
+        guard let regs else { return }
+        let ext = regs.object("ext", log: &log)
+        draft.gdprApplies = binaryFlag("gdpr", in: regs)
+        if draft.gdprApplies == nil, let ext { draft.gdprApplies = binaryFlag("gdpr", in: ext) }
+        draft.coppa = binaryFlag("coppa", in: regs)
+        draft.usPrivacy = BidRequestReader.nonEmpty(regs.string("us_privacy", log: &log))
+        if draft.usPrivacy == nil, let ext { draft.usPrivacy = BidRequestReader.nonEmpty(ext.string("us_privacy", log: &log)) }
+        draft.gppString = BidRequestReader.nonEmpty(regs.string("gpp", log: &log))
+        draft.gppSectionIDs = regs.ints("gpp_sid", log: &log) ?? []
+    }
+
+    /// A Regs flag: 0 = no, 1 = yes. Any other value is reported and read as not given (for `gdpr`, "unknown"), so no
+    /// regulation is assumed from it.
+    private mutating func binaryFlag(_ key: String, in reader: JSONObjectReader) -> Bool? {
+        if case .bool? = reader.raw(key) { return reader.flag(key, log: &log) }
+        switch reader.int(key, log: &log) {
+        case 0?: return false
+        case 1?: return true
+        case let other?:
+            log.warning("request.regs.flag.invalid", "`\(key)` is \(other); it must be 0 (no) or 1 (yes). It was read as not given.",
+                        at: reader.pointer.appending(key))
+            return nil
+        case nil: return nil
+        }
     }
 
     /// `ip` wins over `ipv6`; `ifa_type` is the IAB guidelines' `device.ext.ifa_type`.

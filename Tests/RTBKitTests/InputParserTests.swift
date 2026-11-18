@@ -599,6 +599,62 @@ struct BidRequestSummaryTests {
         #expect(summary.impressions.allSatisfy { $0.itemQuantity == nil })
     }
 
+    /// OpenRTB 2.6 §3.2.3 Regs: `coppa`, `gdpr` ("omission indicates unknown"), `us_privacy`, `gpp`, `gpp_sid`.
+    @Test func privacyRegulationsFromAnOpenRTB26Request() throws {
+        let request = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"regs":{"coppa":1,"gdpr":1,"us_privacy":"1YNN","gpp":"DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA","gpp_sid":[2,6]}}"#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: request).request)
+        #expect(summary.coppa == true)
+        #expect(summary.gdprApplies == true)
+        #expect(summary.usPrivacy == "1YNN")
+        #expect(summary.gppString == "DBABMA~CPXxRfAPXxRfAAfKABENB-CgAAAAAAAAAAYgAAAAAAAA")
+        #expect(summary.gppSectionIDs == [2, 6])
+    }
+
+    /// 2.5-era requests carried `gdpr` and `us_privacy` in `regs.ext` (IAB GDPR and US Privacy extensions); the 2.6 fields
+    /// win when both are present.
+    @Test func privacyRegulationsFromRegsExt() throws {
+        let legacy = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"regs":{"ext":{"gdpr":1,"us_privacy":"1YYN"}}}"#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: legacy).request)
+        #expect(summary.gdprApplies == true)
+        #expect(summary.usPrivacy == "1YYN")
+        #expect(summary.coppa == nil)
+        #expect(summary.gppString == nil)
+        #expect(summary.gppSectionIDs.isEmpty)
+        let both = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"regs":{"gdpr":0,"us_privacy":"1NNN","ext":{"gdpr":1,"us_privacy":"1YYN"}}}"#
+        let preferred = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: both).request)
+        #expect(preferred.gdprApplies == false)
+        #expect(preferred.usPrivacy == "1NNN")
+    }
+
+    /// The flags are 0 (no) or 1 (yes); any other value is reported and read as not given (for `gdpr`, "unknown").
+    @Test func privacyFlagsOtherThanZeroOrOneAreReported() throws {
+        let request = #"{"id":"r","imp":[{"id":"1","banner":{"w":1,"h":1}}],"regs":{"gdpr":2,"coppa":-1}}"#
+        let input = InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: request)
+        let summary = try #require(input.request)
+        #expect(summary.gdprApplies == nil)
+        #expect(summary.coppa == nil)
+        let flagged = input.issues.filter { $0.code == "request.regs.flag.invalid" }
+        #expect(flagged.map(\.path).sorted() == ["request:/regs/coppa", "request:/regs/gdpr"])
+        #expect(flagged.allSatisfy { $0.severity == .warning })
+    }
+
+    @Test func noRegsMeansNothingIsKnown() throws {
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: OpenRTBFixtures.request26).request)
+        #expect(summary.gdprApplies == nil && summary.coppa == nil && summary.usPrivacy == nil && summary.gppString == nil)
+        #expect(summary.gppSectionIDs.isEmpty)
+    }
+
+    /// OpenRTB 3.0: AdCOM 1.0 Regs under `context.regs` (`coppa`, `gdpr`, `gpp`, `gpp_sid`).
+    @Test func privacyRegulationsFromAnOpenRTB3Request() throws {
+        let request = #"{"openrtb":{"ver":"3.0","request":{"id":"r3","item":[{"id":"1","spec":{"placement":{"display":{"w":320,"h":50}}}}],"context":{"regs":{"coppa":0,"gdpr":1,"gpp":"G~1","gpp_sid":[7]}}}}}"#
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec30Banner, request: request).request)
+        #expect(summary.coppa == false)
+        #expect(summary.gdprApplies == true)
+        #expect(summary.gppString == "G~1")
+        #expect(summary.gppSectionIDs == [7])
+        #expect(summary.usPrivacy == nil)
+    }
+
     @Test func invalidRequestIsAWarningAndIgnored() {
         let input = InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: "{not json")
         #expect(input.request == nil)

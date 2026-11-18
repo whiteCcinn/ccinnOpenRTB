@@ -15,6 +15,8 @@ extension MacroContext {
     ///   come from the impression the bid is for; whole numbers have no trailing ".0".
     /// - `[APPBUNDLE]` is the publisher app from the request only: `Bid.bundle` names the advertised app.
     /// - `[DEVICEUA]` is the request's `device.ua` when given; otherwise the expander uses the simulated device's.
+    /// - `[REGULATIONS]` (VAST 4.1/4.2 §6.11) lists `coppa` / `gdpr` from `regs`, only when both flags are given; `[GPPSTRING]`
+    ///   and `[GPPSECTIONID]` (IAB VAST macro list) come from `regs.gpp` / `regs.gpp_sid`. `us_privacy` has no macro.
     /// - `[VASTVERSIONS]` lists the VAST versions the simulator's player plays.
     /// - `playerWidth` / `playerHeight` (`[PLAYERSIZE]`) default to the bid's size.
     public static func simulatorDefaults(candidate: AdCandidate, request: BidRequestSummary?, device: DeviceProfile,
@@ -45,6 +47,9 @@ extension MacroContext {
                 lists["[LATLONG]"] = [latitude, longitude]
             }
             if !request.blockedCategories.isEmpty { lists["[BLOCKEDADCATEGORIES]"] = request.blockedCategories }
+            if let regulations = vastRegulations(coppa: request.coppa, gdpr: request.gdprApplies) { lists["[REGULATIONS]"] = regulations }
+            put("[GPPSTRING]", request.gppString)
+            if !request.gppSectionIDs.isEmpty { lists["[GPPSECTIONID]"] = request.gppSectionIDs.map(String.init) }
 
             let impression = request.impressions.first { $0.id == candidate.impID }
             put(OpenRTBMacro.auctionMultiplier.rawValue, impression?.quantityMultiplier.flatMap(MacroEncoding.decimal))
@@ -57,5 +62,13 @@ extension MacroContext {
                             currency: candidate.currency, marketBidRatio: hasPrice ? 1 : nil, custom: custom, customLists: lists,
                             playerWidth: playerWidth ?? candidate.size?.width, playerHeight: playerHeight ?? candidate.size?.height,
                             device: device)
+    }
+
+    /// VAST 4.1/4.2 §6.11 `[REGULATIONS]`: the "List of applicable regulations", possible values `coppa` and `gdpr`, in
+    /// that order. The list is complete only when both flags are known; with either one unknown it is unknown (`nil`, so
+    /// the macro is -1). Both 0 is a known, empty list.
+    private static func vastRegulations(coppa: Bool?, gdpr: Bool?) -> [String]? {
+        guard let coppa, let gdpr else { return nil }
+        return (coppa ? ["coppa"] : []) + (gdpr ? ["gdpr"] : [])
     }
 }
