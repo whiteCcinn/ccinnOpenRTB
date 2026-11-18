@@ -23,7 +23,13 @@
   <a href="README.md">English</a> · 简体中文
 </p>
 
-<!-- 截图将放在这里：模拟器中渲染出的广告，以及旁边的 Network 窗口。 -->
+<p align="center">
+  <img src="docs/images/simulator-vast.png" width="900" alt="在模拟的 iPhone 17 Pro 上播放带伴随广告的可跳过 VAST 3.0 广告，右侧为竞价响应">
+</p>
+<p align="center">
+  <img src="docs/images/simulator-ctv.png" width="445" alt="在模拟的 Apple TV 4K 上播放包含两个广告的 VAST 4.1 Ad Pod">
+  <img src="docs/images/network-window.png" width="445" alt="Network 窗口：VAST Wrapper 链，模拟模式下记录的每一个监测请求">
+</p>
 
 ## 为什么选择 CcinnOpenRTB？
 
@@ -45,10 +51,10 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 |---|---|---|
 | **监测请求**：竞价成功 `nurl`、计费 `burl`、竞价失败 `lurl`、曝光、可见性、VAST 事件、点击、错误 | 仅记录，**永不发出** | 使用模拟设备的 User-Agent 发出，并记录状态码、耗时、请求头/响应头与大小。 |
 | **监测请求的重定向** | 不发出任何请求，因此不存在重定向 | 不会自动跟随。由应用逐跳跟随，每一跳都记录为子条目（最多 10 跳，并检测循环）。 |
-| **脚本类监测**：Native `jstracker`、method 为 2 的 `eventtrackers` | 仅记录，不注入 | 记录并注入到创意中 |
+| **脚本类监测**：Native `jstracker`、method 为 2 的 `eventtrackers` 与 AdCOM 事件 | 仅记录，不运行 | 记录后在各自独立的隐藏 Web 视图中各运行一次；它发起的加载记为它的子条目 |
 | **HTML 创意自身的网络请求**：脚本、像素、`fetch`、XHR、beacon | 由 WebKit 内容规则列表拦截，尝试发起的加载显示为 `blocked`。**Allow creative network** 可在当前会话中解除拦截。 | 不拦截 |
-| **渲染所需的内容**：VAST Wrapper 与标签请求、图片、媒体文件、`dcourl` | 会请求 | 会请求 |
-| **由竞价成功通知返回的广告素材**（有 `nurl` 但没有 `adm` 的出价） | 不请求，检查器中会说明原因 | 使用 `nurl` 的响应体作为广告素材 |
+| **渲染所需的内容**：VAST Wrapper 与标签请求、图片、媒体文件、Native `assetsurl`、按引用提供的素材（AdCOM `display.curl`） | 会请求 | 会请求 |
+| **由竞价成功通知返回的广告素材**（有 `nurl` 但没有 `adm` 的出价） | 不请求：竞价成功通知本身是监测请求。广告位上会说明原因，切换到真实模式后才会请求 | 使用 `nurl` 的响应体作为广告素材，素材中的 URL 都挂在该请求之下 |
 | **`data:` URL 与内置示例媒体**（`ccinn-sample://`） | 在本机解码或生成 | 在本机解码或生成 |
 | **点击跳转** | 记录为导航，永不打开 | 记录；只有在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭）才会在默认浏览器中打开。 |
 
@@ -56,6 +62,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - 该确认只对当前会话有效，下一个会话会重新从模拟模式开始。
 - 当前模式显示在工具栏上，也显示在 Network 窗口的每一条记录上。
 - CTV 设备在任何模式下都不会跳转。
+- Native 1.2 的 `dcourl`（动态创意，规范中仍为 beta）只会被记录为不支持，永远不会被请求。
 - 除上述请求外，唯一会离开你的 Mac 的只有每天一次、向 GitHub 发起的更新检查，并且可以关闭。
 
 > [!WARNING]
@@ -66,13 +73,13 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。
 - **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。
 - **像设备一样渲染**
-  - HTML 与富媒体运行在带 MRAID 3.0 桥接的沙盒 Web 视图中。桥接调用都会被记录；点击和导航只会被记录，不会离开模拟器。
+  - HTML 与富媒体运行在带 MRAID 3.0 桥接的沙盒 Web 视图中。桥接调用都会被记录；点击和导航只会被记录，不会离开模拟器。和 Exchange 一样，模拟器会在创意拿到内嵌 `adm` 之前替换其中的 OpenRTB 宏（`${AUCTION_PRICE}` 等）。
   - 图片横幅（OpenRTB 3.0 `display.banner`）。
   - Native 1.0、1.1、1.2，提供信息流、内容流和应用安装三种布局，支持隐私链接与按资源的点击。
-  - VAST 视频与音频：跳过（来自 `skipoffset`）、静音、暂停、倒计时、点击跳转、进度条、伴随广告或结束卡片、按 `sequence` 顺序播放的 Ad Pod，以及最多 5 层的 Wrapper 链。
-  - 广告位：内嵌横幅、信息流、插屏、激励视频，以及 CTV 贴片（instream）。
+  - VAST 视频与音频：跳过（来自 `skipoffset`）、静音、暂停、倒计时、点击跳转、进度条、伴随广告（从该广告的第一帧起展示）或结束卡片、按 `sequence` 顺序播放的 Ad Pod，以及最多 5 层的 Wrapper 链。
+  - 广告位：内嵌横幅、信息流、插屏、激励视频，以及 CTV 贴片（instream）。出价会自动选择合适的广告位（320×480 的出价为插屏，CTV 设备为贴片），也可以手动更改。全屏广告带有关闭按钮，点击区域在 Apple 设备上至少 44 pt、在 Android 设备上至少 50 pt；不可跳过的视频在播放结束后才提供关闭按钮。
   - CTV：全屏播放 Ad Pod（"Ad 1 of 2"），用方向键、Return、Escape 和空格进行遥控器式焦点操作，不支持点击跳转。
-- **设备**：从 SE 到 16 Pro Max 的 iPhone、Android 手机、折叠屏（折叠或展开）、双屏设备（单屏或跨越铰链）、平板以及 CTV，支持竖屏和横屏。详见[设备](#设备)。
+- **设备**：共 28 款：从 SE 到 18 Pro Max 的 iPhone、Android 手机、包括 iPhone Duo 在内的折叠屏（折叠或展开）、Surface Duo（单屏或跨越铰链）、iPad，以及四个 CTV 平台，支持竖屏和横屏，每款设备都有各自的系统界面与模拟应用。详见[设备](#设备)。
 - **在正确的时机触发监测**：监测请求会在真实 SDK 或播放器触发它的时刻触发，OpenRTB、AdCOM 与 VAST 宏都会被展开，未知的宏会被报告。**Viewability** 滑块可以把广告滚入或滚出视野，并据此执行 MRC 规则：展示类广告 50% 可见持续 1 秒，视频广告 50% 可见持续 2 秒。**Fire** 按钮可以手动触发事件。详见[监测与宏](#监测与宏)。
 - **Network 窗口**：以表格、关系树和瀑布图实时展示每一个请求，提供详情、筛选、HAR 导出和复制为 curl。详见 [Network 窗口](#network-窗口)。
 - **规范校验**：检查器会按识别出的 OpenRTB、Native 和 VAST 版本检查响应：必填字段、类型错误、无效 URL、竞价请求要求安全创意时的非 HTTPS 监测链接、缺少可播放的媒体文件、Wrapper 层数，以及属于其他版本的字段。每个问题都有严重级别、代码、说明和位置（JSON 指针或 VAST 元素路径）。
@@ -83,7 +90,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 通过 **Window ▸ Network**（**⌥⌘N**）打开。Network 窗口只有一个，它显示当前处于焦点的主窗口的会话。
 
 - **列表（List）**，实时更新：序号、相对时间（+ms）、类别、触发原因、主机与路径、模式、状态码与耗时。
-- **关系树**：VAST Wrapper 链、监测请求的重定向、竞价成功通知返回的素材 → 创意加载、点击 → 导航。
+- **关系树**：一个请求的父请求，是交付了“包含其 URL 的文档”的那个请求。每个 VAST 监测、媒体文件和伴随广告都挂在交付它的 Wrapper 或 Inline 那一跳之下；由 `nurl` 或 `display.curl` 交付的素材中的监测、点击、导航和创意加载都挂在该请求之下；直接写在竞价响应中的 URL（`nurl`、`burl`、`lurl`、AdCOM 事件、AdCOM 横幅链接）没有父请求。重定向的每一跳挂在其监测请求之下。监测请求永远不会成为导航的父请求：同一次点击产生的请求共享同一个触发原因。
 - **瀑布图**时间线。
 - **详情**：URL 模板与展开后的 URL 并排显示并高亮宏，列出已替换和未知的宏、查询参数、请求头与响应头、重定向链，以及内容请求的响应预览。
 - **筛选**：按类别、模式和文本筛选。**Follow tail** 让最新的记录始终可见，**Clear** 清空当前会话的列表。
@@ -97,13 +104,13 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | `billing` | 计费通知：`burl` |
 | `loss` | 竞价失败通知：`lurl` |
 | `impression` | VAST `Impression`、Native `imptrackers` 与曝光类事件监测、AdCOM 曝光事件 |
-| `viewability` | Native `eventtrackers` 2–4、AdCOM 事件 2–4、VAST `ViewableImpression` |
+| `viewability` | Native `eventtrackers` 2–4、AdCOM 事件 3–5、VAST `ViewableImpression` |
 | `event` | VAST 监测事件：`creativeView`、`start`、四分位、`complete`、`progress`、`mute`、`pause`、`skip` 等 |
 | `click` | Native `clicktrackers`、VAST `ClickTracking` 与 `CompanionClickTracking` |
 | `navigation` | 点击跳转目标：Native `link.url`、VAST `ClickThrough`、`mraid.open`、`window.open`、链接 |
 | `error` | 带 `[ERRORCODE]` 的 VAST `Error` URL |
 | `verification` | VAST `AdVerifications` 的监测，例如 `verificationNotExecuted` |
-| `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、`dcourl`、竞价成功通知返回的素材 |
+| `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、Native `assetsurl`、`display.curl` 素材 |
 | `creative` | HTML 创意自己加载或尝试加载的一切 |
 
 HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（即 Sent）、`blocked`、`local`、`renderer` 或 `browser`；`_ccinn.mode` 是会话的监测模式。
@@ -122,11 +129,11 @@ HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（�
 | 时机 | 触发的内容 |
 |---|---|
 | 竞价成功 | `nurl`（2.x）或 `purl`（3.0） |
-| 渲染 | `burl`、AdCOM 事件类型 1、Native `imptrackers` 以及事件为 1 的 `eventtrackers` |
+| 渲染 | `burl`、AdCOM 事件类型 1（loaded）与 2（impression）、Native `imptrackers` 以及事件为 1 的 `eventtrackers`。VAST 广告在第一个真正开始播放的广告的第一帧时触发 |
 | 每个 VAST 广告的第一帧 | 该广告 Wrapper 链中每个文档的 `Impression` URL、它的 `creativeView` 监测，以及其验证资源的 `verificationNotExecuted` |
-| 可见 | Native `eventtrackers` 2–4、AdCOM 事件 2–4 与 VAST `ViewableImpression`，在满足 MRC 规则时触发（展示类：50% 可见持续 1 秒；视频：50% 可见持续 2 秒） |
+| 可见 | Native `eventtrackers` 2–4、AdCOM 事件 3–5 与 VAST `ViewableImpression`，在满足 MRC 规则时触发（展示类：50% 可见持续 1 秒；视频：50% 可见持续 2 秒） |
 | 播放 | `start`、`firstQuartile`、`midpoint`、`thirdQuartile`、`complete`、`mute`、`unmute`、`pause`、`resume`、`skip`、`fullscreen`、`close` 等，每个广告各触发一次；`progress` 每个时间点触发一次 |
-| 伴随广告展示 | 该伴随广告的 `creativeView` |
+| 伴随广告展示 | 该伴随广告的 `creativeView`（在其广告的曝光之后），并先触发相匹配的 Wrapper 伴随广告监测 |
 | 点击 | Native `clicktrackers`（优先使用资源自身的链接）、VAST `ClickTracking` 或 `CompanionClickTracking`；随后把点击跳转记录为导航 |
 | 竞价失败 | 带 `${AUCTION_LOSS}` 的 `lurl` |
 | 错误 | 带 `[ERRORCODE]` 的 VAST `Error` URL，例如 Wrapper 链最终没有广告时为 303，没有可播放的媒体文件时为 403，VPAID 为 901 |
@@ -134,8 +141,9 @@ HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（�
 | 类型 | 宏 |
 |---|---|
 | OpenRTB | `${AUCTION_ID}`、`${AUCTION_BID_ID}`、`${AUCTION_IMP_ID}`、`${AUCTION_SEAT_ID}`、`${AUCTION_AD_ID}`、`${AUCTION_PRICE}`、`${AUCTION_CURRENCY}`、`${AUCTION_MBR}`、`${AUCTION_LOSS}`、`${AUCTION_MIN_TO_WIN}`，以及它们的 `:B64` 变体（base64url） |
-| AdCOM | 自定义的 `bid.macro` 键，写作 `${KEY}` |
-| VAST 4.x | `[ERRORCODE]`、`[TIMESTAMP]`、`[CACHEBUSTING]`、`[ADPLAYHEAD]`、`[CONTENTPLAYHEAD]`、`[ASSETURI]`、`[PLAYERSIZE]`、`[DEVICEUA]`、`[REASON]` 等（取值经过 URL 编码） |
+| OpenRTB 3.0 | `${OPENRTB_ID}`、`${OPENRTB_BID_ID}`、`${OPENRTB_ITEM_ID}`、`${OPENRTB_SEAT_ID}`、`${OPENRTB_MEDIA_ID}`、`${OPENRTB_PRICE}`、`${OPENRTB_CURRENCY}`、`${OPENRTB_LOSS}`、`${OPENRTB_MIN_TO_WIN}` 等；出价的 `bid.macro` 键写作 `${CUSTOM_KEY}` |
+| Exchange | 裸的 `${KEY}` 是你在 Macros 面板中定义的宏 |
+| VAST 4.x | `[ERRORCODE]`、`[TIMESTAMP]`、`[CACHEBUSTING]`、`[ADPLAYHEAD]`、`[CONTENTPLAYHEAD]`、`[ASSETURI]`、`[PLAYERSIZE]`、`[PODSEQUENCE]`、`[ADSERVINGID]`、`[UNIVERSALADID]`、`[DEVICEUA]`、`[IFA]`、`[REASON]` 等（取值经过 URL 编码；列表类宏逐项编码并保留字面逗号；已知但没有取值的宏为 `-1`） |
 
 - 未知的宏会原样保留，并在检查器和该记录的详情中报告。
 - 宏的取值可以编辑：成交价（默认为出价）、加密价格（一个不透明字符串，原样替换 `${AUCTION_PRICE}`）、竞价 ID、竞价失败原因以及自定义宏。
@@ -156,14 +164,14 @@ CcinnOpenRTB 支持 **macOS 14 Sonoma 及以上**（Apple 芯片与 Intel）。
 
 | 类别 | 设备 |
 |---|---|
-| iPhone | iPhone SE（第 3 代）、13 mini、15、15 Plus、15 Pro、15 Pro Max、16 Pro、16 Pro Max |
+| iPhone | iPhone SE（第 3 代）、13 mini、15、15 Plus、15 Pro、15 Pro Max、16 Pro、16 Pro Max、16e、17、Air、17 Pro、17 Pro Max、18 Pro、18 Pro Max（刘海、灵动岛或 Home 键，各有各的安全区） |
 | Android 手机 | Pixel 8、Galaxy S24 |
-| 折叠屏 | Galaxy Z Fold 类与 Pixel Fold 类，可折叠或展开 |
-| 双屏 | Surface Duo 类，可使用单屏或跨越铰链 |
-| 平板 | iPad（第 10 代）、iPad Pro 11 |
-| CTV | Apple TV 4K、Google TV / Android TV、Fire TV、Roku，分 1080p 与 4K |
+| 折叠屏 | iPhone Duo（展开 951×669 pt，折叠后为 iPhone 式外屏）、Galaxy Z Fold5、Pixel Fold，可折叠或展开 |
+| 双屏 | Surface Duo：单屏，或跨越 34 pt 的铰链 |
+| 平板 | iPad（第 10 代）、iPad Pro 11"（第 4 代）、iPad Pro 11"（M5） |
+| CTV | Apple TV 4K、Google TV（4K 电视）、Fire TV Stick 4K Max（第 2 代）、Roku Express（1080p）：1920×1080 pt，遥控器操作，不支持点击跳转 |
 
-每台设备都带有 OpenRTB `devicetype`、操作系统、User-Agent 和屏幕几何信息（尺寸、缩放倍率、圆角、安全区、刘海/开孔、铰链或折叠后的屏幕）。这些信息用于渲染、选择 VAST 媒体文件、展开 `[DEVICEUA]` 等宏，并作为真实模式下监测请求的 User-Agent。CTV 只支持横屏。
+每台设备都带有 OpenRTB `devicetype`、操作系统及版本（iOS / iPadOS / tvOS 27.2，Android 17——Surface Duo 停留在 12——，Android TV 14，Fire OS 8.1.8.5，Roku OS 15.3）、其应用内 Web 视图的 User-Agent 和屏幕几何信息（尺寸、缩放倍率、圆角、安全区、刘海/开孔、铰链或折叠后的屏幕）。这些信息用于渲染、选择 VAST 媒体文件、展开 `[DEVICEUA]` 等宏，并作为真实模式下监测请求的 User-Agent。CTV 只支持横屏。
 
 ## 安装
 
@@ -218,7 +226,7 @@ CcinnOpenRTB 每天也会在后台自动检查一次，可以在 **Settings ▸ 
 ```bash
 git clone https://github.com/whiteCcinn/ccinnopenrtb.git && cd ccinnopenrtb
 swift build                          # Debug 构建
-swift test                           # 单元测试
+swift test                           # 单元测试、渲染器测试与端到端验收测试
 scripts/build-app.sh --open          # 构建 dist/CcinnOpenRTB.app 并启动
 scripts/package-release.sh 1.0.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
 ```
@@ -226,11 +234,19 @@ scripts/package-release.sh 1.0.0     # 在 dist/ 中生成通用架构 .app、.z
 ### 用于检查的启动参数
 
 ```bash
-dist/CcinnOpenRTB.app/Contents/MacOS/CcinnOpenRTB --demo-network --no-update-check
+dist/CcinnOpenRTB.app/Contents/MacOS/CcinnOpenRTB --sample ortb26-vast42-verification --device iphone-17-pro \
+  --snapshot /tmp/vast.png --export-har /tmp/vast.har --quit-after-snapshot
 ```
 
 | 参数 | 作用 |
 |---|---|
+| `--sample <id>` | 加载一个内置示例（即 `SampleLibrary` 中的 id）并渲染。加上 `--no-render` 则只加载。 |
+| `--device <id>`、`--landscape`、`--folded`、`--spanned` | 设备及其姿态。 |
+| `--placement <名称>`、`--visibility <0…1>`、`--zoom fit\|<倍率>` | 广告位（`in-feed`、`interstitial` 等）、广告的可见比例、画布缩放。 |
+| `--mode simulated\|real` | `real` 只会弹出确认框：命令行永远不能自行开启真实模式。 |
+| `--snapshot <file.png>` | 在 `--snapshot-delay <秒>`（默认 4）之后、窗口绘制完成时把主窗口渲染为 PNG，并绘入当前视频帧。`--quit-after-snapshot` 会在之后退出。 |
+| `--export-har <file.har>` | 在截图之后写出该窗口的网络日志（HAR 1.2，`_ccinn` 中带有父子关系）。 |
+| `--open-network` | 打开 Network 窗口。 |
 | `--demo-network` | 用合成的记录填充 Network 窗口，无需渲染广告即可检查该窗口。 |
 | `--snapshot-network <file.png>` | 将 Network 窗口渲染为 PNG（可配合 `--snapshot-delay <秒>`、`--quit-after-snapshot`），无需屏幕录制权限。 |
 | `--network-layout list\|tree\|waterfall`、`--network-select <序号>` | 截图时使用的布局和选中的请求。 |
