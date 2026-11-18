@@ -143,7 +143,7 @@ final class EchoServer: @unchecked Sendable {
         lock.withLock { received.append(Received(method: String(requestLine[0]), target: target, headers: headers)) }
         var response: Data
         if target.hasPrefix("/redirect/") {
-            let location = "/landed/" + target.dropFirst("/redirect/".count)
+            let location = "/landed/" + String(target.dropFirst("/redirect/".count))
             response = Data("HTTP/1.1 302 Found\r\nLocation: \(location)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
         } else if (target.split(separator: "?").first ?? "").hasSuffix(".js") {
             let script = Data("/* ccinn acceptance */".utf8)

@@ -78,7 +78,8 @@ struct HTMLDocumentBuilderTests {
     ])
     func theSwitchFollowsTheDocumentsProlog(markup: String, prolog: String) {
         let document = HTMLDocumentBuilder.document(for: markup)
-        #expect(document == prolog + HTMLDocumentBuilder.dnsPrefetchOff + markup.dropFirst(prolog.count), "\(document)")
+        let expected = prolog + HTMLDocumentBuilder.dnsPrefetchOff + String(markup.dropFirst(prolog.count)) // String, not Substring: Swift 6.2's #expect can't mix them
+        #expect(document == expected, "\(document)")
     }
 
     /// A fragment whose script merely mentions "<html>" is still a fragment: it gets the wrapper (viewport, margins, switch).
