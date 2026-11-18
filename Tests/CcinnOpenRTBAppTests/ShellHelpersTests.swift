@@ -105,6 +105,30 @@ struct LaunchOptionsTests {
     }
 }
 
+/// `--snapshot` writes the window once it has finished drawing (first launch under load can leave text undrawn for a
+/// moment): two identical consecutive frames, or the latest frame at the attempt limit (a playing video never settles).
+@Suite("Snapshot settling")
+struct SnapshotSettlerTests {
+    /// Feeds `frames` and returns the verdict after each one.
+    private static func verdicts(_ frames: [UInt8], maxAttempts: Int) -> [Bool] {
+        var settler = SnapshotSettler(maxAttempts: maxAttempts)
+        return frames.map { settler.isSettled(after: Data([$0])) }
+    }
+
+    @Test func twoIdenticalConsecutiveFramesSettle() {
+        #expect(Self.verdicts([1, 2, 2], maxAttempts: 10) == [false, false, true])
+        #expect(Self.verdicts([1, 2, 1, 1], maxAttempts: 10) == [false, false, false, true])
+    }
+
+    @Test func aFrameThatKeepsChangingIsTakenAtTheLimit() {
+        #expect(Self.verdicts([1, 2, 3], maxAttempts: 3) == [false, false, true])
+    }
+
+    @Test func aLimitBelowOneStillTakesTheFirstFrame() {
+        #expect(Self.verdicts([1], maxAttempts: 0) == [true])
+    }
+}
+
 @Suite("JSON formatter")
 struct JSONFormatterTests {
     @Test func reindentsWithoutTouchingTokens() {
