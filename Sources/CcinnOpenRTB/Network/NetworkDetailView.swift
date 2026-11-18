@@ -25,7 +25,9 @@ struct NetworkDetailView: View {
                 redirectSection
                 relatedSection
                 if !entry.requestHeaders.isEmpty {
-                    section("Request Headers") { KeyValueGrid(rows: HTTPHeaders.sorted(entry.requestHeaders).map { ($0.name, $0.value) }) }
+                    section(NetworkPresentation.requestHeadersTitle(for: entry)) {
+                        KeyValueGrid(rows: HTTPHeaders.sorted(entry.requestHeaders).map { ($0.name, $0.value) })
+                    }
                 }
                 if !entry.responseHeaders.isEmpty {
                     section("Response Headers") { KeyValueGrid(rows: HTTPHeaders.sorted(entry.responseHeaders).map { ($0.name, $0.value) }) }
@@ -43,7 +45,7 @@ struct NetworkDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                CategoryBadge(category: entry.category)
+                RequestCategoryBadge(entry: entry)
                 DeliveryBadge(delivery: entry.delivery)
                 if entry.isScript { Badge(text: "Script", color: .secondary, systemImage: "curlybraces") }
                 Spacer()
