@@ -29,7 +29,8 @@ public enum NetworkDelivery: String, Sendable, Hashable, Codable, CaseIterable {
     case blocked
     /// Served without the network: a `data:` URL or built-in sample media.
     case local
-    /// Loaded by the renderer itself: AVPlayer media, allowed creative loads, injected script trackers.
+    /// Loaded by the renderer itself: allowed creative loads, injected script trackers. (Remote AVPlayer media is fetched
+    /// by the monitor: `network`.)
     case renderer
     /// Opened in the default browser (Real-mode click-through with "Open click-throughs in browser" on).
     case browser

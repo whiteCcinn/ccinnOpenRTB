@@ -22,11 +22,13 @@ public final class NetworkMonitor {
     public static let defaultCapacity = 10_000
     public static let maxRedirects = 10
     /// Content (VAST, images, markup) larger than this fails.
-    public static let maxContentBytes = 32 << 20
+    public nonisolated static let maxContentBytes = 32 << 20
     /// Tracker bodies are read up to this size and then truncated (the size read is still recorded).
     public static let maxTrackerBodyBytes = 1 << 20
     /// What an en-US iPhone sends.
     public nonisolated static let defaultAcceptLanguage = "en-US,en;q=0.9"
+    /// The size of each byte-range request for progressive media.
+    public nonisolated static let defaultMediaChunkBytes = 2 << 20
 
     /// Why trackers in flight are cancelled when the session leaves Real mode.
     public nonisolated static let simulatedCancellation = "switched to Simulated mode"
@@ -85,6 +87,10 @@ public final class NetworkMonitor {
     @ObservationIgnored private let samples: any SampleMediaProviding
     /// The files `data:` media is written to for the player, deleted when the render ends.
     @ObservationIgnored private let mediaFiles: MediaTemporaryFiles
+    /// Routes remote media for the player through the monitor; created with the first remote media.
+    @ObservationIgnored private var mediaRouterStorage: MediaRouter?
+    /// The size of each byte-range request for progressive media (tests make it small).
+    @ObservationIgnored var mediaChunkBytes = NetworkMonitor.defaultMediaChunkBytes
     @ObservationIgnored private let publishInterval: Duration
     @ObservationIgnored private var publishScheduled = false
     @ObservationIgnored private var dirty = false
@@ -212,9 +218,12 @@ public final class NetworkMonitor {
         }
     }
 
-    /// Prepares media for a player (AVPlayer): `ccinn-sample://` becomes the generated local file, `data:` a temporary
-    /// file, and `http(s)` stays remote (the player streams it; report the outcome with `finishRendererLoad`). Offline,
-    /// remote media is recorded and not prepared (`failure` is `offline`).
+    /// Prepares media for a player (AVPlayer): `ccinn-sample://` becomes the generated local file and `data:` a temporary
+    /// file (deleted when the render ends). `http(s)` media gets a private-scheme `playableURL` that only its
+    /// `resourceLoader` answers: open it with `AVURLAsset` and `resourceLoader.attach(to:)`, then every byte the player
+    /// needs (byte ranges, redirects, HLS playlists, keys and segments) is fetched by the monitor, through the dispatch
+    /// policy, with the device's headers and no cookies, and recorded under the media entry. Report the player's outcome
+    /// with `finishRendererLoad`. Offline, remote media is recorded and not prepared (`failure` is `offline`).
     public func prepareMedia(_ url: String, trigger: String, source: String, parentID: UUID?, userAgent: String) async -> PreparedMedia {
         var entry = NetworkEntry(parentID: parentID, sequence: 0, startedAt: clock.now(), category: .content, trigger: trigger, source: source,
                                  template: url, url: url, state: .pending, sessionMode: mode)
@@ -265,22 +274,60 @@ public final class NetworkMonitor {
                 let stored = append(entry)
                 return PreparedMedia(entryID: stored.id, failure: delivery == .offline ? .offline(entryID: stored.id) : .notFetchable(entryID: stored.id))
             }
-            entry.delivery = .renderer
-            entry.note = "Streamed by the player"
+            entry.delivery = .network
+            entry.note = MediaRouter.mediaNote
             let stored = append(entry)
-            guard let playable = URLText.requestURL(url) else {
+            guard let remote = URLText.requestURL(url) else {
                 let failure = NetworkMonitorError.invalidURL(url)
                 finish(stored.id, failure: failure, token: token)
                 return PreparedMedia(entryID: stored.id, failure: failure)
             }
             rendererLoads.insert(stored.id)
-            return PreparedMedia(playableURL: playable, entryID: stored.id)
+            let router = mediaRouterStorage ?? MediaRouter(monitor: self)
+            mediaRouterStorage = router
+            let loader = router.makeLoader(for: remote, media: MediaContext(entryID: stored.id, source: source, trigger: trigger, userAgent: userAgent))
+            return PreparedMedia(playableURL: loader.url, entryID: stored.id, resourceLoader: loader)
         default:
             let stored = append(entry)
             let failure = NetworkMonitorError.unsupportedScheme(URLText.scheme(url) ?? "")
             finish(stored.id, failure: failure, token: token)
             return PreparedMedia(entryID: stored.id, failure: failure)
         }
+    }
+
+    /// One request the player's remote media needs (a byte range, an HLS playlist, key or segment), decided by the
+    /// dispatch policy like any content and recorded as a child of `part.parentID`. Returns the root entry and the final
+    /// response. Cancelled when the caller is (the player cancelled), by Offline and by `clear()`.
+    func fetchMediaPart(_ part: MediaPartRequest) async -> (entryID: UUID, result: Result<LoadedResponse, NetworkMonitorError>) {
+        let url = part.url.absoluteString
+        var headers: [String: String] = [:]
+        if let range = part.range { headers["Range"] = range.header }
+        var entry = NetworkEntry(parentID: part.parentID, sequence: 0, startedAt: clock.now(), category: .content, trigger: part.trigger,
+                                 source: part.source, template: url, url: url, state: .pending,
+                                 requestHeaders: requestHeaders(userAgent: part.userAgent).merging(headers) { _, part in part }, sessionMode: mode)
+        switch DispatchPolicy.action(for: .content, isScript: false, mode: mode, offline: offline, destination: DispatchPolicy.Destination(url: url)) {
+        case let .record(state, delivery, note):
+            entry.state = state
+            entry.delivery = delivery
+            entry.note = note
+            let stored = append(entry)
+            return (stored.id, .failure(delivery == .offline ? .offline(entryID: stored.id) : .notFetchable(entryID: stored.id)))
+        case .renderer:
+            let stored = append(entry)
+            return (stored.id, .failure(.notFetchable(entryID: stored.id)))
+        case let .send(permit):
+            entry.delivery = .network
+            let stored = append(entry)
+            let task = startLoad(stored, permit: permit, userAgent: part.userAgent, headers: headers, maxBodyBytes: part.maxBodyBytes,
+                                 failOnTruncation: false)
+            let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+            return (stored.id, result)
+        }
+    }
+
+    /// Changes the trigger of a media request once its response says what it is (an HLS playlist).
+    func relabel(_ id: UUID, trigger: String) {
+        update(id) { $0.trigger = trigger }
     }
 
     /// Reports the outcome of a load the renderer performed itself: player media from `prepareMedia`, a creative request
@@ -328,10 +375,12 @@ public final class NetworkMonitor {
         cancelLoads(reason: reason) { $0.isTracker }
     }
 
-    /// The session's render ended (Render, Reset, a new generation): what the monitor prepared for it is released, i.e.
-    /// the temporary files of its `data:` media. Call it before the next render prepares its media.
+    /// The session's render ended (Render, Reset, a new generation): what the monitor prepared for it is released: the
+    /// temporary files of its `data:` media, and the routes of its remote media (their loaders and proxy routes answer
+    /// nothing more, and their requests in flight are cancelled). Call it before the next render prepares its media.
     public func endRender() {
         mediaFiles.removeAll()
+        mediaRouterStorage?.invalidate()
     }
 
     /// Empties the log and restarts the sequence; requests in flight stop following redirects and are not recorded.
@@ -503,7 +552,7 @@ public final class NetworkMonitor {
             }
             guard (200..<300).contains(response.status) else { return .failure(.httpStatus(response.status, entryID: currentID)) }
             return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
-                                           entryID: currentID))
+                                           entryID: currentID, truncated: response.truncated))
         }
     }
 
@@ -739,6 +788,8 @@ struct LoadedResponse: Sendable {
     var url: URL?
     /// The entry of the final hop.
     var entryID: UUID
+    /// The body was cut at the request's `maxBodyBytes`.
+    var truncated = false
 }
 
 /// One load in progress.

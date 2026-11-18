@@ -397,9 +397,14 @@ struct ContentTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
         try? FileManager.default.removeItem(at: file)
 
+        // Remote media: a private URL only its resource loader answers (the monitor fetches every byte).
         let remote = await monitor.prepareMedia("https://cdn.example/ad.mp4", trigger: "media", source: "VAST", parentID: nil, userAgent: deviceUA)
-        #expect(remote.playableURL?.absoluteString == "https://cdn.example/ad.mp4")
+        #expect(remote.playableURL?.scheme?.hasPrefix(MediaResourceLoader.schemePrefix) == true)
+        #expect(remote.resourceLoader?.url == remote.playableURL)
+        #expect(remote.resourceLoader?.remoteURL.absoluteString == "https://cdn.example/ad.mp4")
+        #expect(sample.resourceLoader == nil && data.resourceLoader == nil)
         #expect(monitor.entry(id: remote.entryID)?.state == .pending)
+        #expect(monitor.entry(id: remote.entryID)?.delivery == .network)
         monitor.finishRendererLoad(remote.entryID, responseBytes: 1234, mimeType: "video/mp4")
         #expect(monitor.entry(id: remote.entryID)?.state == .completed(status: 0))
         #expect(monitor.entry(id: remote.entryID)?.responseBytes == 1234)

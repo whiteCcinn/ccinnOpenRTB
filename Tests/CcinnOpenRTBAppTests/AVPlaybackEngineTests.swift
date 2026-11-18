@@ -1,6 +1,7 @@
 import AVFoundation
 import CcinnOpenRTBKit
 import Foundation
+import os
 import RTBKit
 import Testing
 @testable import CcinnOpenRTB
@@ -79,6 +80,49 @@ struct AVPlaybackEngineTests {
         engine.stop()
     }
 
+    /// Remote media: the engine opens the private URL with the kit's resource loader, so the monitor fetches every byte
+    /// (with the device's agent, in byte ranges) and AVFoundation never reaches the origin.
+    @Test func remoteMediaPlaysThroughTheMonitor() async throws {
+        let transport = RangedFileTransport(data: try Data(contentsOf: try await sampleFile()), contentType: "audio/mp4")
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let agent = RendererFixtures.phone.userAgent
+        let prepared = await monitor.prepareMedia("https://cdn.example/ad.m4a", trigger: "media file", source: "VAST", parentID: nil,
+                                                  userAgent: agent)
+        let url = try #require(prepared.playableURL)
+        #expect(url.scheme != "https")
+        let engine = AVPlaybackEngine()
+        let recorder = Recorder()
+        recorder.attach(engine)
+        engine.setMuted(true)
+        engine.load(url, resourceLoader: prepared.resourceLoader)
+        #expect(await Wait.until(timeout: .seconds(20)) { recorder.isReady }, "\(recorder.events)")
+        #expect(abs((recorder.readyDuration ?? 0) - 15) < 0.2)
+        engine.stop()
+
+        let requests = transport.requests
+        #expect(!requests.isEmpty)
+        #expect(requests.allSatisfy { $0.url.absoluteString == "https://cdn.example/ad.m4a" && $0.headers["User-Agent"] == agent })
+        #expect(requests.allSatisfy { $0.headers["Range"]?.hasPrefix("bytes=") == true })
+        #expect(monitor.liveEntries.contains { $0.parentID == prepared.entryID && $0.status == 206 })
+    }
+
+    /// The player model hands the engine the loader `prepareMedia` made for remote media.
+    @Test func thePlayerModelPassesTheResourceLoaderToTheEngine() async throws {
+        let host = RecordingHost()
+        let engine = LoaderRecordingEngine()
+        let ad = RendererFixtures.linearAd(duration: 15, media: [VASTMediaFile(url: "https://cdn.example/ad.mp4", type: "video/mp4")])
+        let configuration = VASTPlayerConfiguration(request: RendererFixtures.request(.vast(.xml("<VAST/>")), format: .video, placement: .inFeed),
+                                                    role: .ad(audioOnly: false), playerSize: CGSize(width: 358, height: 201))
+        let model = VASTPlayerModel(vast: ResolvedVAST(ads: [ad]), configuration: configuration, host: host, engine: engine,
+                                    chooseMedia: { files, _, _, _ in files.first.map(VASTMediaSelector.Choice.play) ?? .unsupported(.noSupportedMedia) })
+        defer { model.teardown() }
+        model.start()
+        #expect(await Wait.until(timeout: .seconds(10)) { !engine.loads.isEmpty })
+        let load = try #require(engine.loads.first)
+        #expect(load.loader?.url == load.url)
+        #expect(load.loader?.remoteURL.absoluteString == "https://cdn.example/ad.mp4")
+    }
+
     @Test func aMissingFileFails() async throws {
         let engine = AVPlaybackEngine()
         let recorder = Recorder()
@@ -109,5 +153,48 @@ struct AVPlaybackEngineTests {
         #expect(host.statuses.contains { $0.isPlaying && $0.isMuted && $0.duration.map { abs($0 - 15) < 0.2 } == true })
         let local = host.monitor.liveEntries.first { $0.url == SampleURL.audio }
         #expect(local?.delivery == .local, "the sample is served locally, nothing leaves the machine")
+    }
+}
+
+/// Records what the player model asks the engine to load.
+@MainActor
+private final class LoaderRecordingEngine: PlaybackEngine {
+    var onEvent: ((PlaybackEngineEvent) -> Void)?
+    var avPlayer: AVPlayer? { nil }
+    private(set) var loads: [(url: URL, loader: MediaResourceLoader?)] = []
+
+    func load(_ url: URL) { load(url, resourceLoader: nil) }
+    func load(_ url: URL, resourceLoader: MediaResourceLoader?) { loads.append((url, resourceLoader)) }
+    func play() {}
+    func pause() {}
+    func setMuted(_ muted: Bool) {}
+    func stop() {}
+}
+
+/// Serves one file to the monitor in byte ranges (`Range: bytes=a-b` / `bytes=a-`), recording each request.
+private final class RangedFileTransport: HTTPTransport {
+    let data: Data
+    let contentType: String
+    private let seen = OSAllocatedUnfairLock(initialState: [HTTPRequest]())
+
+    init(data: Data, contentType: String) {
+        self.data = data
+        self.contentType = contentType
+    }
+
+    var requests: [HTTPRequest] { seen.withLock { $0 } }
+
+    func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
+        seen.withLock { $0.append(request) }
+        guard let range = request.headers["Range"], range.hasPrefix("bytes=") else {
+            return HTTPResponse(status: 200, headers: ["Content-Type": contentType], body: data.prefix(request.maxBodyBytes),
+                                truncated: data.count > request.maxBodyBytes)
+        }
+        let bounds = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
+        let start = bounds.first.flatMap { Int($0) } ?? 0
+        let end = min(bounds.count > 1 ? Int(bounds[1]) ?? data.count - 1 : data.count - 1, data.count - 1)
+        guard start <= end else { return HTTPResponse(status: 416, headers: ["Content-Range": "bytes */\(data.count)"]) }
+        return HTTPResponse(status: 206, headers: ["Content-Type": contentType, "Content-Range": "bytes \(start)-\(end)/\(data.count)"],
+                            body: data.subdata(in: start..<(end + 1)))
     }
 }
