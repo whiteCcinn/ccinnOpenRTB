@@ -57,10 +57,19 @@ struct OpenRTBMacroTests {
     }
 
     @Test func knownMacroWithoutValueBecomesEmpty() {
-        let result = MacroExpander.expand("l=${AUCTION_LOSS}&m=${AUCTION_MIN_TO_WIN}", context: MacroContext())
-        #expect(result.url == "l=&m=")
-        #expect(result.replaced == ["${AUCTION_LOSS}", "${AUCTION_MIN_TO_WIN}"])
+        let result = MacroExpander.expand("m=${AUCTION_MIN_TO_WIN}&d=${AUCTION_DISCOUNT_PCT}", context: MacroContext())
+        #expect(result.url == "m=&d=")
+        #expect(result.replaced == ["${AUCTION_MIN_TO_WIN}", "${AUCTION_DISCOUNT_PCT}"])
         #expect(result.unknown.isEmpty)
+    }
+
+    /// OpenRTB 2.5 List 5.25 / 2.6 §5.25 "Loss Reason Codes": 0 = "Bid Won". Without a loss reason the bid was not lost, so
+    /// `${AUCTION_LOSS}` / `${OPENRTB_LOSS}` is 0, never empty; a set reason is substituted as is.
+    @Test func auctionLossWithoutAReasonIsZeroBidWon() {
+        let result = MacroExpander.expandOpenRTB("l=${AUCTION_LOSS}&o=${OPENRTB_LOSS}", context: MacroContext())
+        #expect(result.url == "l=0&o=0")
+        #expect(result.replaced == ["${AUCTION_LOSS}", "${OPENRTB_LOSS}"])
+        #expect(MacroExpander.expandOpenRTB("l=${AUCTION_LOSS}", context: MacroContext(lossReason: 102)).url == "l=102")
     }
 
     @Test func nonFinitePricesAreNeverPrinted() {

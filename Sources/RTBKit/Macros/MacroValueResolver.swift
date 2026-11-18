@@ -47,7 +47,7 @@ struct MacroValueResolver {
         case .auctionPrice, .openRTBPrice: return context.price.flatMap(MacroEncoding.decimal)
         case .auctionCurrency, .openRTBCurrency: return context.currency
         case .auctionMBR, .openRTBMBR: return context.marketBidRatio.flatMap(MacroEncoding.decimal)
-        case .auctionLoss, .openRTBLoss: return context.lossReason.map(String.init)
+        case .auctionLoss, .openRTBLoss: return String(context.lossReason ?? OpenRTBMacro.bidWonLossReason)
         case .auctionMinToWin, .openRTBMinToWin: return context.minimumToWin.flatMap(MacroEncoding.decimal)
         case .auctionImpTimestamp:
             if let custom = context.custom[macro.rawValue] { return custom }
@@ -148,6 +148,9 @@ enum OpenRTBMacro: String, CaseIterable {
     case openRTBCurrency = "OPENRTB_CURRENCY", openRTBMBR = "OPENRTB_MBR", openRTBLoss = "OPENRTB_LOSS", openRTBMinToWin = "OPENRTB_MIN_TO_WIN"
 
     var isPrice: Bool { self == .auctionPrice || self == .openRTBPrice }
+
+    /// OpenRTB 2.5 List 5.25 / 2.6 §5.25 "Loss Reason Codes": 0 = "Bid Won". `${AUCTION_LOSS}` without a loss reason.
+    static let bidWonLossReason = 0
 }
 
 /// VAST 4.x macros (VAST 4.1 §6.2 and 4.2, and the IAB macro list VAST 4.3 §6.2 refers to). Values the player does not

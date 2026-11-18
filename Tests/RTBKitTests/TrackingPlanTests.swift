@@ -73,6 +73,22 @@ struct TrackingPlanAuctionTests {
             == [PlannedRequest(.billing, "billing", "bid 0.0 › burl", "https://t.example/bill?p=1.23&b=resp-bid")])
     }
 
+    /// OpenRTB 2.6 §4.4 `${AUCTION_LOSS}` "Loss reason codes. Refer to List: Loss Reason Codes" (§5.25: 0 = "Bid Won").
+    /// Every URL of a won bid (nurl, burl, AdCOM events, clicks) says 0, even when the host's context still carries a
+    /// reason; only the `lurl` of `.loss(reason:)` carries one, and it is that event's reason.
+    @Test func auctionLossIsZeroOnAWonBidAndTheEventReasonOnTheLossNotice() {
+        var candidate = TrackingFixtures.banner
+        candidate.winURL = "https://t.example/win?l=${AUCTION_LOSS}"
+        candidate.billingURL = "https://t.example/bill?l=${OPENRTB_LOSS}"
+        var staleContext = TrackingFixtures.context
+        staleContext.lossReason = 102
+        #expect(TrackingFixtures.plan(.won, candidate, context: staleContext).map(\.url) == ["https://t.example/win?l=0"])
+        #expect(TrackingFixtures.plan(.rendered, candidate, context: staleContext).map(\.url) == ["https://t.example/bill?l=0"])
+        #expect(TrackingFixtures.plan(.won, candidate).map(\.url) == ["https://t.example/win?l=0"])
+        #expect(TrackingFixtures.plan(.loss(reason: 2), candidate, context: staleContext).map(\.url)
+            == ["https://t.example/loss?r=2&m=1.5&p=1.23"])
+    }
+
     @Test func lossNoticeCarriesTheLossReason() {
         #expect(TrackingFixtures.plan(.loss(reason: 102), TrackingFixtures.banner)
             == [PlannedRequest(.loss, "loss (102)", "bid 0.0 › lurl", "https://t.example/loss?r=102&m=1.5&p=1.23")])

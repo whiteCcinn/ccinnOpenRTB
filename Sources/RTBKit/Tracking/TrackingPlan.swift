@@ -10,7 +10,7 @@ import Foundation
 /// | `.rendered` | `burl`; AdCOM events type 1 (loaded), then type 2 (impression); Native `imptrackers`, `eventtrackers` event 1, `jstracker` |
 /// | `.viewable(level)` | AdCOM events 3 / 4 / 5; Native `eventtrackers` 2 / 3 / 4 |
 /// | `.click(assetID)` | Native: asset link `clicktrackers`, ad link `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
-/// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` |
+/// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` (every other event is a won bid: `${AUCTION_LOSS}` = 0, "Bid Won") |
 /// | `.closed` | nothing |
 /// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
 ///
@@ -37,7 +37,15 @@ public enum TrackingPlan {
     }
 
     public static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, native: NativeAd?, vast: ResolvedVAST?,
-                                context: MacroContext, options: Options = Options()) -> [TrackerRequest] {
+                                context hostContext: MacroContext, options: Options = Options()) -> [TrackerRequest] {
+        // OpenRTB 2.6 §4.4 / §5.25: a loss reason exists only on the loss notice. Every other event belongs to a won bid,
+        // whose `${AUCTION_LOSS}` is 0 ("Bid Won") whatever the host's context still carries.
+        var context = hostContext
+        if case let .loss(reason) = event {
+            context.lossReason = reason
+        } else {
+            context.lossReason = OpenRTBMacro.bidWonLossReason
+        }
         // One factory per document: the pasted response (no parent) and the markup (its delivering request, if any).
         let response = TrackerRequestFactory(candidate: candidate, context: context)
         let markup = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
@@ -57,9 +65,7 @@ public enum TrackingPlan {
         case .closed:
             return []
         case let .loss(reason):
-            var lossContext = context
-            lossContext.lossReason = reason
-            return AuctionTracking.loss(candidate, reason: reason, factory: TrackerRequestFactory(candidate: candidate, context: lossContext))
+            return AuctionTracking.loss(candidate, reason: reason, factory: response)
         case .video, .videoViewability, .videoClick, .companionView, .companionClick, .error:
             guard let vast else { return [] }
             return VASTTrackingPlan.requests(for: event, vast: vast, candidate: candidate, context: context,
