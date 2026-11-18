@@ -19,9 +19,12 @@ extension MacroContext {
     ///   and `[GPPSECTIONID]` (IAB VAST macro list) come from `regs.gpp` / `regs.gpp_sid`. `us_privacy` has no macro.
     /// - `[VASTVERSIONS]` lists the VAST versions the simulator's player plays.
     /// - `playerWidth` / `playerHeight` (`[PLAYERSIZE]`) default to the bid's size.
+    /// - `breakPosition` (VAST 4.1 §6.2 `[BREAKPOSITION]`) defaults to the simulator's placements: the CTV player runs an
+    ///   instream break before the (absent) content, a pre-roll (1); every other placement shows the ad on its own,
+    ///   standalone (4). A host that plays an instream break elsewhere passes it.
     public static func simulatorDefaults(candidate: AdCandidate, request: BidRequestSummary?, device: DeviceProfile,
                                          playerWidth: Int? = nil, playerHeight: Int? = nil, responseID: String? = nil,
-                                         responseBidID: String? = nil) -> MacroContext {
+                                         responseBidID: String? = nil, breakPosition: VASTBreakPosition? = nil) -> MacroContext {
         var custom = candidate.customMacros
         var lists: [String: [String]] = ["[VASTVERSIONS]": VASTMacro.playableVASTVersions]
         func put(_ key: String, _ value: String?) {
@@ -61,7 +64,7 @@ extension MacroContext {
                             impID: candidate.impID, seatID: candidate.seat, adID: candidate.adID, price: candidate.price,
                             currency: candidate.currency, marketBidRatio: hasPrice ? 1 : nil, custom: custom, customLists: lists,
                             playerWidth: playerWidth ?? candidate.size?.width, playerHeight: playerHeight ?? candidate.size?.height,
-                            device: device)
+                            device: device, breakPosition: breakPosition ?? (device.family == .ctv ? .preroll : .standalone))
     }
 
     /// VAST 4.1/4.2 §6.11 `[REGULATIONS]`: the "List of applicable regulations", possible values `coppa` and `gdpr`, in

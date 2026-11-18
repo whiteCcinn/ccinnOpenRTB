@@ -108,7 +108,12 @@ struct SampleLibraryTests {
         let sample = try Self.sample("ortb26-native12-eventtrackers")
         let input = InputParser.parse(sample.response, request: sample.request)
         let bid = try #require(input.candidates.first)
-        guard case let .native(json) = bid.markup else { Issue.record("native markup"); return }
+        guard case let .native(adm) = bid.markup else { Issue.record("native markup"); return }
+        // End to end: the simulator's context, the exchange's `${…}` substitution in the inline adm (OpenRTB 2.6 §4.4),
+        // the SDK's parse, then the plan (Native URLs fire as written: decisions.md "Macros").
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: input.request, device: TrackingFixtures.phone,
+                                                     responseID: input.responseID, responseBidID: input.bidResponseID)
+        let json = MacroExpander.expandMarkup(adm, context: context).url
         let hints = input.request?.impressions.first?.nativeHints
         let parsed = NativeParser.parse(json, hints: hints)
         let native = try #require(parsed.ad)
@@ -116,9 +121,6 @@ struct SampleLibraryTests {
         #expect(native.eventTrackers.map { [$0.event, $0.method] } == [[1, 1], [2, 2]])
         #expect(native.privacyURL != nil)
 
-        // End to end: the simulator's context, then the plan.
-        let context = MacroContext.simulatorDefaults(candidate: bid, request: input.request, device: TrackingFixtures.phone,
-                                                     responseID: input.responseID, responseBidID: input.bidResponseID)
         let impression = TrackingPlan.requests(for: .rendered, candidate: bid, native: native, vast: nil, context: context)
         #expect(impression.map(\.category) == [.billing, .impression])
         #expect(impression.allSatisfy { $0.unknownMacros.isEmpty && !$0.url.contains("${") })

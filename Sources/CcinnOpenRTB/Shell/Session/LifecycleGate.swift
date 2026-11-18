@@ -3,7 +3,7 @@ import RTBKit
 /// Once-per-render bookkeeping for lifecycle events (pure).
 ///
 /// - Fire-once events: `won`, `rendered`, each viewability level, one VAST viewability outcome per pod ad, each VAST
-///   event that fires once per ad (and each `progress` offset once), each companion view, `closed`, the loss notice and
+///   event that fires once per ad (and each `progress` offset once), each companion and icon view, `closed`, the loss notice and
 ///   each error code per ad. Clicks and player interactions (mute, pause, …) may repeat.
 /// - Win and loss exclude each other: a lost bid is never rendered, and a won bid never sends a loss notice.
 struct LifecycleGate {
@@ -13,6 +13,7 @@ struct LifecycleGate {
         case videoViewability(adIndex: Int)
         case video(VASTEvent, adIndex: Int)
         case companionView(adIndex: Int, companionIndex: Int)
+        case iconView(adIndex: Int, iconIndex: Int)
         case error(VASTErrorCode, adIndex: Int?)
     }
 
@@ -58,8 +59,9 @@ struct LifecycleGate {
             default: videoEvent.firesOnce ? .video(videoEvent, adIndex: adIndex) : nil
             }
         case let .companionView(adIndex, companionIndex): .companionView(adIndex: adIndex, companionIndex: companionIndex)
+        case let .iconView(adIndex, iconIndex): .iconView(adIndex: adIndex, iconIndex: iconIndex)
         case let .error(code, adIndex): .error(code, adIndex: adIndex)
-        case .click, .videoClick, .companionClick: nil
+        case .click, .videoClick, .companionClick, .iconClick: nil
         }
     }
 }

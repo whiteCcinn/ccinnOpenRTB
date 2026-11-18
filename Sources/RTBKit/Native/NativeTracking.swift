@@ -31,29 +31,26 @@ enum NativeTracking {
         eventTrackers(ad, event: eventType(for: level), category: .viewability, trigger: ViewabilityLabels.trigger(level), factory: factory)
     }
 
-    /// `.click(assetID:)`: the asset link's `clicktrackers`, then the ad link's, then one navigation to the asset link's `url`
-    /// (else the ad link's), noting the deep-link `fallback`.
+    /// `.click(assetID:)`: one link object applies (Native 1.2 §5.4 Asset Response `link`: "If there is no link object on
+    /// the asset, the parent link object on the bid response applies"). A clicked asset with its own `link` uses only that
+    /// link — its `clicktrackers`, its `url` and its `fallback`; any other click uses the ad's main link. Its trackers
+    /// fire, then one navigation to its `url`, noting the deep-link `fallback` (none when the `url` is blank).
     static func click(_ ad: NativeAd, assetID: Int?, factory: TrackerRequestFactory) -> [TrackerRequest] {
         let asset = assetID.flatMap { id in ad.assets.first { $0.id == id } }
-        var trackers: [(template: String, source: String)] = []
-        var destination = ad.link.url
-        var fallback = ad.link.fallback
-        var destinationSource = factory.source("native", "link")
-        if let asset, let link = asset.link {
-            let assetPath = "asset \(asset.id)"
-            for (index, url) in link.clickTrackers.enumerated() {
-                trackers.append((url, factory.source("native", assetPath, "link", "clicktrackers[\(index)]")))
-            }
-            if !link.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                destination = link.url
-                fallback = link.fallback ?? (link.url == ad.link.url ? ad.link.fallback : nil)
-                destinationSource = factory.source("native", assetPath, "link")
-            }
+        let link: AdLink
+        let linkPath: [String]
+        if let asset, let assetLink = asset.link {
+            link = assetLink
+            linkPath = ["native", "asset \(asset.id)", "link"]
+        } else {
+            link = ad.link
+            linkPath = ["native", "link"]
         }
-        for (index, url) in ad.link.clickTrackers.enumerated() {
-            trackers.append((url, factory.source("native", "link", "clicktrackers[\(index)]")))
+        let trackers = link.clickTrackers.enumerated().map { index, url in
+            (template: url, source: ([factory.root] + linkPath + ["clicktrackers[\(index)]"]).joined(separator: " › "))
         }
-        return factory.click(trackers: trackers, destination: destination, fallback: fallback, destinationSource: destinationSource)
+        return factory.click(trackers: trackers, destination: link.url, fallback: link.fallback,
+                             destinationSource: ([factory.root] + linkPath).joined(separator: " › "))
     }
 
     private static func eventTrackers(_ ad: NativeAd, event: Int, category: TrackerCategory, trigger: String,

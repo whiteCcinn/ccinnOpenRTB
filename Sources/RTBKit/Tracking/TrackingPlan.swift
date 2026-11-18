@@ -9,12 +9,14 @@ import Foundation
 /// | `.won` | win notice (`nurl` / `purl`), unless `options.exchangeSendsWinNotice` is off |
 /// | `.rendered` | `burl`; AdCOM events type 1 (loaded), then type 2 (impression); Native `imptrackers`, `eventtrackers` event 1, `jstracker` |
 /// | `.viewable(level)` | AdCOM events 3 / 4 / 5; Native `eventtrackers` 2 / 3 / 4 |
-/// | `.click(assetID)` | Native: asset link `clicktrackers`, ad link `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
-/// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` |
+/// | `.click(assetID)` | Native: the clicked asset's own link, else the ad's main link (Native 1.2 §5.4) — its `clicktrackers`, then a navigation; image banner: `trkr`, then a navigation; HTML: nothing (the creative navigates itself) |
+/// | `.loss(reason)` | `lurl` with `${AUCTION_LOSS}` = `reason` (every other event is a won bid: `${AUCTION_LOSS}` = 0, "Bid Won") |
 /// | `.closed` | nothing |
-/// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
+/// | `.video`, `.videoViewability`, `.videoClick`, `.companionView`, `.companionClick`, `.iconView`, `.iconClick`, `.error` | `VASTTrackingPlan` (when `vast` is given) |
 ///
-/// Exchange-side and SDK trackers substitute OpenRTB `${…}` macros only; VAST `[…]` macros are the player's.
+/// Macros by document origin (decisions.md "Macros"): the bid response's own URLs substitute OpenRTB `${…}` only, as the
+/// exchange does; Native URLs fire as written (an inline `adm` was substituted before parsing, delivered markup never
+/// is); VAST URLs expand VAST `[…]` only (`VASTTrackingPlan`). Whatever is left is listed in `unknownMacros`.
 ///
 /// Parents (decisions.md "Network relationships"): a request's parent is the request that delivered the document
 /// containing its URL. The pasted bid response has none, so its URLs (nurl/purl, burl, lurl, AdCOM `display.event`, the
@@ -37,10 +39,18 @@ public enum TrackingPlan {
     }
 
     public static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, native: NativeAd?, vast: ResolvedVAST?,
-                                context: MacroContext, options: Options = Options()) -> [TrackerRequest] {
+                                context hostContext: MacroContext, options: Options = Options()) -> [TrackerRequest] {
+        // OpenRTB 2.6 §4.4 / §5.25: a loss reason exists only on the loss notice. Every other event belongs to a won bid,
+        // whose `${AUCTION_LOSS}` is 0 ("Bid Won") whatever the host's context still carries.
+        var context = hostContext
+        if case let .loss(reason) = event {
+            context.lossReason = reason
+        } else {
+            context.lossReason = OpenRTBMacro.bidWonLossReason
+        }
         // One factory per document: the pasted response (no parent) and the markup (its delivering request, if any).
-        let response = TrackerRequestFactory(candidate: candidate, context: context)
-        let markup = TrackerRequestFactory(candidate: candidate, context: context, parentID: options.markupRequestID)
+        let response = TrackerRequestFactory(candidate: candidate, context: context, origin: .bidResponse)
+        let markup = TrackerRequestFactory(candidate: candidate, context: context, origin: .markup, parentID: options.markupRequestID)
         switch event {
         case .won:
             guard options.exchangeSendsWinNotice else { return [] }
@@ -57,10 +67,8 @@ public enum TrackingPlan {
         case .closed:
             return []
         case let .loss(reason):
-            var lossContext = context
-            lossContext.lossReason = reason
-            return AuctionTracking.loss(candidate, reason: reason, factory: TrackerRequestFactory(candidate: candidate, context: lossContext))
-        case .video, .videoViewability, .videoClick, .companionView, .companionClick, .error:
+            return AuctionTracking.loss(candidate, reason: reason, factory: response)
+        case .video, .videoViewability, .videoClick, .companionView, .companionClick, .iconView, .iconClick, .error:
             guard let vast else { return [] }
             return VASTTrackingPlan.requests(for: event, vast: vast, candidate: candidate, context: context,
                                              source: vastSource(native: native, factory: response))

@@ -47,7 +47,7 @@ struct MacroValueResolver {
         case .auctionPrice, .openRTBPrice: return context.price.flatMap(MacroEncoding.decimal)
         case .auctionCurrency, .openRTBCurrency: return context.currency
         case .auctionMBR, .openRTBMBR: return context.marketBidRatio.flatMap(MacroEncoding.decimal)
-        case .auctionLoss, .openRTBLoss: return context.lossReason.map(String.init)
+        case .auctionLoss, .openRTBLoss: return String(context.lossReason ?? OpenRTBMacro.bidWonLossReason)
         case .auctionMinToWin, .openRTBMinToWin: return context.minimumToWin.flatMap(MacroEncoding.decimal)
         case .auctionImpTimestamp:
             if let custom = context.custom[macro.rawValue] { return custom }
@@ -93,6 +93,7 @@ struct MacroValueResolver {
         case .adPlayhead: return context.adPlayhead.flatMap(MacroEncoding.playhead).map(MacroValue.scalar)
         case .contentPlayhead, .mediaPlayhead: return context.contentPlayhead.flatMap(MacroEncoding.playhead).map(MacroValue.scalar)
         case .assetURI: return context.assetURI.map(MacroValue.scalar)
+        case .adCount: return context.adCount.flatMap { $0 >= 0 ? .scalar(String($0)) : nil }
         case .playerSize:
             // Array<integer>: "640,360".
             guard let width = context.playerWidth, let height = context.playerHeight else { return nil }
@@ -108,9 +109,11 @@ struct MacroValueResolver {
         case .timestamp: return MacroEncoding.iso8601(now(), timeZone: timeZone).map(MacroValue.scalar)
         case .cacheBusting: return .scalar(cacheBuster())
         case .breakPosition:
-            // 1 pre-roll, 2 mid-roll, 3 post-roll, 4 standalone (no content).
-            guard let playhead = context.contentPlayhead, playhead.isFinite, playhead >= 0 else { return .scalar("4") }
-            return .scalar(playhead == 0 ? "1" : "2")
+            // 1 pre-roll, 2 mid-roll, 3 post-roll, 4 standalone (no content): the placement's position, else what the
+            // content playhead says, else unknown (-1). Standalone is a placement fact, never a default.
+            if let position = context.breakPosition { return .scalar(String(position.rawValue)) }
+            guard let playhead = context.contentPlayhead, playhead.isFinite, playhead >= 0 else { return nil }
+            return .scalar(String(playhead == 0 ? VASTBreakPosition.preroll.rawValue : VASTBreakPosition.midroll.rawValue))
         case .vastVersions: return .list(VASTMacro.playableVASTVersions)
         case .serverSide: return .scalar("0")
         default: return nil
@@ -148,6 +151,9 @@ enum OpenRTBMacro: String, CaseIterable {
     case openRTBCurrency = "OPENRTB_CURRENCY", openRTBMBR = "OPENRTB_MBR", openRTBLoss = "OPENRTB_LOSS", openRTBMinToWin = "OPENRTB_MIN_TO_WIN"
 
     var isPrice: Bool { self == .auctionPrice || self == .openRTBPrice }
+
+    /// OpenRTB 2.5 List 5.25 / 2.6 §5.25 "Loss Reason Codes": 0 = "Bid Won". `${AUCTION_LOSS}` without a loss reason.
+    static let bidWonLossReason = 0
 }
 
 /// VAST 4.x macros (VAST 4.1 §6.2 and 4.2, and the IAB macro list VAST 4.3 §6.2 refers to). Values the player does not

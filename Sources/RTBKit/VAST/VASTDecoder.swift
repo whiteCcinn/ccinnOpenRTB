@@ -12,6 +12,9 @@ struct VASTDecoder {
     }
 
     private(set) var issues: [ValidationIssue] = []
+    /// Elements whose text carries OpenRTB `${…}` tokens (a URL, or an `HTMLResource`'s markup), in document order. The
+    /// resolver warns about them in documents the exchange never substituted (`vast.macro.openrtb.unsubstituted`).
+    private(set) var openRTBMacroSites: [VASTMacroSite] = []
     /// The declared version when it is one the simulator knows; `nil` when missing or invalid.
     private(set) var version: VASTSpecVersion?
     /// `imp.secure = 1`: a non-HTTPS URL is a warning instead of a note.
@@ -234,7 +237,24 @@ struct VASTDecoder {
                            verifications: decodeAllVerifications(of: element, at: path),
                            followAdditionalWrappers: boolAttribute("followAdditionalWrappers", of: element, default: true, at: path),
                            allowMultipleAds: boolAttribute("allowMultipleAds", of: element, default: false, at: path),
-                           fallbackOnNoAd: boolAttribute("fallbackOnNoAd", of: element, default: false, at: path))
+                           fallbackOnNoAd: boolAttribute("fallbackOnNoAd", of: element, default: false, at: path),
+                           blockedAdCategories: decodeBlockedAdCategories(element.children(named: "BlockedAdCategories"),
+                                                                          at: path + "/BlockedAdCategories"))
+    }
+
+    /// VAST 4.1 §3.19.2 `Wrapper/BlockedAdCategories`: each element lists one or more category codes (comma-separated),
+    /// all from the list its `authority` names.
+    private mutating func decodeBlockedAdCategories(_ elements: [VASTXMLElement], at path: String) -> [VASTCategory] {
+        elements.enumerated().flatMap { index, element -> [VASTCategory] in
+            let elementPath = path + "[\(index + 1)]"
+            let codes = element.trimmedText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            guard !codes.isEmpty else {
+                report(.warning, "vast.wrapper.blockedAdCategories.empty", "<BlockedAdCategories> lists no category; it blocks nothing.", elementPath)
+                return []
+            }
+            let authority = nonEmpty(element.attribute("authority"))
+            return codes.map { VASTCategory(code: $0, authority: authority) }
+        }
     }
 
     private mutating func boolAttribute(_ name: String, of element: VASTXMLElement, default defaultValue: Bool, at path: String) -> Bool {
@@ -281,11 +301,31 @@ struct VASTDecoder {
             report(.warning, "vast.creative.linear.multiple", "<Creative> has more than one <Linear>; the first one is used.", path + "/Linear")
         }
 
+        let companions = decodeCompanions(companionAds, at: path + "/CompanionAds", context: context)
         return VASTCreative(id: nonEmpty(element.attribute("id")), adID: nonEmpty(element.attribute("adId")), sequence: sequence,
                             linear: linearElement.map { decodeLinear($0, at: path + "/Linear", context: context) },
-                            companions: decodeCompanions(companionAds, at: path + "/CompanionAds", context: context),
-                            hasNonLinear: nonLinearAds != nil,
-                            universalAdIDs: decodeUniversalAdIDs(element.children(named: "UniversalAdId"), at: path + "/UniversalAdId"))
+                            companions: companions, hasNonLinear: nonLinearAds != nil,
+                            universalAdIDs: decodeUniversalAdIDs(element.children(named: "UniversalAdId"), at: path + "/UniversalAdId"),
+                            companionsRequired: decodeCompanionRequirement(companionAds, companionCount: companions.count,
+                                                                           at: path + "/CompanionAds"))
+    }
+
+    /// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1): `all`, `any` or `none`; absent or invalid is `none`, the
+    /// spec's default.
+    private mutating func decodeCompanionRequirement(_ element: VASTXMLElement?, companionCount: Int, at path: String) -> VASTCompanionRequirement {
+        guard let element, let raw = element.attribute("required") else { return .none }
+        checkIntroduced("CompanionAds@required", at: path + "@required")
+        guard let requirement = VASTCompanionRequirement(rawValue: raw.trimmingCharacters(in: .whitespaces).lowercased()) else {
+            report(.warning, "vast.companionAds.required.invalid",
+                   "required=\"\(raw)\" must be all, any or none; companions are treated as optional (none).", path + "@required")
+            return .none
+        }
+        if requirement != .none, companionCount == 0 {
+            report(.warning, "vast.companionAds.required.empty",
+                   "required=\"\(requirement.rawValue)\" names no <Companion>: there is nothing to display, so nothing is required.",
+                   path + "@required")
+        }
+        return requirement
     }
 
     /// VAST 4.1 §3.7.1: the content is the source of truth; VAST 4.0's `idValue` attribute (a duplicate of it, removed in
@@ -352,13 +392,104 @@ struct VASTDecoder {
             customClicks = urls(videoClicks.children(named: "CustomClick"), at: clicksPath + "/CustomClick", role: .tracker)
         }
 
-        if element.firstChild(named: "Icons") != nil {
-            report(.info, "vast.icons.notRendered", "Icons (e.g. AdChoices) are parsed but not rendered by the simulator.", path + "/Icons")
+        let iconsElement = element.firstChild(named: "Icons")
+        if iconsElement != nil {
+            report(.info, "vast.icons.notRendered", "Icons (e.g. AdChoices) are parsed and their view and click tracking planned, but the simulator does not draw them yet.",
+                   path + "/Icons")
         }
 
         return VASTLinear(duration: duration, skipOffset: skipOffset, mediaFiles: mediaFiles, trackingEvents: trackingEvents,
                           clickThrough: clickThrough, clickTrackings: clickTrackings, customClicks: customClicks,
-                          adParameters: nonEmpty(element.firstChild(named: "AdParameters")?.trimmedText))
+                          adParameters: nonEmpty(element.firstChild(named: "AdParameters")?.trimmedText),
+                          icons: decodeIcons(iconsElement, at: path + "/Icons"))
+    }
+
+    // MARK: - Icons
+
+    private mutating func decodeIcons(_ element: VASTXMLElement?, at path: String) -> [VASTIcon] {
+        guard let element else { return [] }
+        checkChildren(of: element, at: path)
+        return element.children(named: "Icon").enumerated().map { index, icon in
+            decodeIcon(icon, at: path + "/Icon[\(index + 1)]")
+        }
+    }
+
+    /// VAST 3.0+ `Icon` (VAST 4.1 Industry Icon Support): attributes `program`, `width`, `height`, `xPosition`, `yPosition`,
+    /// `duration`, `offset`, `apiFramework`, 4.1 `pxratio`; a resource; `IconClicks`; `IconViewTracking`.
+    private mutating func decodeIcon(_ element: VASTXMLElement, at path: String) -> VASTIcon {
+        checkChildren(of: element, at: path)
+        let width = integerAttribute("width", of: element, at: path)
+        let height = integerAttribute("height", of: element, at: path)
+        for (name, value) in [("width", width), ("height", height)] where value == nil && element.attribute(name) == nil {
+            report(.warning, "vast.icon.\(name).missing", "<Icon> should have a \(name) attribute (pixels).", path + "@" + name)
+        }
+        if element.attribute("pxratio") != nil { checkIntroduced("Icon@pxratio", at: path + "@pxratio") }
+        let resources = decodeResources(of: element, at: path, kind: "icon")
+        if resources.isEmpty {
+            report(.warning, "vast.icon.resource.missing", "<Icon> needs a StaticResource, IFrameResource or HTMLResource.", path)
+        }
+        var clickThrough: String?
+        var clickTrackings: [String] = []
+        if let clicks = element.firstChild(named: "IconClicks") {
+            let clicksPath = path + "/IconClicks"
+            checkChildren(of: clicks, at: clicksPath)
+            checkIntroducedChildren(of: clicks, at: clicksPath)
+            clickThrough = clicks.firstChild(named: "IconClickThrough").flatMap { url($0, at: clicksPath + "/IconClickThrough", role: .clickThrough) }
+            clickTrackings = urls(clicks.children(named: "IconClickTracking"), at: clicksPath + "/IconClickTracking", role: .tracker)
+        }
+        return VASTIcon(program: nonEmpty(element.attribute("program")), width: width, height: height,
+                        xPosition: iconHorizontalPosition(of: element, at: path), yPosition: iconVerticalPosition(of: element, at: path),
+                        duration: iconTime("duration", of: element, at: path), offset: iconTime("offset", of: element, at: path),
+                        apiFramework: nonEmpty(element.attribute("apiFramework")), pixelRatio: iconPixelRatio(of: element, at: path),
+                        resources: resources, clickThrough: clickThrough, clickTrackings: clickTrackings,
+                        viewTrackings: urls(element.children(named: "IconViewTracking"), at: path + "/IconViewTracking", role: .tracker))
+    }
+
+    /// `xPosition`: `left`, `right`, or a non-negative number of pixels.
+    private mutating func iconHorizontalPosition(of element: VASTXMLElement, at path: String) -> VASTIcon.HorizontalPosition? {
+        guard let raw = element.attribute("xPosition") else { return nil }
+        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "left": return .left
+        case "right": return .right
+        default:
+            if let pixels = integer(raw), pixels >= 0 { return .pixels(pixels) }
+            report(.warning, "vast.icon.position.invalid", "xPosition=\"\(raw)\" must be left, right or a number of pixels; it is ignored.",
+                   path + "@xPosition")
+            return nil
+        }
+    }
+
+    /// `yPosition`: `top`, `bottom`, or a non-negative number of pixels.
+    private mutating func iconVerticalPosition(of element: VASTXMLElement, at path: String) -> VASTIcon.VerticalPosition? {
+        guard let raw = element.attribute("yPosition") else { return nil }
+        switch raw.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "top": return .top
+        case "bottom": return .bottom
+        default:
+            if let pixels = integer(raw), pixels >= 0 { return .pixels(pixels) }
+            report(.warning, "vast.icon.position.invalid", "yPosition=\"\(raw)\" must be top, bottom or a number of pixels; it is ignored.",
+                   path + "@yPosition")
+            return nil
+        }
+    }
+
+    /// `duration` / `offset`: HH:MM:SS(.mmm), in seconds.
+    private mutating func iconTime(_ name: String, of element: VASTXMLElement, at path: String) -> Double? {
+        guard let raw = element.attribute(name) else { return nil }
+        guard let seconds = VASTTimeFormat.seconds(from: raw) else {
+            report(.warning, "vast.icon.time.invalid", "\(name)=\"\(raw)\" is not HH:MM:SS or HH:MM:SS.mmm; it is ignored.", path + "@" + name)
+            return nil
+        }
+        return seconds
+    }
+
+    private mutating func iconPixelRatio(of element: VASTXMLElement, at path: String) -> Double? {
+        guard let raw = element.attribute("pxratio") else { return nil }
+        guard let ratio = Double(raw.trimmingCharacters(in: .whitespaces)), ratio.isFinite, ratio > 0 else {
+            report(.warning, "vast.icon.pxratio.invalid", "pxratio=\"\(raw)\" is not a positive number; it is ignored.", path + "@pxratio")
+            return nil
+        }
+        return ratio
     }
 
     private mutating func decodeDuration(_ element: VASTXMLElement?, at path: String, context: Context) -> Double? {
@@ -446,16 +577,18 @@ struct VASTDecoder {
                              maintainAspectRatio: booleanAttribute("maintainAspectRatio", of: element, at: path))
     }
 
-    /// Reports InLine media the simulator cannot play: VPAID only (error 901) or nothing AVPlayer supports (error 403).
+    /// Reports InLine media the simulator cannot play (VAST error 403, VAST 4.1 §2.3.6.3), naming the VPAID-only case:
+    /// 901 is a VPAID runtime error, and the simulator never runs VPAID.
     private mutating func checkPlayable(_ files: [VASTMediaFile], at path: String) {
-        let choice = VASTMediaSelector.choose(files, playerWidth: 1280, playerHeight: 720)
-        guard case let .unsupported(code) = choice else { return }
-        if code == .vpaidError {
+        guard case .unsupported = VASTMediaSelector.choose(files, playerWidth: 1280, playerHeight: 720) else { return }
+        if files.allSatisfy({ VASTMediaKind($0) == .vpaid }) {
             report(.warning, "vast.mediaFiles.vpaidOnly",
-                   "Every playable <MediaFile> is VPAID, which the simulator does not run; playback fails with VAST error 901.", path)
+                   "Every <MediaFile> is VPAID, which the simulator does not run; playback fails with VAST error 403 (no supported media file; 901 is a VPAID runtime error).",
+                   path)
         } else {
             report(.warning, "vast.mediaFiles.unplayable",
-                   "No <MediaFile> can be played by AVPlayer (MP4, HLS, QuickTime or audio); playback fails with VAST error 403.", path)
+                   "No <MediaFile> can be played by AVPlayer (progressive MP4, QuickTime or audio, or HLS streaming); playback fails with VAST error 403.",
+                   path)
         }
     }
 
@@ -542,26 +675,7 @@ struct VASTDecoder {
             report(.warning, "vast.companion.\(name).missing", "<Companion> must have a \(name) attribute.", path + "@" + name)
         }
 
-        var resources: [VASTCompanion.Resource] = []
-        var resourceIndex: [String: Int] = [:]
-        for child in element.children where ["StaticResource", "IFrameResource", "HTMLResource"].contains(child.name) {
-            resourceIndex[child.name, default: 0] += 1
-            let childPath = path + "/\(child.name)[\(resourceIndex[child.name] ?? 1)]"
-            switch child.name {
-            case "StaticResource":
-                if let url = url(child, at: childPath, role: .resource) {
-                    resources.append(.staticResource(url: url, creativeType: nonEmpty(child.attribute("creativeType"))))
-                }
-            case "IFrameResource":
-                if let url = url(child, at: childPath, role: .resource) { resources.append(.iframe(url: url)) }
-            default:
-                if let html = nonEmpty(child.trimmedText) {
-                    resources.append(.html(html))
-                } else {
-                    report(.warning, "vast.companion.html.empty", "<HTMLResource> is empty.", childPath)
-                }
-            }
-        }
+        let resources = decodeResources(of: element, at: path, kind: "companion")
         if resources.isEmpty, context == .inline {
             report(.warning, "vast.companion.resource.missing", "<Companion> needs a StaticResource, IFrameResource or HTMLResource.", path)
         }
@@ -576,10 +690,37 @@ struct VASTDecoder {
                                                                            at: path + "/TrackingEvents"))
         if context == .inline, !resources.isEmpty, companion.displayResource == nil {
             report(.warning, "vast.companion.resource.unsupported",
-                   "None of the companion's resources can be shown: a StaticResource must be an image or a script (VAST error 604, no Companion resource with a supported type).",
+                   "None of the companion's resources can be shown: a StaticResource must be an image or a script (VAST error \(VASTErrorCode.companionResourceUnsupported.rawValue), no Companion resource with a supported type).",
                    path)
         }
         return companion
+    }
+
+    /// The `StaticResource` / `IFrameResource` / `HTMLResource` children of a companion or an icon, in document order.
+    /// `kind` names the parent in issue codes (`vast.<kind>.html.empty`).
+    private mutating func decodeResources(of element: VASTXMLElement, at path: String, kind: String) -> [VASTCompanion.Resource] {
+        var resources: [VASTCompanion.Resource] = []
+        var resourceIndex: [String: Int] = [:]
+        for child in element.children where ["StaticResource", "IFrameResource", "HTMLResource"].contains(child.name) {
+            resourceIndex[child.name, default: 0] += 1
+            let childPath = path + "/\(child.name)[\(resourceIndex[child.name] ?? 1)]"
+            switch child.name {
+            case "StaticResource":
+                if let url = url(child, at: childPath, role: .resource) {
+                    resources.append(.staticResource(url: url, creativeType: nonEmpty(child.attribute("creativeType"))))
+                }
+            case "IFrameResource":
+                if let url = url(child, at: childPath, role: .resource) { resources.append(.iframe(url: url)) }
+            default:
+                if let html = nonEmpty(child.trimmedText) {
+                    recordOpenRTBMacros(in: html, isMarkup: true, at: childPath)
+                    resources.append(.html(html))
+                } else {
+                    report(.warning, "vast.\(kind).html.empty", "<HTMLResource> is empty.", childPath)
+                }
+            }
+        }
+        return resources
     }
 
     // MARK: - ViewableImpression
@@ -670,6 +811,7 @@ struct VASTDecoder {
     }
 
     private mutating func checkURL(_ url: String, role: VASTURLCheck.Role, at path: String) {
+        recordOpenRTBMacros(in: url, isMarkup: false, at: path)
         switch VASTURLCheck.check(url, role: role) {
         case .ok:
             break
@@ -682,6 +824,11 @@ struct VASTDecoder {
         case let .invalid(reason):
             report(.warning, "vast.url.invalid", "\"\(url)\" is not a usable URL: \(reason).", path)
         }
+    }
+
+    private mutating func recordOpenRTBMacros(in text: String, isMarkup: Bool, at path: String) {
+        let macros = MacroExpander.openRTBTokens(in: text, isMarkup: isMarkup)
+        if !macros.isEmpty { openRTBMacroSites.append(VASTMacroSite(path: path, macros: macros)) }
     }
 
     // MARK: - Version and structure checks
@@ -756,4 +903,12 @@ struct VASTDecoder {
     private mutating func report(_ severity: ValidationIssue.Severity, _ code: String, _ message: String, _ path: String) {
         issues.append(ValidationIssue(severity, code: code, message: message, path: path))
     }
+}
+
+/// An element of a VAST document whose text carries OpenRTB `${…}` macros.
+struct VASTMacroSite: Sendable, Hashable {
+    /// The element path inside its document (`VAST/Ad[1]/InLine/Error[1]`).
+    var path: String
+    /// The distinct `${…}` tokens, in first-seen order.
+    var macros: [String]
 }

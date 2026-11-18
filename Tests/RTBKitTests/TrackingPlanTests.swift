@@ -73,6 +73,22 @@ struct TrackingPlanAuctionTests {
             == [PlannedRequest(.billing, "billing", "bid 0.0 › burl", "https://t.example/bill?p=1.23&b=resp-bid")])
     }
 
+    /// OpenRTB 2.6 §4.4 `${AUCTION_LOSS}` "Loss reason codes. Refer to List: Loss Reason Codes" (§5.25: 0 = "Bid Won").
+    /// Every URL of a won bid (nurl, burl, AdCOM events, clicks) says 0, even when the host's context still carries a
+    /// reason; only the `lurl` of `.loss(reason:)` carries one, and it is that event's reason.
+    @Test func auctionLossIsZeroOnAWonBidAndTheEventReasonOnTheLossNotice() {
+        var candidate = TrackingFixtures.banner
+        candidate.winURL = "https://t.example/win?l=${AUCTION_LOSS}"
+        candidate.billingURL = "https://t.example/bill?l=${OPENRTB_LOSS}"
+        var staleContext = TrackingFixtures.context
+        staleContext.lossReason = 102
+        #expect(TrackingFixtures.plan(.won, candidate, context: staleContext).map(\.url) == ["https://t.example/win?l=0"])
+        #expect(TrackingFixtures.plan(.rendered, candidate, context: staleContext).map(\.url) == ["https://t.example/bill?l=0"])
+        #expect(TrackingFixtures.plan(.won, candidate).map(\.url) == ["https://t.example/win?l=0"])
+        #expect(TrackingFixtures.plan(.loss(reason: 2), candidate, context: staleContext).map(\.url)
+            == ["https://t.example/loss?r=2&m=1.5&p=1.23"])
+    }
+
     @Test func lossNoticeCarriesTheLossReason() {
         #expect(TrackingFixtures.plan(.loss(reason: 102), TrackingFixtures.banner)
             == [PlannedRequest(.loss, "loss (102)", "bid 0.0 › lurl", "https://t.example/loss?r=102&m=1.5&p=1.23")])
@@ -206,8 +222,11 @@ struct TrackingPlanNativeTests {
         #expect(urls == [["https://t.example/e1"], ["https://t.example/e2"], ["https://t.example/e3"], ["https://t.example/e4"]])
     }
 
+    /// The exchange substitutes `${…}` in the inline `adm` before the SDK parses it (OpenRTB 2.6 §4.4); the SDK then fires
+    /// the Native trackers as written (decisions.md "Macros"), so the substituted price reaches every tracker.
     @Test func native10ImpTrackersAndJSTracker() throws {
-        let json = #"{"native":{"ver":"1.1","assets":[{"id":1,"title":{"text":"T"}}],"link":{"url":"https://l.example"},"imptrackers":["https://t.example/i1?p=${AUCTION_PRICE}","https://t.example/i2"],"jstracker":"<script src=\"https://t.example/j.js?p=${AUCTION_PRICE}\"></script>"}}"#
+        let adm = #"{"native":{"ver":"1.1","assets":[{"id":1,"title":{"text":"T"}}],"link":{"url":"https://l.example"},"imptrackers":["https://t.example/i1?p=${AUCTION_PRICE}","https://t.example/i2"],"jstracker":"<script src=\"https://t.example/j.js?p=${AUCTION_PRICE}\"></script>"}}"#
+        let json = MacroExpander.expandMarkup(adm, context: TrackingFixtures.context).url
         let native = try #require(NativeParser.parse(json).ad)
         let candidate = AdCandidate(id: "0.0", bidID: "n", price: 1, format: .native, markup: .native(json))
         #expect(TrackingFixtures.plan(.rendered, candidate, native: native) == [
@@ -218,12 +237,26 @@ struct TrackingPlanNativeTests {
         ])
     }
 
+    /// Native 1.2 §5.4 Asset Response `link`: "Link object for call to actions. The link object applies if the asset item
+    /// is activated (clicked). If there is no link object on the asset, the parent link object on the bid response
+    /// applies." An asset's own link overrides the main one entirely: only its clicktrackers fire, and it is the
+    /// destination.
     @Test func clickOnAnAssetWithItsOwnLink() {
-        // Asset link clicktrackers, then the ad link's, then one navigation to the asset's url.
         #expect(TrackingFixtures.plan(.click(assetID: 7), Self.candidate, native: Self.native12) == [
             PlannedRequest(.click, "click", "bid 1.2 › native › asset 7 › link › clicktrackers[0]", "https://t.example/asset-click"),
-            PlannedRequest(.click, "click", "bid 1.2 › native › link › clicktrackers[0]", "https://t.example/click"),
             PlannedRequest(.navigation, "click", "bid 1.2 › native › asset 7 › link", "https://landing.example/asset"),
+        ])
+    }
+
+    /// The override is the whole link object: an asset link without a usable `url` (invalid, Native 1.2 §5.7 "url":
+    /// required) has no destination of its own, so the click fires its trackers and navigates nowhere — neither the main
+    /// link's clicktrackers nor its url or fallback apply.
+    @Test func anAssetLinkOverridesTheMainLinkEvenWithoutAURL() {
+        let native = NativeAd(assets: [NativeAsset(id: 3, content: .title(text: "T"),
+                                                   link: AdLink(url: " ", clickTrackers: ["https://t.example/asset-only"]))],
+                              link: AdLink(url: "https://landing.example/", clickTrackers: ["https://t.example/main"], fallback: "https://fb.example/"))
+        #expect(TrackingFixtures.plan(.click(assetID: 3), Self.candidate, native: native) == [
+            PlannedRequest(.click, "click", "bid 1.2 › native › asset 3 › link › clicktrackers[0]", "https://t.example/asset-only"),
         ])
     }
 
@@ -367,8 +400,9 @@ struct TrackingPlanParentTests {
         #expect(rendered.map(\.category) == [.billing, .impression])
         #expect(rendered.map(\.parentID) == [nil, Self.winNoticeRequest])
         #expect(Self.plan(.viewable(.mrc50), Self.nativeByWinNotice, native: native, options: options).map(\.parentID) == [Self.winNoticeRequest])
+        // Asset 7 has its own link, which overrides the main one (Native 1.2 §5.4): its one clicktracker, then the navigation.
         let click = Self.plan(.click(assetID: 7), Self.nativeByWinNotice, native: native, options: options)
-        #expect(click.map(\.category) == [.click, .click, .navigation])
+        #expect(click.map(\.category) == [.click, .navigation])
         #expect(click.allSatisfy { $0.parentID == Self.winNoticeRequest })
         let loss = Self.plan(.loss(reason: 102), Self.nativeByWinNotice, native: native, options: options)
         #expect(loss.map(\.category) == [.loss])

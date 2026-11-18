@@ -283,15 +283,16 @@ final class VASTPlayerModel {
             fail(item, code: item.missingLinearError, "Ad \(item.adIndex + 1) has no linear creative")
             return .failed
         }
-        let width = Self.pixels(configuration.playerSize.width)
-        let height = Self.pixels(configuration.playerSize.height)
+        // MediaFile@width/@height are pixels (VAST 4.1 §3.9.1): the player's points at the device's scale.
+        let width = Self.pixels(configuration.playerSize.width * configuration.device.scale)
+        let height = Self.pixels(configuration.playerSize.height * configuration.device.scale)
         switch chooseMedia(item.mediaFiles, width, height, configuration.audioOnly) {
         case let .unsupported(code):
             fail(item, code: code, "No playable media file among \(item.mediaFiles.count) (error \(code.rawValue))")
             return .failed
         case let .play(file):
             log(.info, "Ad \(item.adIndex + 1): \(file.type ?? "media") \(file.width.map(String.init) ?? "?")×\(file.height.map(String.init) ?? "?") "
-                + "for a \(width)×\(height) player")
+                + "for a \(width)×\(height) px player")
             let prepared = await host.monitor.prepareMedia(file.url, trigger: "media file", source: item.source + " › MediaFile",
                                                            parentID: item.mediaParentID, userAgent: host.device.userAgent)
             let remote = ["http", "https"].contains(URLText.scheme(file.url)?.lowercased() ?? "")

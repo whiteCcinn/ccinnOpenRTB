@@ -16,7 +16,8 @@ import Foundation
 ///   Sizes"). Where a value was not published when this catalog was written (iPhone 18 Pro insets, iPhone Duo insets) it
 ///   is marked **approx.** with what it is based on.
 /// - **User-Agents** are the in-app forms an ad SDK sends: the `WKWebView` UA on iOS/iPadOS (no `Version/… Safari/…`
-///   suffix), the Android System WebView UA (`; wv`), and the media-stack UA on TV platforms (AppleCoreMedia, Dalvik,
+///   suffix; iPads send the desktop-class Macintosh form, as iPadOS does by default), the Android System WebView UA
+///   (`; wv`), and the media-stack UA on TV platforms (AppleCoreMedia, Dalvik,
 ///   Roku DVP). Build identifiers inside them follow the real format but are illustrative, not tied to a release.
 /// - **`openRTBDeviceType`** follows AdCOM "Device Types": 4 phone, 5 tablet, 3 connected TV (a TV set with the platform
 ///   built in), 7 set-top box (a box or stick plugged into a TV). It is reported, never acted on: exchanges disagree on
@@ -196,9 +197,14 @@ public enum DeviceCatalog {
 
     // MARK: - Tablets
 
-    /// SDKs report the mobile iPad form (the default WKWebView content mode would send the desktop Mac UA instead).
-    private static let iPadUserAgent = "Mozilla/5.0 (iPad; CPU OS \(frozenUserAgentOSToken) like Mac OS X) "
-        + "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+    /// iPadOS 13+ browses desktop-class by default (`WKWebpagePreferences.preferredContentMode` `.recommended` resolves to
+    /// desktop on iPad), so an in-app `WKWebView` sends the Macintosh UA. WebKit builds it in
+    /// Source/WebCore/platform/ios/UserAgentIOS.mm (`standardUserAgentWithApplicationName`, desktop type) as
+    /// `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)` followed by the desktop
+    /// application name, which `WKWebViewConfiguration._applicationNameForDesktopUserAgent` leaves empty by default (the
+    /// `Mobile/15E148` default of `applicationNameForUserAgent` applies to the mobile UA only). The Mac OS token is frozen
+    /// at 10_15_7. `device.os` / `osv` still say iPadOS 27.2, as SDKs report them from UIDevice.
+    private static let iPadUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
 
     private static let tablets: [DeviceProfile] = [
         // HIG: 820×1180 pt @2x (2360×1640 px). 24 pt status bar, 20 pt home indicator; display corner radius 18 pt.

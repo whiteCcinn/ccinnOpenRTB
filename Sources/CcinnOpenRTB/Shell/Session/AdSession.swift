@@ -675,6 +675,9 @@ final class AdSession: AdRenderingHost {
             let companions = ad.inline.creatives.reduce(0) { $0 + $1.companions.count }
             guard companionIndex >= 0, companionIndex < companions else { return "no companion \(companionIndex + 1) in ad \(adIndex + 1)" }
             return nil
+        case let .iconView(_, iconIndex), let .iconClick(_, iconIndex):
+            guard ad.icons.indices.contains(iconIndex) else { return "no icon \(iconIndex &+ 1) in ad \(adIndex + 1)" }
+            return nil
         default:
             return nil
         }
@@ -713,7 +716,7 @@ final class AdSession: AdRenderingHost {
     private static func adIndex(of event: AdLifecycleEvent) -> Int? {
         switch event {
         case let .video(_, adIndex), let .videoViewability(_, adIndex), let .videoClick(adIndex), let .companionView(adIndex, _),
-             let .companionClick(adIndex, _):
+             let .companionClick(adIndex, _), let .iconView(adIndex, _), let .iconClick(adIndex, _):
             adIndex
         case let .error(_, adIndex):
             adIndex

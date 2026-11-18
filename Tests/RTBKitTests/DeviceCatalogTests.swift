@@ -121,7 +121,7 @@ struct DeviceCatalogTests {
                 #expect(device.openRTBDeviceType == 4)
             case .tablet:
                 #expect(device.openRTBDeviceType == 5)
-                #expect(device.userAgent.contains("iPad"))
+                #expect(device.os == "iPadOS" && device.make == "Apple")
             case .ctv:
                 #expect([3, 7].contains(device.openRTBDeviceType))
             }
@@ -147,11 +147,27 @@ struct DeviceCatalogTests {
     }
 
     /// iOS 26 and later keep `18_6` in the WebKit User-Agent (the OS version is frozen there), while `device.osv` carries
-    /// the real version.
+    /// the real version. iPads send the desktop-class UA instead (next test), which has no iOS token at all.
     @Test func appleDevicesRunTheCurrentReleaseButKeepTheFrozenUserAgentToken() {
         for device in devices where device.make == "Apple" && device.family != .ctv {
             #expect(device.osVersion == "27.2", "\(device.id)")
-            #expect(device.userAgent.contains("OS 18_6 like Mac OS X"), "\(device.id)")
+            if device.family != .tablet {
+                #expect(device.userAgent.contains("OS 18_6 like Mac OS X"), "\(device.id)")
+            }
+        }
+    }
+
+    /// iPadOS 13+ browses desktop-class by default: an in-app `WKWebView` on an iPad sends the Macintosh User-Agent.
+    /// WebKit (Source/WebCore/platform/ios/UserAgentIOS.mm, `standardUserAgentWithApplicationName`, desktop type) builds
+    /// `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)` + the desktop
+    /// application name, which `WKWebViewConfiguration._applicationNameForDesktopUserAgent` leaves empty (the
+    /// `Mobile/15E148` default belongs to the mobile UA only): nothing follows.
+    @Test func iPadsSendTheDesktopClassWebViewUserAgent() throws {
+        let desktop = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+        let tablets = devices.filter { $0.family == .tablet }
+        #expect(Set(tablets.map(\.id)) == ["ipad-10", "ipad-pro-11", "ipad-pro-11-m5"])
+        for tablet in tablets {
+            #expect(tablet.userAgent == desktop, "\(tablet.id)")
         }
     }
 

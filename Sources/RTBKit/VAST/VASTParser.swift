@@ -13,14 +13,15 @@ public enum VASTParser {
     /// `requireSecure` (`imp.secure = 1`) turns non-HTTPS URLs from notes into warnings.
     public static func parse(_ xml: String, requireSecure: Bool) -> (document: VASTDocument?, issues: [ValidationIssue]) {
         switch outcome(of: xml, requireSecure: requireSecure) {
-        case let .document(document, issues): (document, issues)
+        case let .document(document, issues, _): (document, issues)
         case let .notXML(issues), let .notVAST(issues): (nil, issues)
         }
     }
 
     /// What a body turned out to be; the resolver maps it to a VAST error code (100 / 101).
     enum Outcome: Sendable {
-        case document(VASTDocument, [ValidationIssue])
+        /// The document, its issues, and the elements carrying OpenRTB `${…}` macros.
+        case document(VASTDocument, [ValidationIssue], [VASTMacroSite])
         /// Not well-formed XML, or rejected by the reader's limits (VAST error 100).
         case notXML([ValidationIssue])
         /// XML whose root is not `<VAST>` (VAST error 101).
@@ -34,7 +35,7 @@ public enum VASTParser {
         case let .success(root):
             var decoder = VASTDecoder(requireSecure: requireSecure)
             guard let document = decoder.decode(root: root) else { return .notVAST(decoder.issues) }
-            return .document(document, decoder.issues)
+            return .document(document, decoder.issues, decoder.openRTBMacroSites)
         }
     }
 }

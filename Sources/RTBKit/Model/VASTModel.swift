@@ -61,7 +61,7 @@ public struct VASTMediaFile: Sendable, Hashable {
     public var minBitrate: Int?
     public var maxBitrate: Int?
     public var codec: String?
-    /// `VPAID`, … (unsupported → error 901).
+    /// `VPAID`, … (never run by the simulator: no supported media file, error 403).
     public var apiFramework: String?
     public var scalable: Bool?
     public var maintainAspectRatio: Bool?
@@ -94,9 +94,13 @@ public struct VASTLinear: Sendable, Hashable {
     public var clickTrackings: [String]
     public var customClicks: [String]
     public var adParameters: String?
+    /// VAST 3.0+ `Icons/Icon` (industry icons such as AdChoices), in document order.
+    public var icons: [VASTIcon]
 
     public init(duration: Double? = nil, skipOffset: VASTOffset? = nil, mediaFiles: [VASTMediaFile] = [], trackingEvents: [VASTTracking] = [],
-                clickThrough: String? = nil, clickTrackings: [String] = [], customClicks: [String] = [], adParameters: String? = nil) {
+                clickThrough: String? = nil, clickTrackings: [String] = [], customClicks: [String] = [], adParameters: String? = nil,
+                icons: [VASTIcon] = []) {
+        self.icons = icons
         self.duration = duration
         self.skipOffset = skipOffset
         self.mediaFiles = mediaFiles
@@ -105,6 +109,64 @@ public struct VASTLinear: Sendable, Hashable {
         self.clickTrackings = clickTrackings
         self.customClicks = customClicks
         self.adParameters = adParameters
+    }
+}
+
+/// VAST 3.0+ industry icon (VAST 4.1 `Linear/Icons/Icon`, e.g. AdChoices): an overlay the player draws on the linear ad,
+/// with its own view and click tracking.
+public struct VASTIcon: Sendable, Hashable {
+    /// `xPosition`: `left`, `right`, or pixels from the left edge.
+    public enum HorizontalPosition: Sendable, Hashable {
+        case left, right
+        case pixels(Int)
+    }
+
+    /// `yPosition`: `top`, `bottom`, or pixels from the top edge.
+    public enum VerticalPosition: Sendable, Hashable {
+        case top, bottom
+        case pixels(Int)
+    }
+
+    /// The industry initiative the icon represents (`AdChoices`, …).
+    public var program: String?
+    /// Pixels.
+    public var width: Int?
+    public var height: Int?
+    public var xPosition: HorizontalPosition?
+    public var yPosition: VerticalPosition?
+    /// Seconds the icon stays on screen; `nil`: as long as the ad.
+    public var duration: Double?
+    /// Seconds after the ad starts before the icon shows; `nil`: from the start.
+    public var offset: Double?
+    public var apiFramework: String?
+    /// VAST 4.1 `pxratio`: the pixel ratio the icon was designed for.
+    public var pixelRatio: Double?
+    /// `StaticResource` / `IFrameResource` / `HTMLResource`, in document order.
+    public var resources: [VASTCompanion.Resource]
+    /// `IconClicks/IconClickThrough`.
+    public var clickThrough: String?
+    /// `IconClicks/IconClickTracking`.
+    public var clickTrackings: [String]
+    /// `IconViewTracking`: fired when the icon is shown.
+    public var viewTrackings: [String]
+
+    public init(program: String? = nil, width: Int? = nil, height: Int? = nil, xPosition: HorizontalPosition? = nil,
+                yPosition: VerticalPosition? = nil, duration: Double? = nil, offset: Double? = nil, apiFramework: String? = nil,
+                pixelRatio: Double? = nil, resources: [VASTCompanion.Resource] = [], clickThrough: String? = nil, clickTrackings: [String] = [],
+                viewTrackings: [String] = []) {
+        self.program = program
+        self.width = width
+        self.height = height
+        self.xPosition = xPosition
+        self.yPosition = yPosition
+        self.duration = duration
+        self.offset = offset
+        self.apiFramework = apiFramework
+        self.pixelRatio = pixelRatio
+        self.resources = resources
+        self.clickThrough = clickThrough
+        self.clickTrackings = clickTrackings
+        self.viewTrackings = viewTrackings
     }
 }
 
@@ -146,9 +208,11 @@ public struct VASTCreative: Sendable, Hashable {
     public var hasNonLinear: Bool
     /// VAST 4.0+ `UniversalAdId` elements (one in 4.0 / 4.1, several from 4.2), in document order.
     public var universalAdIDs: [VASTUniversalAdID]
+    /// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1); `.none`, the spec's default, when absent.
+    public var companionsRequired: VASTCompanionRequirement
 
     public init(id: String? = nil, adID: String? = nil, sequence: Int? = nil, linear: VASTLinear? = nil, companions: [VASTCompanion] = [],
-                hasNonLinear: Bool = false, universalAdIDs: [VASTUniversalAdID] = []) {
+                hasNonLinear: Bool = false, universalAdIDs: [VASTUniversalAdID] = [], companionsRequired: VASTCompanionRequirement = .none) {
         self.id = id
         self.adID = adID
         self.sequence = sequence
@@ -156,7 +220,21 @@ public struct VASTCreative: Sendable, Hashable {
         self.companions = companions
         self.hasNonLinear = hasNonLinear
         self.universalAdIDs = universalAdIDs
+        self.companionsRequired = companionsRequired
     }
+}
+
+/// VAST 3.0+ `CompanionAds@required` (VAST 4.1 §3.13.1): which of the creative's companions the player must display for
+/// the ad to play.
+public enum VASTCompanionRequirement: String, Sendable, Hashable, CaseIterable {
+    /// "the player must attempt to display the contents for all <Companion> elements provided; if all Companion creative
+    /// cannot be displayed, the player should not display the ad".
+    case all
+    /// "the player must attempt to display content from at least one of the <Companion> elements provided … if none of the
+    /// Companion creative can be displayed, the player should not display the ad".
+    case any
+    /// "the player may choose to not display any of the Companion creative" — the default when the attribute is absent.
+    case none
 }
 
 /// VAST 4.0+ `Creative/UniversalAdId` (VAST 4.1 / 4.2 §3.7.1): the creative's identifier in a registry such as Ad-ID.
@@ -254,10 +332,15 @@ public struct VASTWrapper: Sendable, Hashable {
     public var followAdditionalWrappers: Bool
     public var allowMultipleAds: Bool
     public var fallbackOnNoAd: Bool
+    /// VAST 4.1 `BlockedAdCategories` (§3.19.2): categories the wrapper does not accept from below, one entry per code
+    /// (an element may list several, comma-separated), with that element's `authority`.
+    public var blockedAdCategories: [VASTCategory]
 
     public init(adTagURI: String, impressions: [String] = [], errors: [String] = [], creatives: [VASTCreative] = [],
                 viewableImpression: VASTViewableImpression? = nil, verifications: [VASTVerification] = [],
-                followAdditionalWrappers: Bool = true, allowMultipleAds: Bool = false, fallbackOnNoAd: Bool = false) {
+                followAdditionalWrappers: Bool = true, allowMultipleAds: Bool = false, fallbackOnNoAd: Bool = false,
+                blockedAdCategories: [VASTCategory] = []) {
+        self.blockedAdCategories = blockedAdCategories
         self.adTagURI = adTagURI
         self.impressions = impressions
         self.errors = errors
@@ -306,15 +389,39 @@ public struct VASTDocument: Sendable, Hashable {
     }
 }
 
-/// VAST error codes used by the simulator.
+/// VAST error codes (VAST 4.1 §2.3.6.3, VAST 4.2 error table).
 public enum VASTErrorCode: Int, Sendable, Hashable, CaseIterable {
     case xmlParsing = 100, schemaValidation = 101, unsupportedVersion = 102
     case traffickingError = 200, unexpectedLinearity = 201, unexpectedDuration = 202, unexpectedSize = 203
+    /// 204 "Ad category was required but not provided."
+    case adCategoryRequired = 204
+    /// 205 "Inline Category violates Wrapper BlockedAdCategories (refer 3.19.2)."
+    case blockedAdCategory = 205
+    /// 206 "Ad Break shortened. Ad was not served."
+    case adBreakShortened = 206
     case wrapperError = 300, wrapperTimeout = 301, wrapperLimit = 302, noAdsAfterWrapper = 303, inlineResponseTimeout = 304
     case linearError = 400, fileNotFound = 401, mediaTimeout = 402, noSupportedMedia = 403, mediaDisplayProblem = 405
     case mezzanineRequired = 406, mezzanineDownloading = 407, conditionalAdRejected = 408
     case interactiveCreativeError = 409, codeResourceError = 410
-    case nonLinearError = 500, companionError = 600, undefinedError = 900, vpaidError = 901
+    case nonLinearError = 500
+    /// 501 "Unable to display NonLinearAd because creative dimensions do not align with creative display area (i.e.
+    /// creative dimension too large)."
+    case nonLinearDimensions = 501
+    /// 502 "Unable to fetch NonLinearAds/NonLinear resource."
+    case nonLinearResourceUnavailable = 502
+    /// 503 "Couldn't find NonLinear resource with supported type."
+    case nonLinearResourceUnsupported = 503
+    case companionError = 600
+    /// 601 "Unable to display Companion because creative dimensions do not fit within Companion display area (i.e., no
+    /// available space)."
+    case companionDimensions = 601
+    /// 602 "Unable to display Required Companion."
+    case requiredCompanionUnavailable = 602
+    /// 603 "Unable to fetch CompanionAds/Companion resource."
+    case companionResourceUnavailable = 603
+    /// 604 "Couldn't find Companion resource with supported type."
+    case companionResourceUnsupported = 604
+    case undefinedError = 900, vpaidError = 901
 }
 
 /// Where an ad came from: `hop` indexes `ResolvedVAST.chain`, `ad` indexes that hop's `document.ads`.
@@ -330,8 +437,12 @@ public struct VASTAdOrigin: Sendable, Hashable {
 
 /// One hop of a wrapper chain.
 public struct VASTHop: Sendable, Hashable {
-    /// `nil` for the document the bid carried inline.
+    /// The URL actually requested: `template` with its VAST `[…]` macros expanded when the resolver has a macro context
+    /// (VAST 4.1 §6.1/§6.2); `nil` for the document the bid carried inline.
     public var url: String?
+    /// The request URI as written (the `VASTAdTagURI`, or the pasted / `curl` tag URL), before macro expansion; `nil` for
+    /// the document the bid carried inline.
+    public var template: String?
     public var document: VASTDocument?
     public var error: VASTErrorCode?
     /// The fetcher's request id (network monitor entry); `nil` for markup carried in the bid.
@@ -340,8 +451,9 @@ public struct VASTHop: Sendable, Hashable {
     public var parent: VASTAdOrigin?
 
     public init(url: String? = nil, document: VASTDocument? = nil, error: VASTErrorCode? = nil, requestID: UUID? = nil,
-                parent: VASTAdOrigin? = nil) {
+                parent: VASTAdOrigin? = nil, template: String? = nil) {
         self.url = url
+        self.template = template
         self.document = document
         self.error = error
         self.requestID = requestID
@@ -365,34 +477,85 @@ public struct VASTAdFailure: Sendable, Hashable {
 }
 
 /// An inline ad with every tracker of the wrappers above it merged in (wrapper trackers first, in chain order).
+///
+/// The merged lists are computed views. An ad the resolver produced shares its wrappers' trackers with every other ad
+/// below the same wrapper (one copy per document layer, not per ad), so a wrapper whose response is a large pod costs
+/// memory linear in the input. Reading a list builds it; setting one gives this ad its own copy of every list.
 public struct ResolvedVASTAd: Sendable, Hashable {
     public var inline: VASTInline
     public var sequence: Int?
-    /// Impression URLs of all wrappers and the inline ad.
-    public var impressions: [String]
-    /// Error URLs of all wrappers and the inline ad.
-    public var errors: [String]
-    /// Per inline linear creative: all tracking events (wrappers + inline).
-    public var trackingEvents: [VASTTracking]
-    /// ClickTracking of all wrappers and the inline ad.
-    public var clickTrackings: [String]
-    public var viewableImpression: VASTViewableImpression
-    public var verifications: [VASTVerification]
     /// The documents this ad passed through: outermost wrapper first, the inline ad last.
     public var origin: [VASTAdOrigin]
+    private var trackers: VASTMergedTrackers
+
+    /// Impression URLs of all wrappers and the inline ad.
+    public var impressions: [String] {
+        get { trackers.collect(\.impressions) }
+        set { trackers.modify { $0.impressions = newValue } }
+    }
+
+    /// Error URLs of all wrappers and the inline ad.
+    public var errors: [String] {
+        get { trackers.collect(\.errors) }
+        set { trackers.modify { $0.errors = newValue } }
+    }
+
+    /// Per inline linear creative: all tracking events (wrappers + inline).
+    public var trackingEvents: [VASTTracking] {
+        get { trackers.collect(\.trackingEvents) }
+        set { trackers.modify { $0.trackingEvents = newValue } }
+    }
+
+    /// ClickTracking of all wrappers and the inline ad.
+    public var clickTrackings: [String] {
+        get { trackers.collect(\.clickTrackings) }
+        set { trackers.modify { $0.clickTrackings = newValue } }
+    }
+
+    public var viewableImpression: VASTViewableImpression {
+        get { trackers.viewableImpression }
+        set { trackers.modify { $0.viewableImpression = newValue } }
+    }
+
+    public var verifications: [VASTVerification] {
+        get { trackers.collect(\.verifications) }
+        set { trackers.modify { $0.verifications = newValue } }
+    }
+
+    /// The icons of the played Linear of all wrappers and the inline ad (`.iconView` / `.iconClick` index this list).
+    public var icons: [VASTIcon] {
+        get { trackers.collect(\.icons) }
+        set { trackers.modify { $0.icons = newValue } }
+    }
 
     public init(inline: VASTInline, sequence: Int? = nil, impressions: [String] = [], errors: [String] = [], trackingEvents: [VASTTracking] = [],
                 clickTrackings: [String] = [], viewableImpression: VASTViewableImpression = VASTViewableImpression(),
-                verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = []) {
+                verifications: [VASTVerification] = [], origin: [VASTAdOrigin] = [], icons: [VASTIcon] = []) {
         self.inline = inline
         self.sequence = sequence
-        self.impressions = impressions
-        self.errors = errors
-        self.trackingEvents = trackingEvents
-        self.clickTrackings = clickTrackings
-        self.viewableImpression = viewableImpression
-        self.verifications = verifications
         self.origin = origin
+        trackers = VASTMergedTrackers(lists: VASTTrackerLists(impressions: impressions, errors: errors, trackingEvents: trackingEvents,
+                                                             clickTrackings: clickTrackings, viewableImpression: viewableImpression,
+                                                             verifications: verifications, icons: icons))
+    }
+
+    /// The resolver's ad: `layer` is the inline ad's layer, linked to the wrappers above it.
+    init(inline: VASTInline, sequence: Int?, origin: [VASTAdOrigin], layer: VASTTrackerLayer?) {
+        self.inline = inline
+        self.sequence = sequence
+        self.origin = origin
+        trackers = VASTMergedTrackers(layer: layer)
+    }
+
+    public static func == (lhs: ResolvedVASTAd, rhs: ResolvedVASTAd) -> Bool {
+        lhs.inline == rhs.inline && lhs.sequence == rhs.sequence && lhs.origin == rhs.origin && lhs.trackers.lists == rhs.trackers.lists
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(inline)
+        hasher.combine(sequence)
+        hasher.combine(origin)
+        hasher.combine(trackers.lists)
     }
 }
 
@@ -424,4 +587,13 @@ public struct ResolvedVAST: Sendable, Hashable {
 public protocol VASTFetcher: Sendable {
     /// `parentRequestID` links the fetch to the wrapper that asked for it in the network monitor.
     func fetchVAST(_ url: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?)
+    /// The resolver's call: `url` is the URL to request (VAST macros expanded), `template` the URI as written, so a fetcher
+    /// that records requests can show both. The default forwards to `fetchVAST(_:parentRequestID:)`.
+    func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?)
+}
+
+public extension VASTFetcher {
+    func fetchVAST(_ url: String, template: String, parentRequestID: UUID?) async throws -> (body: String, requestID: UUID?) {
+        try await fetchVAST(url, parentRequestID: parentRequestID)
+    }
 }

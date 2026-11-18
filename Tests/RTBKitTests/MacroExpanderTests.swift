@@ -57,10 +57,19 @@ struct OpenRTBMacroTests {
     }
 
     @Test func knownMacroWithoutValueBecomesEmpty() {
-        let result = MacroExpander.expand("l=${AUCTION_LOSS}&m=${AUCTION_MIN_TO_WIN}", context: MacroContext())
-        #expect(result.url == "l=&m=")
-        #expect(result.replaced == ["${AUCTION_LOSS}", "${AUCTION_MIN_TO_WIN}"])
+        let result = MacroExpander.expand("m=${AUCTION_MIN_TO_WIN}&d=${AUCTION_DISCOUNT_PCT}", context: MacroContext())
+        #expect(result.url == "m=&d=")
+        #expect(result.replaced == ["${AUCTION_MIN_TO_WIN}", "${AUCTION_DISCOUNT_PCT}"])
         #expect(result.unknown.isEmpty)
+    }
+
+    /// OpenRTB 2.5 List 5.25 / 2.6 §5.25 "Loss Reason Codes": 0 = "Bid Won". Without a loss reason the bid was not lost, so
+    /// `${AUCTION_LOSS}` / `${OPENRTB_LOSS}` is 0, never empty; a set reason is substituted as is.
+    @Test func auctionLossWithoutAReasonIsZeroBidWon() {
+        let result = MacroExpander.expandOpenRTB("l=${AUCTION_LOSS}&o=${OPENRTB_LOSS}", context: MacroContext())
+        #expect(result.url == "l=0&o=0")
+        #expect(result.replaced == ["${AUCTION_LOSS}", "${OPENRTB_LOSS}"])
+        #expect(MacroExpander.expandOpenRTB("l=${AUCTION_LOSS}", context: MacroContext(lossReason: 102)).url == "l=102")
     }
 
     @Test func nonFinitePricesAreNeverPrinted() {
@@ -188,6 +197,25 @@ struct VASTMacroTests {
             == "2016-01-17T13%3A15%3A07.127Z")
     }
 
+    /// VAST 4.1 §6.2 `[TIMESTAMP]`: "the date and time at which the URI using this macro is accessed", ISO 8601 with
+    /// milliseconds and the offset (IAB example `2016-01-17T08:15:07.127-05`). The clock is the simulated device's, never
+    /// the Mac's (`TimeZone.current` would leak the developer's UTC offset into every tracker): the device's `timeZone`
+    /// when it has one Foundation knows, otherwise UTC.
+    @Test func timestampUsesTheSimulatedDeviceTimeZoneElseUTC() {
+        let date = Date(timeIntervalSince1970: 1_453_036_507.127) // 2016-01-17T13:15:07.127Z
+        func device(_ timeZone: String?) -> DeviceProfile {
+            DeviceProfile(id: "d", name: "D", family: .iPhone, screenWidth: 393, screenHeight: 852, scale: 3, os: "iOS", osVersion: "18",
+                          make: "Apple", model: "iPhone", userAgent: "UA", openRTBDeviceType: 4, timeZone: timeZone)
+        }
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date)).url == "2016-01-17T13%3A15%3A07.127Z")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device(nil))).url
+            == "2016-01-17T13%3A15%3A07.127Z")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device("Asia/Kuala_Lumpur"))).url
+            == "2016-01-17T21%3A15%3A07.127%2B08%3A00")
+        #expect(MacroExpander.expand("[TIMESTAMP]", context: MacroContext(timestamp: date, device: device("Not/AZone"))).url
+            == "2016-01-17T13%3A15%3A07.127Z")
+    }
+
     @Test func playheadsAreHHMMSSmmm() {
         let context = MacroContext(adPlayhead: 3.5, contentPlayhead: 3_725.0456)
         let result = MacroExpander.expand("a=[ADPLAYHEAD]&c=[CONTENTPLAYHEAD]&m=[MEDIAPLAYHEAD]", context: context)
@@ -212,8 +240,10 @@ struct VASTMacroTests {
         #expect(result.url == "s=640,360&a=https%3A%2F%2Fcdn.example%2Fa.mp4%3Fx%3D1&ua=Mozilla%2F5.0%20%28iPhone%3B%20CPU%29&r=2")
     }
 
+    /// VAST 4.1 §6.2 `[BREAKPOSITION]`; §6.1: -1 when unknown. Standalone (4) is a placement fact, never a guess: without
+    /// a typed position, a `custom` value or a content playhead, the position is unknown.
     @Test func breakPositionIsDerivedFromTheContentPlayhead() {
-        #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext()).url == "4")
+        #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext()).url == "-1")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(contentPlayhead: 0)).url == "1")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(contentPlayhead: 30)).url == "2")
         #expect(MacroExpander.expand("[BREAKPOSITION]", context: MacroContext(custom: ["[BREAKPOSITION]": "3"])).url == "3")

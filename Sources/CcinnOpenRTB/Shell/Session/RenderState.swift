@@ -62,6 +62,8 @@ extension AdLifecycleEvent {
         case let .video(event, adIndex): "VAST \(event.label) · ad \(adIndex + 1)"
         case let .companionView(adIndex, companionIndex): "companion \(companionIndex + 1) view · ad \(adIndex + 1)"
         case let .companionClick(adIndex, companionIndex): "companion \(companionIndex + 1) click · ad \(adIndex + 1)"
+        case let .iconView(adIndex, iconIndex): "icon \(iconIndex &+ 1) view · ad \(adIndex &+ 1)"
+        case let .iconClick(adIndex, iconIndex): "icon \(iconIndex &+ 1) click · ad \(adIndex &+ 1)"
         case let .click(assetID): assetID.map { "click · asset \($0)" } ?? "click"
         case let .videoClick(adIndex): "VAST click · ad \(adIndex + 1)"
         case .closed: "close"

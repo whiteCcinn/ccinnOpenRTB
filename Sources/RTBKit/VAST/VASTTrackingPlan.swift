@@ -16,6 +16,8 @@ import Foundation
 /// | `.companionView(i, c)` | the companion's `creativeView` Tracking |
 /// | `.companionView(i, c)` (wrappers) | the matching tracking companions of every wrapper above, outermost first, before the companion's own |
 /// | `.companionClick(i, c)` | wrapper and own CompanionClickTracking, then a navigation to CompanionClickThrough only when `playerOpensClickThrough` (an image StaticResource; none on CTV); script, HTML and iframe companions open their own click-through |
+/// | `.iconView(i, k)` | icon k's IconViewTracking (`k` indexes `ads[i].icons`: wrapper icons first, then the inline ad's) |
+/// | `.iconClick(i, k)` | icon k's IconClickTracking, then a navigation to its IconClickThrough (none when the device cannot open click-throughs) |
 /// | `.error(code, i)` | ad i's Error URLs with `[ERRORCODE]` = code; `nil`: `failureErrorURLs` when no ad resolved, else every ad's |
 /// | anything else | nothing (display and Native events belong to `TrackingPlan`) |
 ///
@@ -25,12 +27,18 @@ import Foundation
 /// element path in `source` tells which tracker it is. A chain-wide `.error(code, adIndex: nil)` is one action across the
 /// pod, so it has no ad position.
 ///
-/// Indices come from renderers and are never trusted: an `adIndex` or `companionIndex` outside the resolution (negative,
+/// Indices come from renderers and are never trusted: an `adIndex`, `companionIndex` or `iconIndex` outside the resolution (negative,
 /// `count`, `Int.max`, …) plans nothing.
 ///
 /// Resolution-time failures (`ResolvedVAST.adFailures`) are planned by `resolutionRequests` (VASTResolutionPlan.swift).
 ///
-/// Macros: the plan sets what it knows about the ad on top of the host's context: `[ERRORCODE]`, `[REASON]` (2 for
+/// Macros: every VAST URL, from any hop, expands VAST `[…]` macros only, as a player does (VAST 4.1 §6.1/§6.2;
+/// `MacroExpander.expandVAST`). OpenRTB `${…}` is the exchange's, which substitutes it in an inline `adm` before the player
+/// sees it; one in a document a request delivered stays literal and is listed in `unknownMacros` (the resolver warns about
+/// that document, `vast.macro.openrtb.unsubstituted`).
+///
+/// The plan sets what it knows about the resolution and the ad on top of the host's context: `[ADCOUNT]` (the number of
+/// ads that will play), `[ERRORCODE]`, `[REASON]` (2 for
 /// `verificationNotExecuted`) and `[PODSEQUENCE]` (the `sequence` of the pod slot the ad plays in). Playback values
 /// (`[ADPLAYHEAD]`, `[ASSETURI]`, `[PLAYERSIZE]`, …) come from the host's context.
 public enum VASTTrackingPlan {
@@ -48,6 +56,10 @@ public enum VASTTrackingPlan {
             return planner.companionView(adIndex: adIndex, companionIndex: companionIndex)
         case let .companionClick(adIndex, companionIndex):
             return planner.companionClick(adIndex: adIndex, companionIndex: companionIndex)
+        case let .iconView(adIndex, iconIndex):
+            return planner.iconView(adIndex: adIndex, iconIndex: iconIndex)
+        case let .iconClick(adIndex, iconIndex):
+            return planner.iconClick(adIndex: adIndex, iconIndex: iconIndex)
         case let .error(code, adIndex):
             return planner.error(code, adIndex: adIndex)
         case .won, .rendered, .viewable, .click, .closed, .loss:
@@ -61,8 +73,17 @@ public enum VASTTrackingPlan {
 /// Builds the requests of one event for one resolution. Internal so that `resolutionRequests` (its own file) shares it.
 struct VASTPlanner {
     let vast: ResolvedVAST
+    /// The host's context with `[ADCOUNT]`: the number of ads of this resolution that will play (VAST 4.1 §6.2).
     let context: MacroContext
     let source: String
+
+    init(vast: ResolvedVAST, context: MacroContext, source: String) {
+        self.vast = vast
+        var planContext = context
+        planContext.adCount = vast.ads.count
+        self.context = planContext
+        self.source = source
+    }
 
     /// `MacroContext.custom` keys of the ad-level VAST macros the plan fills (VAST 4.1 / 4.2, all "Contexts: All tracking
     /// pixels"). `[ADCATEGORIES]` is not one of them: it is a VAST request macro, "List of desired ad categories" (§6.3).
@@ -247,6 +268,39 @@ struct VASTPlanner {
         return nil
     }
 
+    // MARK: Icons
+
+    /// The icon's IconViewTracking, attributed to the document the icon came from.
+    func iconView(adIndex: Int, iconIndex: Int) -> [TrackerRequest] {
+        guard let target = iconTarget(adIndex: adIndex, iconIndex: iconIndex) else { return [] }
+        return target.icon.viewTrackings.map { url in
+            make(url, .event, "VAST icon view", adIndex, target.layer, target.element + "/IconViewTracking", context: target.context)
+        }
+    }
+
+    /// The icon's IconClickTracking, then one navigation to its IconClickThrough when the device can open it.
+    func iconClick(adIndex: Int, iconIndex: Int) -> [TrackerRequest] {
+        guard let target = iconTarget(adIndex: adIndex, iconIndex: iconIndex) else { return [] }
+        var requests = target.icon.clickTrackings.map { url in
+            make(url, .click, "VAST icon click", adIndex, target.layer, target.element + "/IconClicks/IconClickTracking", context: target.context)
+        }
+        if canNavigate, let clickThrough = target.icon.clickThrough {
+            requests.append(make(clickThrough, .navigation, "VAST icon click", adIndex, target.layer, target.element + "/IconClicks/IconClickThrough",
+                                 context: target.context))
+        }
+        return requests
+    }
+
+    /// The icon at `iconIndex` of `ads[adIndex].icons`, with its layer and label; `nil` outside them.
+    private func iconTarget(adIndex: Int, iconIndex: Int) -> (icon: VASTIcon, layer: VASTLayer?, element: String, context: MacroContext)? {
+        guard let ad = ad(at: adIndex) else { return nil }
+        let lineage = VASTLineage(origin: ad.origin, chain: vast.chain)
+        let icons = Self.attributed(ad.icons, lineage, \.linearIcons)
+        guard icons.indices.contains(iconIndex) else { return nil }
+        let (icon, layer) = icons[iconIndex]
+        return (icon, layer, VASTLabel.icon(icon, index: iconIndex), adContext(ad, lineage: lineage))
+    }
+
     // MARK: Errors
 
     func error(_ code: VASTErrorCode, adIndex: Int?) -> [TrackerRequest] {
@@ -376,7 +430,7 @@ struct VASTPlanner {
 
     private func request(_ template: String, _ category: TrackerCategory, _ trigger: String, adIndex: Int?, path: [String], parentID: UUID?,
                          context: MacroContext) -> TrackerRequest {
-        let expanded = MacroExpander.expand(template, context: context)
+        let expanded = MacroExpander.expandVAST(template, context: context)
         let podSuffix = vast.ads.count > 1 ? adIndex.map { " (ad " + VASTLabel.ordinal($0) + " of \(vast.ads.count))" } ?? "" : ""
         let sourcePath = ([source] + path).filter { !$0.isEmpty }.joined(separator: " › ")
         return TrackerRequest(parentID: parentID, category: category, trigger: trigger + podSuffix, source: sourcePath, template: template,
