@@ -42,7 +42,9 @@ struct SampleMovieWriterTests {
     func aTrackThatEndsFirstDoesNotStallTheOther(tracks: SampleMovieWriter.Tracks) async throws {
         let file = temporaryFile("mp4")
         defer { try? FileManager.default.removeItem(at: file) }
-        try await offThePool { try SampleMovieWriter.write(tracks, to: file, fileType: .mp4, stallTimeout: 5) }
+        // The production stall timeout still catches the deadlock (it never progresses again) without a 3-core CI
+        // runner's slow AVFoundation start looking like one.
+        try await offThePool { try SampleMovieWriter.write(tracks, to: file, fileType: .mp4, stallTimeout: SampleMovieWriter.stallTimeout) }
         let video = try #require(try await seconds(of: .video, in: file))
         let audio = try #require(try await seconds(of: .audio, in: file))
         #expect(abs(video - Double(tracks.videoFrames) / Double(SampleMovieWriter.framesPerSecond)) < 0.1)
@@ -110,10 +112,12 @@ struct SampleMovieWriterTests {
         let errors = try await offThePool { () -> [SampleMediaError?] in
             let writer = try AVAssetWriter(outputURL: file, fileType: .m4a)
             let feed = try SampleMovieWriter.audioFeed(samples: 4_410, writer: writer)
-            let session = MovieWriteSession(writer: writer, feeds: [feed], stallTimeout: 5)
+            // The production stall timeout: this test is about running twice, not stalls, and a 3-core CI runner can
+            // leave AVFoundation without progress for more than 5 s.
+            let session = MovieWriteSession(writer: writer, feeds: [feed], stallTimeout: SampleMovieWriter.stallTimeout)
             try session.run()
             // The same session again, then a new session on the writer that has already written its file.
-            return [session, MovieWriteSession(writer: writer, feeds: [feed], stallTimeout: 5)].map { session in
+            return [session, MovieWriteSession(writer: writer, feeds: [feed], stallTimeout: SampleMovieWriter.stallTimeout)].map { session in
                 do { try session.run() } catch let error as SampleMediaError {
                     return error
                 } catch {
