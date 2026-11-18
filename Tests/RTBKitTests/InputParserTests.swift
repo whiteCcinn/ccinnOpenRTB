@@ -56,6 +56,23 @@ private func issue(_ code: String, in input: ParsedInput) -> ValidationIssue? {
     input.issues.first { $0.code == code }
 }
 
+/// An OpenRTB 3.0 `item`'s quantity members, the quantity read from them, and the one request issue expected (if any).
+struct ItemQuantityCase: Sendable, CustomTestStringConvertible {
+    let members: String
+    let quantity: Double
+    let issue: String?
+    let path: String?
+
+    init(_ members: String, _ quantity: Double, issue: String? = nil, at path: String? = nil) {
+        self.members = members
+        self.quantity = quantity
+        self.issue = issue
+        self.path = path
+    }
+
+    var testDescription: String { members.isEmpty ? "no qty / qtyflt" : members }
+}
+
 @Suite("InputParser – detection (D3)")
 struct InputDetectionTests {
     @Test func emptyInput() {
@@ -551,6 +568,35 @@ struct BidRequestSummaryTests {
         #expect(summary.contentID == "art-9")
         #expect(summary.contentURL == "https://news.example/a")
         #expect(summary.impressions.first?.itemQuantity == 3)
+    }
+
+    /// OpenRTB 3.0 §4.2.3 "Object: Item": `qty` (integer, default 1) and `qtyflt` (float, "for cases where the quantity is not
+    /// expressed as a whole number") are alternatives, "Only one of 'qty' or 'qtyflt' may be present." The text gives no
+    /// precedence because both may not be present; when a request breaks that rule, the warning names it and `qtyflt`,
+    /// the only one able to hold the exact quantity, is used.
+    @Test(arguments: [
+        ItemQuantityCase(#""qtyflt":14.2,"#, 14.2),
+        ItemQuantityCase(#""qty":3,"#, 3),
+        ItemQuantityCase("", 1),
+        ItemQuantityCase(#""qty":14,"qtyflt":14.2,"#, 14.2, issue: "request.item.qty.conflict", at: "request:/openrtb/request/item/0"),
+        ItemQuantityCase(#""qty":2.5,"#, 2.5, issue: "request.item.qty.fractional", at: "request:/openrtb/request/item/0/qty"),
+    ])
+    func itemQuantityFromQtyOrQtyflt(_ example: ItemQuantityCase) throws {
+        let request = #"{"openrtb":{"ver":"3.0","request":{"id":"r","item":[{"id":"1","# + example.members
+            + #""spec":{"placement":{"display":{"w":320,"h":50}}}}]}}}"#
+        let input = InputParser.parse(OpenRTBFixtures.spec30Banner, request: request)
+        #expect(try #require(input.request).impressions.map(\.itemQuantity) == [example.quantity])
+        let requestIssues = input.issues.filter { $0.path.hasPrefix("request:") }
+        #expect(requestIssues.map(\.code) == (example.issue.map { [$0] } ?? []))
+        #expect(requestIssues.map(\.path) == (example.path.map { [$0] } ?? []))
+        #expect(requestIssues.allSatisfy { $0.severity == .warning })
+    }
+
+    /// `item` is OpenRTB 3.0; a 2.x impression has no item quantity (2.6 `imp.qty` is the multiplier).
+    @Test func openRTB2ImpressionsHaveNoItemQuantity() throws {
+        let summary = try #require(InputParser.parse(OpenRTBFixtures.spec25WinNotice, request: OpenRTBFixtures.request26).request)
+        #expect(!summary.impressions.isEmpty)
+        #expect(summary.impressions.allSatisfy { $0.itemQuantity == nil })
     }
 
     @Test func invalidRequestIsAWarningAndIgnored() {

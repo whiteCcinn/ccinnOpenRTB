@@ -215,11 +215,12 @@ public struct BidRequestSummary: Sendable, Hashable {
         public var nativeHints: NativeRequestHints?
         /// OpenRTB 2.6 `imp.qty.multiplier` (DOOH impressions per ad play), the `${AUCTION_MULTIPLIER}` value.
         public var quantityMultiplier: Double?
-        /// OpenRTB 3.0 `item.qty`.
-        public var itemQuantity: Int?
+        /// OpenRTB 3.0 `item.qty` or `item.qtyflt` (only one may be present), 1 when neither is (`qty`'s default); the
+        /// `${OPENRTB_ITEM_QTY}` value. `nil` for an OpenRTB 2.x impression.
+        public var itemQuantity: Double?
 
         public init(id: String, formats: Set<AdFormat>, size: AdSize? = nil, secure: Bool = false, nativeHints: NativeRequestHints? = nil,
-                    quantityMultiplier: Double? = nil, itemQuantity: Int? = nil) {
+                    quantityMultiplier: Double? = nil, itemQuantity: Double? = nil) {
             self.id = id
             self.formats = formats
             self.size = size

@@ -100,6 +100,15 @@ struct MacroContextDefaultsTests {
         #expect(MacroExpander.expandOpenRTB("${AUCTION_MULTIPLIER}|${OPENRTB_ITEM_QTY}", context: none).url == "|")
     }
 
+    /// `${OPENRTB_ITEM_QTY}` is "from `item.qty` or `item.qtyflt`" (OpenRTB 3.0 §4.4 Substitution Macros): a whole quantity
+    /// reads as the integer `qty` would (no trailing ".0"), a fractional one keeps its digits.
+    @Test(arguments: [(3.0, "3"), (14.2, "14.2"), (0.5, "0.5"), (1_000_000, "1000000")])
+    func itemQuantityMacroHasNoTrailingZero(quantity: Double, expected: String) {
+        let request = BidRequestSummary(id: "r", impressions: [BidRequestSummary.Impression(id: "imp-1", formats: [.banner], itemQuantity: quantity)])
+        let context = MacroContext.simulatorDefaults(candidate: bid, request: request, device: phone)
+        #expect(MacroExpander.expandOpenRTB("${OPENRTB_ITEM_QTY}", context: context).url == expected)
+    }
+
     /// VAST `[APPBUNDLE]` is the publisher app the ad runs in; `Bid.bundle` is the advertised app, so it never stands in.
     @Test func appBundleNeverComesFromTheAdvertisedApp() {
         var installAd = bid

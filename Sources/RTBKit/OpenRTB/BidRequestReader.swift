@@ -119,7 +119,7 @@ enum BidRequestReader {
             if placement?.has("audio") == true { formats.insert(.audio) }
             impressions.append(BidRequestSummary.Impression(id: itemID, formats: formats, size: size,
                                                             secure: placement?.flag("secure", log: &log) ?? false, nativeHints: nativeHints,
-                                                            itemQuantity: item.int("qty", log: &log)))
+                                                            itemQuantity: itemQuantity(item, log: &log)))
         }
         let context = request.object("context", log: &log)
         let device = context?.object("device", log: &log)
@@ -133,6 +133,26 @@ enum BidRequestReader {
         facts.blockedCategories = context?.object("restrictions", log: &facts.log)?.strings("bcat", log: &facts.log) ?? []
         log = facts.log
         return facts.summary
+    }
+
+    /// OpenRTB 3.0 §4.2.3 "Object: Item": `qty` (integer, default 1) or `qtyflt` (float, "for cases where the quantity is not
+    /// expressed as a whole number"); "Only one of 'qty' or 'qtyflt' may be present." When both are, the request is
+    /// flagged and `qtyflt`, the only one able to hold the exact quantity, is used. A fractional `qty` is kept, flagged.
+    private static func itemQuantity(_ item: JSONObjectReader, log: inout IssueLog) -> Double {
+        if item.has("qty"), item.has("qtyflt") {
+            log.warning("request.item.qty.conflict", "Only one of `qty` or `qtyflt` may be present (OpenRTB 3.0 §4.2.3 Item); `qtyflt` is used.",
+                        at: item.pointer)
+        }
+        let fractional = item.double("qtyflt", log: &log)
+        let whole: Double?
+        if case let .double(number)? = item.raw("qty"), number.isFinite, number != number.rounded() {
+            log.warning("request.item.qty.fractional", "`qty` is an integer; a quantity that is not a whole number belongs in `qtyflt`.",
+                        at: item.pointer.appending("qty"))
+            whole = number
+        } else {
+            whole = item.int("qty", log: &log).map(Double.init)
+        }
+        return fractional ?? whole ?? 1
     }
 
     // MARK: Helpers

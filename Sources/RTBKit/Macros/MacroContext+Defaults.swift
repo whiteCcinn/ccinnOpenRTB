@@ -11,8 +11,8 @@ extension MacroContext {
     ///   request was pasted; a pasted request's `id` wins.
     /// - `price` is the bid price (the default clearing price), so `${AUCTION_MBR}` (clearing / bid price) is 1.
     /// - OpenRTB 3.0 `bid.macro` keys are plain `custom` keys, referenced as `${CUSTOM_<KEY>}`.
-    /// - `${AUCTION_MULTIPLIER}` (2.6 `imp.qty.multiplier`) and `${OPENRTB_ITEM_QTY}` (3.0 `item.qty`) come from the
-    ///   impression the bid is for.
+    /// - `${AUCTION_MULTIPLIER}` (2.6 `imp.qty.multiplier`) and `${OPENRTB_ITEM_QTY}` (3.0 `item.qty` or `item.qtyflt`)
+    ///   come from the impression the bid is for; whole numbers have no trailing ".0".
     /// - `[APPBUNDLE]` is the publisher app from the request only: `Bid.bundle` names the advertised app.
     /// - `[DEVICEUA]` is the request's `device.ua` when given; otherwise the expander uses the simulated device's.
     /// - `[VASTVERSIONS]` lists the VAST versions the simulator's player plays.
@@ -48,7 +48,7 @@ extension MacroContext {
 
             let impression = request.impressions.first { $0.id == candidate.impID }
             put(OpenRTBMacro.auctionMultiplier.rawValue, impression?.quantityMultiplier.flatMap(MacroEncoding.decimal))
-            put(OpenRTBMacro.openRTBItemQuantity.rawValue, impression?.itemQuantity.map(String.init))
+            put(OpenRTBMacro.openRTBItemQuantity.rawValue, impression?.itemQuantity.flatMap(MacroEncoding.decimal))
         }
 
         let hasPrice = candidate.price.isFinite && candidate.price > 0
