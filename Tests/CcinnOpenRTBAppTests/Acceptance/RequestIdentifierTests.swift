@@ -125,31 +125,37 @@ struct RequestIdentifierTests {
         try expectNoRequestValues(url, harness: harness, path: "pasted tag")
     }
 
-    /// Leaving Real stops everything Real mode started (lead, with B1): a wrapper chain still resolving under Real is
-    /// cancelled when the session switches to Simulated, so no later hop goes out with the Real context.
+    /// Leaving Real stops everything Real mode started (lead, with B1): a wrapper chain resolving under Real is stopped when
+    /// the session switches to Simulated, so no later hop goes out with the Real context. Deterministic: hop 2 (asked for
+    /// legitimately while still in Real) is held on its way to the wire; the switch lands while it is pending, and it must
+    /// be cancelled and never reach the server.
     @Test func leavingRealMidChainSendsNoLaterHopWithRequestValues() async throws {
-        let inner = CountingTransport()
+        let wire = CountingTransport()
         let hop1 = """
         <VAST version="4.1"><Ad id="w2"><Wrapper><AdSystem>t</AdSystem>
           <VASTAdTagURI><![CDATA[https://ad.example/hop2.xml?\(Self.tagQuery)]]></VASTAdTagURI>
           <Impression><![CDATA[https://t.example/w2-imp]]></Impression></Wrapper></Ad></VAST>
         """
-        inner.respondByPrefix("https://ad.example/inline.xml", body: hop1)
-        inner.respondByPrefix("https://ad.example/hop2.xml", body: Self.inline())
-        let transport = DelayingTransport(inner: inner, delays: ["https://ad.example/inline.xml": .milliseconds(800)])
+        wire.respondByPrefix("https://ad.example/inline.xml", body: hop1)
+        wire.respondByPrefix("https://ad.example/hop2.xml", body: Self.inline())
+        let transport = DelayingTransport(inner: wire, delays: ["https://ad.example/hop2.xml": .seconds(2)])
         let harness = AcceptanceSession(transport: transport)
         let sample = Sample(id: "p8-mid", title: "p8", group: "test", response: Self.wrapperResponse(base: "https://ad.example"), request: Self.request)
         await harness.session.load(sample, render: false)
         try harness.confirmRealMode()
         harness.session.render()
-        #expect(await Wait.until { inner.requests.contains { $0.url.absoluteString.hasPrefix("https://ad.example/inline.xml") } || transport.started > 1 })
+        let pending = await Wait.until(timeout: .seconds(10)) { transport.startedURLs.contains { $0.hasPrefix("https://ad.example/hop2.xml") } }
+        #expect(pending, "hop 2 is asked for while still in Real: \(transport.startedURLs)")
+        #expect(!wire.requests.contains { $0.url.absoluteString.hasPrefix("https://ad.example/hop2.xml") }, "held before the wire")
+
         harness.session.choose(.simulated)
-        try await Task.sleep(for: .milliseconds(1500))
+        try await Task.sleep(for: .milliseconds(2500))
         await harness.waitUntilSettled()
-        let hop2 = inner.requests.filter { $0.url.absoluteString.hasPrefix("https://ad.example/hop2.xml") }
-        for request in hop2 {
-            for secret in Self.secrets { #expect(!request.url.absoluteString.contains(secret), "a later hop went out with the Real context: \(request.url)") }
-        }
+        #expect(!wire.requests.contains { $0.url.absoluteString.hasPrefix("https://ad.example/hop2.xml") },
+                "the pending hop reached the wire after leaving Real: \(wire.requests.map(\.url))")
+        let entry = try #require(harness.monitor.liveEntries.first { $0.url.hasPrefix("https://ad.example/hop2.xml") })
+        #expect(entry.state != .completed(status: 200), "\(entry.state)")
+        #expect(harness.session.phase == .idle, "the render started in Real mode is stopped: \(harness.session.phase)")
     }
 
     /// Real mode, after the confirmation: the player fills the request's values in, as a device would.
@@ -179,8 +185,9 @@ final class DelayingTransport: HTTPTransport, @unchecked Sendable {
     private let inner: any HTTPTransport
     private let delays: [String: Duration]
     private let lock = NSLock()
-    private var startedCount = 0
-    var started: Int { lock.withLock { startedCount } }
+    private var started: [String] = []
+    /// Every request handed to this transport, held or not (in order).
+    var startedURLs: [String] { lock.withLock { started } }
 
     init(inner: any HTTPTransport, delays: [String: Duration]) {
         self.inner = inner
@@ -188,7 +195,7 @@ final class DelayingTransport: HTTPTransport, @unchecked Sendable {
     }
 
     func perform(_ request: HTTPRequest) async throws -> HTTPResponse {
-        lock.withLock { startedCount += 1 }
+        lock.withLock { started.append(request.url.absoluteString) }
         if let delay = delays.first(where: { request.url.absoluteString.hasPrefix($0.key) })?.value {
             try await Task.sleep(for: delay)
         }
