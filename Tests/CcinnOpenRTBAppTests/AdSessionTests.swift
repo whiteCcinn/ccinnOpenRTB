@@ -604,6 +604,81 @@ struct AdSessionTests {
         #expect(harness.recorder.events == [.won, .won, .rendered])
     }
 
+    /// The proxy must forward EVERY `AdRenderingHost` requirement: a member it leaves out (or whose signature drifts)
+    /// silently falls back to the protocol extension's default with no compile error, which only a call through the
+    /// existential shows. Each requirement is driven through `any AdRenderingHost` as a renderer holds it, then again
+    /// after a generation bump, when every callback is dropped, empty or `CancellationError`.
+    @Test func theProxyForwardsEveryHostRequirementAndDropsThemAllAfterAGenerationBump() async throws {
+        let scriptURL = "https://js.example/t.js"
+        let native = Fixtures.candidate(.native("{\"native\":{}}"), format: .native)
+        let harness = SessionHarness(Fixtures.input([native])) { services in
+            let plan = services.trackingRequests
+            services.trackingRequests = { event, candidate, native, vast, context, options in
+                let requests = plan(event, candidate, native, vast, context, options)
+                guard event == .rendered else { return requests }
+                return requests + [TrackerRequest(category: .impression, trigger: "jstracker", source: "Native", template: scriptURL,
+                                                  url: scriptURL, isScript: true)]
+            }
+        }
+        harness.transport.respond("https://cdn.example/image.png", body: "png")
+        await harness.paste()
+        harness.enterRealMode()
+        await harness.renderAndWait()
+        let session = harness.session
+        let host: any AdRenderingHost = session.rendererHost
+        let status = PlaybackStatus(adIndex: 0, playhead: 2.5, duration: 15, isPlaying: true, isMuted: true)
+        let logLine = RendererLogEntry(date: Date(), origin: "Native", level: .warning, message: "live")
+        let tag = VASTSource.url("https://vast.example/tag")
+
+        // Live: every requirement reaches the session.
+        #expect(host.monitor === harness.monitor)
+        #expect(host.device == session.device)
+        host.report(.rendered)
+        #expect(harness.recorder.events.last == .rendered)
+        #expect(host.scriptTrackers.map(\.request.url) == [scriptURL])
+        #expect(host.scriptTrackers == session.scriptTrackers)
+        host.navigate(to: "https://landing.example/live", trigger: "mraid.open", source: "creative")
+        #expect(harness.monitor.liveEntries.contains { $0.category == .navigation && $0.url == "https://landing.example/live" })
+        #expect(try await host.fetchContent("https://cdn.example/image.png", trigger: "image", source: "Native") == Data("png".utf8))
+        host.playbackChanged(status)
+        #expect(session.playback[0] == status)
+        host.rendererLog(logLine)
+        #expect(session.console.last?.entry == logLine)
+        #expect(await host.resolveVAST(tag) == Fixtures.vast(ads: 1))
+        #expect(harness.recorder.resolutions == [tag])
+        #expect(session.nativeVideoVAST == Fixtures.vast(ads: 1))
+
+        // A generation bump (Render again): the old proxy reaches nothing of the new render.
+        await harness.renderAndWait()
+        #expect(session.phase == .ready)
+        let current: any AdRenderingHost = session.rendererHost
+        current.report(.rendered)
+        #expect(!session.scriptTrackers.isEmpty)
+        let events = harness.recorder.events
+        let entries = harness.monitor.liveEntries.count
+        let consoleLines = session.console.count
+
+        host.report(.closed)
+        host.navigate(to: "https://landing.example/stale", trigger: "mraid.open", source: "creative")
+        await #expect(throws: CancellationError.self) {
+            _ = try await host.fetchContent("https://cdn.example/image.png", trigger: "image", source: "Native")
+        }
+        host.playbackChanged(status)
+        host.rendererLog(RendererLogEntry(date: Date(), origin: "Native", level: .error, message: "stale"))
+        #expect(await host.resolveVAST(tag) == ResolvedVAST())
+        // An old web view can never run the new generation's trackers.
+        #expect(host.scriptTrackers.isEmpty)
+
+        #expect(harness.recorder.events == events)
+        #expect(harness.monitor.liveEntries.count == entries)
+        #expect(session.console.count == consoleLines)
+        #expect(session.playback.isEmpty)
+        #expect(harness.recorder.resolutions == [tag])
+        #expect(session.nativeVideoVAST == nil)
+        // The stale proxy's own properties describe its render (same monitor, the device it rendered on): nothing to drop.
+        #expect(host.monitor === harness.monitor && host.device == session.device)
+    }
+
     @Test func indicesOutsideTheResolvedVASTNeverReachTheTrackingPlan() async {
         var pod = Fixtures.vast(ads: 2)
         pod.ads[0].inline.creatives = [VASTCreative(companions: [VASTCompanion(width: 300, height: 250)])]

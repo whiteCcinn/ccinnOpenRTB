@@ -176,15 +176,17 @@ struct SessionHarness {
     let browser: RecordingBrowser
     let monitor: NetworkMonitor
 
+    /// - Parameter configure: adjusts the fake kit (for example a tracking plan that returns script trackers).
     init(_ input: ParsedInput, native: NativeAd? = Fixtures.native, resolved: ResolvedVAST = Fixtures.vast(ads: 1), gate: ResolutionGate? = nil,
-         opensClickThroughs: Bool = false) {
+         opensClickThroughs: Bool = false, configure: (inout AdKitServices) -> Void = { _ in }) {
         recorder = KitRecorder()
         transport = CountingTransport()
         clock = ManualSessionClock()
         browser = RecordingBrowser()
         monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
-        session = AdSession(services: Fixtures.services(input, recorder: recorder, native: native, resolved: resolved, gate: gate),
-                            monitor: monitor, clock: clock, browser: browser, opensClickThroughs: { opensClickThroughs },
+        var services = Fixtures.services(input, recorder: recorder, native: native, resolved: resolved, gate: gate)
+        configure(&services)
+        session = AdSession(services: services, monitor: monitor, clock: clock, browser: browser, opensClickThroughs: { opensClickThroughs },
                             parseDebounce: .zero)
     }
 
