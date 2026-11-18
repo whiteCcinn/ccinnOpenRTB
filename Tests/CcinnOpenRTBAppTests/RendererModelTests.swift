@@ -73,6 +73,7 @@ struct NativeAdModelTests {
         let model = NativeAdModel(ad: Self.ad, request: RendererFixtures.request(.native("{}"), format: .native, native: Self.ad,
                                                                                   placement: .inFeed), host: host)
         model.appeared()
+        await model.loadImages()
         model.appeared()
         model.click(assetID: 4)
         model.click(assetID: nil)
@@ -80,6 +81,38 @@ struct NativeAdModelTests {
         #expect(host.events == [.rendered, .click(assetID: 4), .click(assetID: nil)])
         #expect(host.navigations == [.init(url: "https://privacy.example/", trigger: "AdChoices (privacy)")],
                 "AdChoices is a navigation, not an ad click; ad clicks navigate through the tracking plan")
+    }
+
+    /// AdTech review (decided): a Native ad is rendered — impression trackers, billing — when its main assets (the main
+    /// image and the icon) have loaded or failed, not as soon as its view appears and before the images are requested;
+    /// at most 1 s after it appears.
+    @Test func renderedOnlyOnceTheMainImagesHaveLoadedOrFailed() async {
+        let host = RecordingHost()
+        host.contents["https://cdn.example/icon.png"] = TestImages.png(width: 8, height: 8)
+        let model = NativeAdModel(ad: Self.ad, request: RendererFixtures.request(.native("{}"), format: .native, native: Self.ad), host: host)
+        model.appeared()
+        #expect(host.events.isEmpty, "the images are not even requested yet")
+        await model.loadImages()
+        #expect(host.events == [.rendered], "icon loaded, main image failed: both settled")
+    }
+
+    @Test func renderedAfterOneSecondWhenTheImagesHang() async {
+        let host = RecordingHost()
+        host.fetchDelay = .seconds(30)
+        let model = NativeAdModel(ad: Self.ad, request: RendererFixtures.request(.native("{}"), format: .native, native: Self.ad), host: host)
+        model.appeared()
+        let loading = Task { await model.loadImages() }
+        defer { loading.cancel() }
+        #expect(!(await Wait.until(timeout: .milliseconds(700)) { !host.events.isEmpty }), "not before the cap")
+        #expect(await Wait.until(timeout: .seconds(2)) { host.events == [.rendered] }, "\(host.events)")
+    }
+
+    @Test func aNativeAdWithoutImagesIsRenderedWhenItAppears() {
+        let host = RecordingHost()
+        let ad = NativeAd(assets: [NativeAsset(id: 1, content: .title(text: "Text only"))], link: AdLink(url: "https://adv.example/"))
+        let model = NativeAdModel(ad: ad, request: RendererFixtures.request(.native("{}"), format: .native, native: ad), host: host)
+        model.appeared()
+        #expect(host.events == [.rendered])
     }
 
     @Test func imagesLoadThroughTheHostAndFailuresAreLogged() async {

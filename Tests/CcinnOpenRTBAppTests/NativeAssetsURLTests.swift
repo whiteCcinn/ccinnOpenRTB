@@ -133,6 +133,7 @@ struct NativeAssetsURLTests {
                                                                                     placement: .inFeed), host: host)
         model.appeared()
         await model.loadAssets()
+        await model.loadImages()
         #expect(model.assets == .ready)
         #expect(model.content.title?.text == "Real title")
         #expect(model.content.mainImage?.url == "https://cdn.example/main.png")

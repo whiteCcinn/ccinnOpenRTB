@@ -64,8 +64,12 @@ final class RecordingHost: AdRenderingHost {
 
     private(set) var fetches: [Fetch] = []
 
+    /// How long `fetchContent` takes (a hanging image server).
+    var fetchDelay: Duration?
+
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
         fetches.append(Fetch(url: url, trigger: trigger, source: source))
+        if let fetchDelay { try await Task.sleep(for: fetchDelay) }
         if fetchesThroughMonitor {
             return try await monitor.fetchContent(url, trigger: trigger, source: source, parentID: nil, userAgent: device.userAgent).data
         }

@@ -66,7 +66,8 @@ enum NativeAssetsDocument {
     }
 }
 
-/// One Native ad on screen: `.rendered` once when it appears with its assets (imptrackers, eventtrackers 1); asset clicks
+/// One Native ad on screen: `.rendered` once when it appears with its assets and its main images (the icon and the main
+/// image) have loaded or failed — at most `renderedCap` after that (imptrackers, eventtrackers 1); asset clicks
 /// `.click(assetID:)` (the tracking plan fires the asset's then the ad's clicktrackers and records the navigation);
 /// AdChoices opens the privacy URL (a navigation, not an ad click); images are fetched as content; the video asset's VAST
 /// is resolved by the host (`resolveVAST`, so its events map to it) and plays in a nested player.
@@ -108,6 +109,11 @@ final class NativeAdModel {
     @ObservationIgnored private var assetsRequested = false
     @ObservationIgnored private var imagesRequested = false
     @ObservationIgnored private var videoRequested = false
+    @ObservationIgnored private var renderedCapTask: Task<Void, Never>?
+    @ObservationIgnored private var renderedCapReached = false
+
+    /// The longest a shown ad waits for its main images before it is rendered anyway (a hanging image server).
+    static let renderedCap: Duration = .seconds(1)
 
     init(ad: NativeAd, request: RenderRequest, host: any AdRenderingHost, parseAssets: @escaping NativeAssetsParser = NativeAssetsDocument.defaultParser) {
         self.ad = ad
@@ -131,7 +137,8 @@ final class NativeAdModel {
         if !waitsForAssets { describeContent() }
     }
 
-    /// The ad is on screen: `.rendered` once its assets are there.
+    /// The ad is on screen: `.rendered` once its assets are there and its main images have loaded or failed (or after
+    /// `renderedCap`).
     func appeared() {
         hasAppeared = true
         reportRenderedIfReady()
@@ -185,8 +192,34 @@ final class NativeAdModel {
 
     private func reportRenderedIfReady() {
         guard hasAppeared, assets == .ready, !renderedReported, !isClosed else { return }
+        guard mainImagesSettled || renderedCapReached else {
+            startRenderedCap()
+            return
+        }
         renderedReported = true
+        renderedCapTask?.cancel()
+        renderedCapTask = nil
         host?.report(.rendered)
+    }
+
+    /// The icon and the main image (Native 1.2's main assets) have loaded or failed; an ad without them has none to wait for.
+    private var mainImagesSettled: Bool {
+        [content.icon, content.mainImage].allSatisfy { item in
+            guard let item else { return true }
+            guard let state = images[item.assetID] else { return false }
+            return state != .loading
+        }
+    }
+
+    private func startRenderedCap() {
+        guard renderedCapTask == nil else { return }
+        renderedCapTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.renderedCap)
+            guard !Task.isCancelled, let self, !self.renderedReported, !self.isClosed else { return }
+            self.renderedCapReached = true
+            self.log(.info, "Rendered at the 1 s cap: the main images (icon, main image) are still loading")
+            self.reportRenderedIfReady()
+        }
     }
 
     private func describeContent() {
@@ -214,6 +247,7 @@ final class NativeAdModel {
                                                      source: source + " › asset \(item.assetID) (\(name))")
             images[item.assetID] = state
             if case let .failed(message) = state { log(.warning, "Image asset \(item.assetID) did not load: \(message)") }
+            reportRenderedIfReady()
         }
     }
 
@@ -253,6 +287,8 @@ final class NativeAdModel {
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        renderedCapTask?.cancel()
+        renderedCapTask = nil
         host?.report(.closed)
     }
 
