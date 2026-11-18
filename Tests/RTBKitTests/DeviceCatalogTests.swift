@@ -155,6 +155,42 @@ struct DeviceCatalogTests {
         }
     }
 
+    /// Each TV platform at its November 2026 release, and the media-stack User-Agent reports the same version as
+    /// `device.osv` (AppleCoreMedia reports the real version: only WebKit froze its token).
+    @Test func connectedTVsRunTheirCurrentReleaseAndTheirUserAgentsAgree() throws {
+        let appleTV = try #require(DeviceCatalog.device(id: "apple-tv-4k"))
+        #expect(appleTV.os == "tvOS" && appleTV.osVersion == "27.2" && appleTV.model == "AppleTV14,1")
+        #expect(appleTV.userAgent == "AppleCoreMedia/1.0.0.24K122 (Apple TV; U; CPU OS 27_2 like Mac OS X; en_us)")
+
+        let googleTV = try #require(DeviceCatalog.device(id: "google-tv"))
+        #expect(googleTV.os == "Android" && googleTV.osVersion == "14")
+        #expect(googleTV.userAgent.hasPrefix("Dalvik/2.1.0 (Linux; U; Android 14; "))
+
+        let fireTV = try #require(DeviceCatalog.device(id: "fire-tv-stick-4k"))
+        #expect(fireTV.os == "Fire OS" && fireTV.osVersion == "8.1.8.5" && fireTV.model == "AFTKRT")
+        // Fire OS 8 is built on Android 11 (API 30).
+        #expect(fireTV.userAgent == "Dalvik/2.1.0 (Linux; U; Android 11; AFTKRT Build/RS8185.3898N)")
+
+        let roku = try #require(DeviceCatalog.device(id: "roku-express"))
+        #expect(roku.os == "Roku OS" && roku.osVersion == "15.3")
+        #expect(roku.userAgent.hasPrefix("Roku/DVP-15.3 (15.3."))
+    }
+
+    /// Every Apple device is on the same release train (27.2, October 2026).
+    @Test func appleDevicesShareOneRelease() {
+        let apple = devices.filter { $0.make == "Apple" }
+        #expect(apple.contains { $0.family == .ctv })
+        #expect(Set(apple.map(\.osVersion)) == ["27.2"])
+    }
+
+    /// The Surface Duo's last update was Android 12L (API 32, October 2022; support ended September 2023). 12L reports
+    /// itself as "12" (`Build.VERSION.RELEASE`), in the User-Agent and in `device.osv` alike.
+    @Test func surfaceDuoRunsItsLastUpdate() throws {
+        let duo = try #require(DeviceCatalog.device(id: "surface-duo"))
+        #expect(duo.osVersion == "12")
+        #expect(duo.userAgent.contains("(Linux; Android 12; Surface Duo Build/"))
+    }
+
     @Test func iPhoneDuoIsABookFoldableWithAnIPhoneCoverScreen() throws {
         let duo = try #require(DeviceCatalog.device(id: "iphone-duo"))
         #expect(duo.family == .foldable && duo.make == "Apple")

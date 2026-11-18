@@ -19,9 +19,13 @@ import Foundation
 ///   suffix), the Android System WebView UA (`; wv`), and the media-stack UA on TV platforms (AppleCoreMedia, Dalvik,
 ///   Roku DVP). Build identifiers inside them follow the real format but are illustrative, not tied to a release.
 /// - **`openRTBDeviceType`** follows AdCOM "Device Types": 4 phone, 5 tablet, 3 connected TV (a TV set with the platform
-///   built in), 7 set-top box (a box or stick plugged into a TV).
+///   built in), 7 set-top box (a box or stick plugged into a TV). It is reported, never acted on: exchanges disagree on
+///   boxes (many send 3 for every CTV device), so nothing in the simulator keys off it.
 /// - **CTV** devices use a 1920×1080 pt canvas (the size players and bid requests use for full-screen video); 4K
-///   devices render it at scale 2. CTV is landscape only, driven by a remote, and cannot open click-throughs.
+///   devices render it at scale 2. CTV is landscape only, driven by a remote, and cannot open click-throughs; every one
+///   of those behaviours keys off `family == .ctv` (and the `input` / `supportsClickThrough` the catalog sets with it).
+/// - **OS versions** are each platform's release as of November 2026; the media-stack User-Agent names the same version
+///   as `osVersion`.
 public enum DeviceCatalog {
     /// Devices of one family, in catalog order.
     public struct Group: Sendable, Hashable, Identifiable {
@@ -169,10 +173,13 @@ public enum DeviceCatalog {
     private static let dualScreens: [DeviceProfile] = [
         // Surface Duo (Microsoft dual-screen docs): each screen 1350×1800 px at 2.5 → 540×720; spanned viewport 1114×720,
         // i.e. a 34 px hinge between the screens. Screen corner radius and insets approx.
+        // OS: its last update, Android 12L (API 32; rolled out from 24 Oct 2022, 9to5google.com/2022/10/24/surface-duo-
+        // android-12l-update; OS and security updates ended 10 Sep 2023). 12L reports itself as "12" (Build.VERSION.RELEASE),
+        // which is what the WebView User-Agent and `device.osv` carry.
         DeviceProfile(id: "surface-duo", name: "Surface Duo", family: .dualScreen, screenWidth: 540, screenHeight: 720, scale: 2.5,
                       cornerRadius: 6, safeArea: DeviceInsets(top: 24, bottom: 24), cutout: .none, hingeWidth: 34,
-                      os: "Android", osVersion: "11", make: "Microsoft", model: "Surface Duo",
-                      userAgent: androidWebViewUserAgent(android: "11", model: "Surface Duo", build: "2022.902.26"), openRTBDeviceType: 4),
+                      os: "Android", osVersion: "12", make: "Microsoft", model: "Surface Duo",
+                      userAgent: androidWebViewUserAgent(android: "12", model: "Surface Duo", build: "2023.814.31"), openRTBDeviceType: 4),
     ]
 
     // MARK: - Tablets
@@ -205,17 +212,27 @@ public enum DeviceCatalog {
     }
 
     private static let connectedTVs: [DeviceProfile] = [
-        // tvOS lays out 1920×1080 pt; the 4K model renders @2x. A box → set-top box (7). AVPlayer's AppleCoreMedia UA.
-        tv("apple-tv-4k", "Apple TV 4K", scale: 2, os: "tvOS", osVersion: "18.0", make: "Apple", model: "AppleTV14,1",
-           userAgent: "AppleCoreMedia/1.0.0.22J357 (Apple TV; U; CPU OS 18_0 like Mac OS X; en_us)", deviceType: 7),
-        // A 4K TV set with Google TV built in → connected TV (3). ExoPlayer-based apps send the Dalvik UA. Model name approx.
-        tv("google-tv", "Google TV (4K TV)", scale: 2, os: "Android", osVersion: "12", make: "Sony", model: "BRAVIA 4K VH2",
-           userAgent: "Dalvik/2.1.0 (Linux; U; Android 12; BRAVIA 4K VH2 Build/STT2.230817.001.S4)", deviceType: 3),
-        // Fire TV Stick 4K Max (model code AFTKA, Fire OS 7 on Android 9) → set-top box (7).
-        tv("fire-tv-stick-4k", "Fire TV Stick 4K Max", scale: 2, os: "Fire OS", osVersion: "7.6", make: "Amazon", model: "AFTKA",
-           userAgent: "Dalvik/2.1.0 (Linux; U; Android 9; AFTKA Build/PS7633.3445N)", deviceType: 7),
-        // Roku Express: a 1080p player → set-top box (7). roUrlTransfer's default `Roku/DVP-<os> (<build>)` UA. Model code approx.
-        tv("roku-express", "Roku Express (1080p)", scale: 1, os: "Roku OS", osVersion: "13.0", make: "Roku", model: "3960X",
-           userAgent: "Roku/DVP-13.0 (13.0.0.4170-46)", deviceType: 7),
+        // Apple TV 4K (3rd generation, 2022; AppleTV14,1). tvOS lays out 1920×1080 pt; the 4K model renders @2x.
+        // OS: tvOS 27.2, build 24K122 (26 Oct 2026, with iOS 27.2; the 24K154 build is only for the 4th generation). The
+        //   UA is AVPlayer's AppleCoreMedia one, which reports the real OS version (WebKit's frozen `18_6` does not apply).
+        // Device type 7 (set-top box), not 3: AdCOM's 3 "Connected TV" is a TV set with the platform built in, 7 "Set Top
+        //   Box" a device plugged into one, which an Apple TV is. Exchanges that send 3 for every CTV device are not wrong
+        //   for their own taxonomy, so the simulator only reports it: no behaviour keys off it (see the header).
+        tv("apple-tv-4k", "Apple TV 4K", scale: 2, os: "tvOS", osVersion: "27.2", make: "Apple", model: "AppleTV14,1",
+           userAgent: "AppleCoreMedia/1.0.0.24K122 (Apple TV; U; CPU OS 27_2 like Mac OS X; en_us)", deviceType: 7),
+        // A 4K TV set with Google TV built in → connected TV (3). Android TV 14: Sony moved its Realtek-based BRAVIA sets
+        // to it from August 2025, and Android TV 16 had not reached TV sets by November 2026 (Google skipped 15).
+        // ExoPlayer-based apps send the Dalvik UA. Model name and build approx.
+        tv("google-tv", "Google TV (4K TV)", scale: 2, os: "Android", osVersion: "14", make: "Sony", model: "BRAVIA 4K VH2",
+           userAgent: "Dalvik/2.1.0 (Linux; U; Android 14; BRAVIA 4K VH2 Build/UTT3.250605.001.S2)", deviceType: 3),
+        // Fire TV Stick 4K Max (2nd generation, 2023; model code AFTKRT, "karat") → set-top box (7). Fire OS 8.1.8.5
+        // (build RS8185/3898, 28 Oct 2026, ftvdb.com), which is Android 11 (API 30) underneath: the Dalvik UA says Android 11.
+        tv("fire-tv-stick-4k", "Fire TV Stick 4K Max (2nd gen)", scale: 2, os: "Fire OS", osVersion: "8.1.8.5", make: "Amazon", model: "AFTKRT",
+           userAgent: "Dalvik/2.1.0 (Linux; U; Android 11; AFTKRT Build/RS8185.3898N)", deviceType: 7),
+        // Roku Express: a 1080p player → set-top box (7). Roku OS 15.3 (13 Aug 2026), the release on most devices: 16.0
+        // started a staged rollout on 19 Oct 2026. roUrlTransfer's default `Roku/DVP-<os> (<build>)` UA. Model code and
+        // build approx.
+        tv("roku-express", "Roku Express (1080p)", scale: 1, os: "Roku OS", osVersion: "15.3", make: "Roku", model: "3960X",
+           userAgent: "Roku/DVP-15.3 (15.3.0.6075-46)", deviceType: 7),
     ]
 }
