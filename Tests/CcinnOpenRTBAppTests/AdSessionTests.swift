@@ -259,6 +259,67 @@ struct AdSessionTests {
         #expect(harness.recorder.events == [.won])
     }
 
+    // MARK: Network relationships
+
+    /// The request that delivered the markup (AdCOM `display.curl`, or the nurl win notice) is the parent of the bid's
+    /// trackers and navigations: the session passes its monitor entry to the tracking plan as `markupRequestID`, nil
+    /// for inline adm.
+    @Test func theMarkupRequestIsPassedToTheTrackingPlan() async throws {
+        let inline = SessionHarness(Fixtures.input([display]))
+        await inline.paste()
+        await inline.renderAndWait()
+        inline.session.report(.rendered)
+        #expect(inline.recorder.options.map(\.markupRequestID) == [nil, nil])
+
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")]))
+        curl.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await curl.paste()
+        await curl.renderAndWait()
+        curl.session.report(.rendered)
+        curl.session.fireManually(.click(assetID: nil))
+        let content = try #require(curl.monitor.liveEntries.first { $0.category == .content })
+        #expect(curl.recorder.events == [.won, .rendered, .click(assetID: nil)])
+        // `.won` fires before the markup is fetched: the nurl is in the bid, not in the markup.
+        #expect(curl.recorder.options.map(\.markupRequestID) == [nil, content.id, content.id])
+
+        let nurl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, format: .banner)]))
+        nurl.transport.respond("https://win.dsp.example/w?p=2.5", body: "<div>from the win notice</div>")
+        await nurl.paste()
+        nurl.enterRealMode()
+        await nurl.renderAndWait()
+        nurl.session.report(.rendered)
+        let win = try #require(nurl.monitor.liveEntries.first { $0.category == .win })
+        #expect(nurl.recorder.options.last == TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: win.id))
+    }
+
+    /// A navigation the creative alone knows (`mraid.open`, `window.open`) belongs to the markup's document: its parent
+    /// is the request that delivered the markup, never the click tracker.
+    @Test func aCreativesOwnNavigationHangsUnderTheMarkupRequest() async throws {
+        let curl = SessionHarness(Fixtures.input([Fixtures.candidate(.none, markupURL: "https://cdn.example/creative.html")]))
+        curl.transport.respond("https://cdn.example/creative.html", body: "<div>curl</div>")
+        await curl.paste()
+        await curl.renderAndWait()
+        curl.session.fireManually(.click(assetID: nil))
+        curl.session.rendererHost.navigate(to: "https://landing.example/mraid", trigger: "mraid.open", source: "creative")
+        let content = try #require(curl.monitor.liveEntries.first { $0.category == .content })
+        let navigation = try #require(curl.monitor.liveEntries.last { $0.category == .navigation })
+        #expect(navigation.url == "https://landing.example/mraid")
+        #expect(navigation.parentID == content.id)
+
+        let inline = SessionHarness(Fixtures.input([display]))
+        await inline.paste()
+        await inline.renderAndWait()
+        inline.session.fireManually(.click(assetID: nil))
+        inline.session.rendererHost.navigate(to: "https://landing.example/mraid", trigger: "mraid.open", source: "creative")
+        #expect(inline.monitor.liveEntries.filter { $0.category == .navigation }.allSatisfy { $0.parentID == nil })
+    }
+
+    @Test func theShellsPlanOptionsBecomeTheKitsInOnePlace() {
+        let options = TrackingPlanOptions(exchangeSendsWinNotice: false, markupRequestID: UUID())
+        #expect(options.kitOptions.exchangeSendsWinNotice == false)
+        #expect(TrackingPlanOptions(exchangeSendsWinNotice: true, markupRequestID: nil).kitOptions.exchangeSendsWinNotice)
+    }
+
     @Test func fetchedMarkupIsSniffed() {
         #expect(AdSession.markup(fromFetched: " <?xml version=\"1.0\"?><VAST/>", format: .banner) == .vast(.xml("<?xml version=\"1.0\"?><VAST/>")))
         #expect(AdSession.markup(fromFetched: "{\"native\":{}}", format: .banner) == .native("{\"native\":{}}"))
@@ -339,7 +400,10 @@ struct AdSessionTests {
         simulated.session.fireManually(.click(assetID: nil))
         let navigation = try #require(simulated.monitor.liveEntries.first { $0.category == .navigation })
         let click = try #require(simulated.monitor.liveEntries.first { $0.category == .click })
-        #expect(navigation.parentID == click.id)
+        // A tracker never parents a navigation (decisions.md, "Network relationships"): inline adm, so no parent; the
+        // click and its navigation are siblings of one action.
+        #expect(navigation.parentID == nil && click.parentID == nil)
+        #expect(navigation.trigger == click.trigger)
         #expect(navigation.delivery == .simulated)
         #expect(simulated.browser.opened.isEmpty)
 

@@ -17,6 +17,7 @@ final class KitRecorder: Sendable {
     private struct State {
         var events: [AdLifecycleEvent] = []
         var contexts: [MacroContext] = []
+        var options: [TrackingPlanOptions] = []
         var resolutions: [VASTSource] = []
         var resolutionRequestCalls = 0
         var parses = 0
@@ -25,14 +26,16 @@ final class KitRecorder: Sendable {
     private let state = OSAllocatedUnfairLock(uncheckedState: State())
     var events: [AdLifecycleEvent] { state.withLockUnchecked { $0.events } }
     var contexts: [MacroContext] { state.withLockUnchecked { $0.contexts } }
+    var options: [TrackingPlanOptions] { state.withLockUnchecked { $0.options } }
     var resolutions: [VASTSource] { state.withLockUnchecked { $0.resolutions } }
     var resolutionRequestCalls: Int { state.withLockUnchecked { $0.resolutionRequestCalls } }
     var parses: Int { state.withLockUnchecked { $0.parses } }
 
-    func record(_ event: AdLifecycleEvent, _ context: MacroContext) {
+    func record(_ event: AdLifecycleEvent, _ context: MacroContext, _ options: TrackingPlanOptions) {
         state.withLockUnchecked {
             $0.events.append(event)
             $0.contexts.append(context)
+            $0.options.append(options)
         }
     }
 
@@ -106,7 +109,7 @@ enum Fixtures {
                 return resolved
             },
             trackingRequests: { event, candidate, _, _, context, options in
-                recorder.record(event, context)
+                recorder.record(event, context, options)
                 return requests(for: event, candidate: candidate, options: options)
             },
             resolutionRequests: { _, _, source in
@@ -119,7 +122,7 @@ enum Fixtures {
         )
     }
 
-    static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, options: TrackingPlan.Options) -> [TrackerRequest] {
+    static func requests(for event: AdLifecycleEvent, candidate: AdCandidate, options: TrackingPlanOptions) -> [TrackerRequest] {
         func request(_ category: TrackerCategory, _ url: String) -> TrackerRequest {
             TrackerRequest(category: category, trigger: event.label, source: "bid \(candidate.id)", template: url, url: url)
         }

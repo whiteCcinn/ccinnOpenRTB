@@ -112,7 +112,6 @@ final class AdSession: AdRenderingHost {
     @ObservationIgnored private var renderTask: Task<Void, Never>?
     @ObservationIgnored private var viewabilityTimer: Task<Void, Never>?
     @ObservationIgnored private var transactionID = UUID().uuidString
-    @ObservationIgnored private var lastClickEntryID: UUID?
     /// The Native video VAST resolution of the current generation, shared by every caller asking for the same source.
     @ObservationIgnored private var nativeVideoResolution: (source: VASTSource, task: Task<ResolvedVAST, Never>)?
     @ObservationIgnored private var logSequence = 0
@@ -426,7 +425,6 @@ final class AdSession: AdRenderingHost {
         scriptTrackers = []
         nativeVideoVAST = nil
         nativeVideoResolution = nil
-        lastClickEntryID = nil
         rendererHost = RendererHostProxy(generation: generation, monitor: monitor, device: device)
         rendererHost.session = self
         gate = LifecycleGate()
@@ -633,7 +631,8 @@ final class AdSession: AdRenderingHost {
             case .admitted:
                 if index == 0 { firstFired = true }
                 let context = macroContext(for: prepared.candidate, input: input ?? renderInput, adIndex: Self.adIndex(of: event))
-                let options = TrackingPlan.Options(exchangeSendsWinNotice: macros.exchangeSendsWinNotice && !prepared.markupFromWinNotice)
+                let options = TrackingPlanOptions(exchangeSendsWinNotice: macros.exchangeSendsWinNotice && !prepared.markupFromWinNotice,
+                                                  markupRequestID: prepared.markupEntryID)
                 let requests = services.trackingRequests(event, prepared.candidate, prepared.native, vast(for: event), context, options)
                 log(event.label, origin: origin, outcome: .fired(requests: dispatch(requests)))
             }
@@ -657,21 +656,16 @@ final class AdSession: AdRenderingHost {
         }
     }
 
-    /// Dispatches trackers with the device's User-Agent; navigations are recorded (and opened only when allowed).
+    /// Dispatches trackers with the device's User-Agent; navigations are recorded (and opened only when allowed). Each
+    /// keeps the parent the plan gave it: the request that delivered the document its URL is in, never a tracker.
     @discardableResult
     private func dispatch(_ requests: [TrackerRequest]) -> Int {
-        var clickEntry: UUID?
         for request in requests {
             if request.category == .navigation {
-                recordNavigation(url: request.url, trigger: request.trigger, source: request.source,
-                                 parentID: request.parentID ?? clickEntry ?? lastClickEntryID)
+                recordNavigation(url: request.url, trigger: request.trigger, source: request.source, parentID: request.parentID)
                 continue
             }
             let entryID = monitor.dispatch(request, userAgent: device.userAgent)
-            if request.category == .click {
-                clickEntry = entryID
-                lastClickEntryID = entryID
-            }
             if request.isScript, monitor.mode == .real {
                 scriptTrackers.append(ScriptTracker(entryID: entryID, request: request))
             }
@@ -737,9 +731,11 @@ final class AdSession: AdRenderingHost {
 
     // MARK: Renderer services
 
+    /// A destination only the creative knows (`mraid.open`, `window.open`, an anchor): its URL is in the markup, so its
+    /// parent is the request that delivered the markup (`nil` for inline adm), never the click tracker.
     func navigate(to url: String, trigger: String, source: String) {
         guard phase == .ready else { return }
-        recordNavigation(url: url, trigger: trigger, source: source, parentID: lastClickEntryID)
+        recordNavigation(url: url, trigger: trigger, source: source, parentID: prepared?.markupEntryID)
     }
 
     func fetchContent(_ url: String, trigger: String, source: String) async throws -> Data {
