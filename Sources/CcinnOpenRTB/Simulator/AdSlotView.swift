@@ -14,14 +14,19 @@ struct AdSlotView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let area = labelArea ?? AdSizing.placeholderLabelRect(slot: proxy.frame(in: .named(SimulatorTextLayout.screenSpace)),
-                                                                  layout: session.layout)
+            let area = textArea(in: proxy)
             slot(textArea: area)
                 .environment(\.simulatorTextArea, area)
                 .environment(\.simulatorTextScale, SimulatorTextLayout.scale(device: session.device, slot: size))
                 .coordinateSpace(name: SimulatorTextLayout.adSpace)
         }
         .frame(width: size.width, height: size.height)
+    }
+
+    private func textArea(in proxy: GeometryProxy) -> CGRect {
+        if let labelArea { return labelArea }
+        let slotFrame: CGRect = proxy.frame(in: .named(SimulatorTextLayout.screenSpace))
+        return AdSizing.placeholderLabelRect(slot: slotFrame, layout: session.layout)
     }
 
     @ViewBuilder private func slot(textArea: CGRect) -> some View {

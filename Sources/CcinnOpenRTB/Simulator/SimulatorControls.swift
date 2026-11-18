@@ -6,6 +6,12 @@ import SwiftUI
 struct SimulatorControls: View {
     @Bindable var session: AdSession
 
+    /// Render needs a bid (or a response that may be a no-bid).
+    private var canRender: Bool {
+        let hasBid: Bool = session.selectedCandidate != nil
+        return hasBid || session.parsed.kind.isBidResponse
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -20,7 +26,7 @@ struct SimulatorControls: View {
                     Label("Render", systemImage: "play.fill")
                 }
                 .help("Render the selected bid from scratch (⌘R)")
-                .disabled(session.selectedCandidate == nil && !session.parsed.kind.isBidResponse)
+                .disabled(!canRender)
                 Button {
                     session.reset()
                 } label: {

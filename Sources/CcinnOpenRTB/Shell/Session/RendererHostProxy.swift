@@ -22,8 +22,9 @@ final class RendererHostProxy: AdRenderingHost {
 
     /// The session, while this proxy's render is still the current one.
     private var current: AdSession? {
-        guard let session, session.generation == generation else { return nil }
-        return session
+        guard let session else { return nil }
+        let isCurrent: Bool = session.generation == generation
+        return isCurrent ? session : nil
     }
 
     func report(_ event: AdLifecycleEvent) {

@@ -9,11 +9,7 @@ struct CcinnOpenRTBApp: App {
 
     var body: some Scene {
         WindowGroup("CcinnOpenRTB", id: "main") {
-            MainView()
-                .frame(minWidth: 1100, minHeight: 720)
-                .appAppearance()
-                .presentsSoftwareUpdates()
-                .networkLaunchSupport()
+            MainWindowContent()
         }
         .defaultSize(width: 1500, height: 940)
         .windowToolbarStyle(.unified(showsTitle: false))
@@ -25,6 +21,22 @@ struct CcinnOpenRTBApp: App {
         NetworkWindowScene()
         SettingsScene()
         SoftwareUpdateScene()
+    }
+}
+
+/// The main window's content (its own view: one large scene expression is slow to type-check with Swift 6.2).
+private struct MainWindowContent: View {
+    private static let minimumWidth: CGFloat = 1100
+    private static let minimumHeight: CGFloat = 720
+
+    var body: some View {
+        // Every argument given: `frame(minWidth:…)` with defaults is slow to resolve.
+        MainView()
+            .frame(minWidth: Self.minimumWidth, idealWidth: nil, maxWidth: nil, minHeight: Self.minimumHeight, idealHeight: nil, maxHeight: nil,
+                   alignment: .center)
+            .appAppearance()
+            .presentsSoftwareUpdates()
+            .networkLaunchSupport()
     }
 }
 

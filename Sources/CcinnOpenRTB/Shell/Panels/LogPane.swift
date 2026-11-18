@@ -12,6 +12,13 @@ struct LogPane: View {
     let session: AdSession
     @State private var source: Source = .lifecycle
 
+    private func clear() {
+        switch source {
+        case .lifecycle: session.clearLifecycleLog()
+        case .console: session.clearConsole()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -22,13 +29,8 @@ struct LogPane: View {
                 .labelsHidden()
                 .fixedSize()
                 Spacer()
-                Button("Clear") {
-                    switch source {
-                    case .lifecycle: session.clearLifecycleLog()
-                    case .console: session.clearConsole()
-                    }
-                }
-                .controlSize(.small)
+                Button("Clear", action: clear)
+                    .controlSize(.small)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

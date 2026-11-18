@@ -128,7 +128,8 @@ struct FeedScrollCapture: NSViewRepresentable {
     func makeNSView(context: Context) -> ScrollCaptureView { ScrollCaptureView() }
 
     func updateNSView(_ view: ScrollCaptureView, context: Context) {
-        view.onScroll = { [weak session] delta in session?.scrollFeed(by: delta) }
+        let scroll: (CGFloat) -> Void = { [weak session] (delta: CGFloat) -> Void in session?.scrollFeed(by: delta) }
+        view.onScroll = scroll
     }
 }
 

@@ -81,7 +81,7 @@ struct LaunchOptions: Equatable {
     /// asks for confirmation like the toolbar switch does.
     @MainActor
     func apply(to session: AdSession, samples: [Sample]) async {
-        if let device = deviceID.flatMap(DeviceCatalog.device(id:)) { session.device = device }
+        if let deviceID, let device = DeviceCatalog.device(id: deviceID) { session.device = device }
         session.landscape = landscape
         session.folded = folded
         session.spanned = spanned
