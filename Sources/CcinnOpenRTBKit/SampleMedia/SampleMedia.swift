@@ -6,8 +6,9 @@ import Foundation
 ///   generate in parallel, off the actor.
 /// - Files are written in a private temporary directory and moved into place, so a half-written file is never served,
 ///   also across processes. The temporary directory is removed afterwards with whatever the encoder put next to its
-///   output (AVAssetWriter keeps a side file there until it is torn down). A generator version is part of the directory,
-///   so a changed generator never serves stale files.
+///   output (AVAssetWriter keeps a side file there until it is torn down). A process that crashes mid-generation can't
+///   remove its directory, so every instance sweeps away workspaces over an hour old when it is created. A generator
+///   version is part of the directory, so a changed generator never serves stale files.
 public actor SampleMedia: SampleMediaProviding {
     public static let generatorVersion = 1
     public static let shared = SampleMedia(directory: SampleMedia.defaultDirectory)
@@ -15,8 +16,35 @@ public actor SampleMedia: SampleMediaProviding {
     public nonisolated let directory: URL
     private var inFlight: [String: Task<URL, any Error>] = [:]
 
+    /// Each generation works in its own `.tmp-<UUID>` directory; earlier builds wrote `.tmp-<UUID>-<file>` files.
+    static let workspacePrefix = ".tmp-"
+    /// A workspace this old belongs to a generation that will never finish: one takes seconds, and the writer gives up
+    /// within about two minutes. So it can be removed even while other processes are generating.
+    static let staleWorkspaceAge: TimeInterval = 3_600
+
+    /// Removes the workspaces that crashed processes left behind (`removeStaleWorkspaces`). It starts when the instance
+    /// is created, off the caller's thread, because `shared` is first used on the main actor.
+    nonisolated let startupSweep: Task<Void, Never>
+
     public init(directory: URL) {
         self.directory = directory
+        startupSweep = Task.detached(priority: .utility) { Self.removeStaleWorkspaces(in: directory) }
+    }
+
+    /// Removes the entries in `directory` that are named like a workspace and were last modified more than `age` ago.
+    /// Anything else stays, and so does an entry whose date can't be read. Several processes may sweep at once: an
+    /// entry another one removed first is simply skipped.
+    nonisolated static func removeStaleWorkspaces(in directory: URL, olderThan age: TimeInterval = staleWorkspaceAge) {
+        let manager = FileManager.default
+        guard let entries = try? manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+            return  // nothing generated here yet
+        }
+        let cutoff = Date().addingTimeInterval(-age)
+        for entry in entries where entry.lastPathComponent.hasPrefix(workspacePrefix) {
+            guard let modified = try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  modified < cutoff else { continue }
+            try? manager.removeItem(at: entry)
+        }
     }
 
     public nonisolated static var defaultDirectory: URL {
@@ -72,7 +100,7 @@ public actor SampleMedia: SampleMediaProviding {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
         if isUsable(target) { return target }
-        let workspace = directory.appendingPathComponent(".tmp-\(UUID().uuidString)", isDirectory: true)
+        let workspace = directory.appendingPathComponent("\(workspacePrefix)\(UUID().uuidString)", isDirectory: true)
         try manager.createDirectory(at: workspace, withIntermediateDirectories: false)
         defer { try? manager.removeItem(at: workspace) }
         let temporary = workspace.appendingPathComponent(asset.fileName)
