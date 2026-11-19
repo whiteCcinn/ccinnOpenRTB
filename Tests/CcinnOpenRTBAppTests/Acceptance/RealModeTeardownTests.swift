@@ -38,14 +38,20 @@ struct RealModeTeardownTests {
         return (harness, server, window)
     }
 
+    /// The page stopped: no beacon was *made* after the change. Each beacon carries the page's `Date.now()`, so a beacon
+    /// made before teardown that lands late (on a loaded 3-core CI runner one arrived after more than 1 s) is told apart
+    /// from a page still running, which would make about 20 in the window. Teardown happens in the change's turn on the
+    /// UI side; the web content process may lag it, so beacons made within 1 s of the change are allowed.
     private func expectSilence(_ server: EchoServer, after change: String) async throws {
-        // Teardown happens in the same turn as the change. A beacon the page sent just before it can still be in flight
-        // (on a 3-core CI runner one landed 200 ms+ later), so let in-flight requests land for 1 s, then require silence
-        // for 2 s: a page still running would send about 20 beacons in that window.
-        try await Task.sleep(for: .milliseconds(1000))
-        let settled = server.requests.count
-        try await Task.sleep(for: .milliseconds(2000))
-        #expect(server.requests.count == settled, "\(change): \(server.requests.count - settled) more hits after the change")
+        let changedAt = Date().timeIntervalSince1970 * 1000
+        try await Task.sleep(for: .milliseconds(3000))
+        let made = server.requests.compactMap { request -> Double? in
+            guard let mark = request.target.firstIndex(of: "?") else { return nil }
+            return Double(request.target[request.target.index(after: mark)...])
+        }
+        let afterTeardown = made.filter { $0 > changedAt + 1000 }
+        #expect(afterTeardown.isEmpty, "\(change): \(afterTeardown.count) beacons made more than 1 s after the change (\(made.count) in all)")
+        #expect(!made.isEmpty, "\(change): the beacons carry the page's clock")
     }
 
     @Test func switchingToSimulatedStopsEveryRealModeWebView() async throws {
