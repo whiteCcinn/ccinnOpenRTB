@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-19
+
 ### Added
 
 - **Sync tab — cookie mapping:** run a user-sync chain from a start URL on a publisher page as the device's browser would: the image request, every redirect followed, and the window's in-memory cookie jar read and filled on every hop. The browser follows the device or is chosen — Safari or an iOS app web view (WebKit: third-party cookies blocked), Chrome on Android (`SameSite=None; Secure`, Lax by default, CHIPS), an Android app WebView (third-party cookies off by default), Firefox (partitioned), a TV app — and sets both the cookie policy and the User-Agent. IAB consent URL macros are filled. Every hop shows the cookies sent, withheld (why), stored (attributes) and rejected (why); verdicts name the ids passed along, "no id" answers (`uid=0` …), placeholders a partner left unsubstituted (`$UID`, `{{.UID}}` …; templates passed along are not flagged), cookies the browser blocked, and what happened before a run failed. The jar follows the browsers' storage model (host-only vs Domain identity, no http overlay of Secure cookies, 400-day cap, 180 per domain). Run Again reuses the jar; the jar is never the Mac's cookies and never written to disk. Network window: a **User sync** category.
@@ -68,7 +70,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/whiteCcinn/ccinnopenrtb/releases/tag/v1.0.0
