@@ -1,4 +1,52 @@
 import Foundation
+import Observation
+import RTBKit
+
+/// What a composed request is for: its Network category and its default trigger and source.
+public enum ComposedPurpose: String, Sendable, Hashable, Codable {
+    /// A bid request from the Client tab.
+    case bidRequest
+    /// A cookie-sync run from the Sync tab.
+    case userSync
+
+    public var category: TrackerCategory {
+        switch self {
+        case .bidRequest: .bidRequest
+        case .userSync: .userSync
+        }
+    }
+
+    var defaultTrigger: String { self == .bidRequest ? "bid request" : "user sync" }
+    var defaultSource: String { self == .bidRequest ? "client" : "sync" }
+}
+
+/// The cookie jar of a Sync run, as a browser on `context`'s page would use it: read before every hop, filled from every
+/// response. In memory only; never the Mac's cookies. Shared by the runs of one Sync tab, so a second run sees what the
+/// first one stored.
+@MainActor
+@Observable
+public final class CookieSession: Hashable {
+    public private(set) var jar: CookieJar
+    public var context: CookieContext
+
+    public init(jar: CookieJar = CookieJar(), context: CookieContext) {
+        self.jar = jar
+        self.context = context
+    }
+
+    public func clear() { jar.removeAll() }
+
+    func selection(for url: URL, now: Date) -> CookieSelection {
+        jar.cookies(for: url, context: context, now: now)
+    }
+
+    func receive(_ lines: [String], from url: URL, now: Date) -> [CookieDecision] {
+        jar.receive(lines, from: url, context: context, now: now)
+    }
+
+    public nonisolated static func == (lhs: CookieSession, rhs: CookieSession) -> Bool { lhs === rhs }
+    public nonisolated func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
+}
 
 /// Which redirects a load follows by itself (`RedirectRule` decides how each hop is sent).
 public enum RedirectPolicy: String, Sendable, Hashable, Codable, CaseIterable, Identifiable {
@@ -25,18 +73,23 @@ public struct ComposedRequest: Sendable, Hashable {
     public var body: Data?
     /// Which redirects are followed; by default only those within the origin, so nothing typed goes elsewhere unasked.
     public var redirects: RedirectPolicy
+    public var purpose: ComposedPurpose
+    /// A Sync run's jar: its cookies replace any `Cookie` header, and every hop's `Set-Cookie`s go into it.
+    public var cookies: CookieSession?
     public var trigger: String
     public var source: String
 
     public init(url: String, method: String = "POST", headers: [String: String] = [:], body: Data? = nil, redirects: RedirectPolicy = .sameOrigin,
-                trigger: String = "bid request", source: String = "client") {
+                purpose: ComposedPurpose = .bidRequest, cookies: CookieSession? = nil, trigger: String? = nil, source: String? = nil) {
         self.url = url
         self.method = method
         self.headers = headers
         self.body = body
         self.redirects = redirects
-        self.trigger = trigger
-        self.source = source
+        self.purpose = purpose
+        self.cookies = cookies
+        self.trigger = trigger ?? purpose.defaultTrigger
+        self.source = source ?? purpose.defaultSource
     }
 
     /// The method on the wire.
@@ -98,9 +151,11 @@ public struct ComposedHop: Sendable, Hashable {
     public var wasSent: Bool
     /// Why it failed or was not sent.
     public var failure: String?
+    /// The cookies of a hop made with a cookie session.
+    public var cookies: NetworkCookies?
 
     public init(entryID: UUID, method: String, url: String, status: Int?, location: String?, bodyBytes: Int?, duration: TimeInterval?,
-                note: String?, wasSent: Bool, failure: String?) {
+                note: String?, wasSent: Bool, failure: String?, cookies: NetworkCookies? = nil) {
         self.entryID = entryID
         self.method = method
         self.url = url
@@ -111,6 +166,7 @@ public struct ComposedHop: Sendable, Hashable {
         self.note = note
         self.wasSent = wasSent
         self.failure = failure
+        self.cookies = cookies
     }
 }
 

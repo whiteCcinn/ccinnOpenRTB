@@ -663,3 +663,117 @@ struct OtherLoadRedirectTests {
         #expect(!CurlCommand.make(url: endpoint).contains("--location"))
     }
 }
+
+/// Cookie-sync runs (1.3): a composed request with a cookie session sends the jar's cookies on every hop and stores the
+/// `Set-Cookie`s it receives, as the session's browser would; each hop records what was sent, withheld, stored and
+/// rejected.
+@MainActor
+@Suite("Network monitor: cookie sessions")
+struct CookieSessionMonitorTests {
+    private let syncStart = "https://ssp.example/usersync?bidder=dsp"
+    private let dspPixel = "https://sync.dsp.example/pixel?redir=https%3A%2F%2Fssp.example%2Fsetuid%3Fbidder%3Ddsp%26uid%3D%24UID"
+    private let setuid = "https://ssp.example/setuid?bidder=dsp&uid=abc123"
+
+    private func session(_ policy: CookiePolicy, publisher: String = "https://news.example") -> CookieSession {
+        CookieSession(context: CookieContext(topLevelSite: CookieSite(url: URL(string: publisher)!)!, policy: policy))
+    }
+
+    private func syncTransport() -> FakeTransport {
+        let transport = FakeTransport()
+        transport.respond(syncStart, status: 302, headers: ["Location": dspPixel, "Set-Cookie": "ssp_sid=s1; Secure; SameSite=None; Path=/"])
+        transport.respond(dspPixel, status: 302, headers: ["Location": setuid,
+                                                           "Set-Cookie": "uid=abc123; Domain=dsp.example; Max-Age=3600; Secure; SameSite=None, lax=1; Secure"])
+        transport.respond(setuid, status: 200, headers: ["Content-Type": "image/gif", "Set-Cookie": "uids=eyJkc3AiOiJhYmMxMjMifQ; Secure; SameSite=None; Path=/"])
+        return transport
+    }
+
+    private func run(_ monitor: NetworkMonitor, _ cookies: CookieSession) async throws -> ComposedResponse {
+        try await monitor.send(ComposedRequest(url: syncStart, method: "GET", redirects: .all, purpose: .userSync, cookies: cookies), userAgent: deviceUA)
+    }
+
+    @Test func aSyncChainStoresAndSendsCookiesHopByHop() async throws {
+        let transport = syncTransport()
+        let monitor = makeMonitor(transport: transport)
+        let cookies = session(.allowThirdParty)
+
+        let first = try await run(monitor, cookies)
+
+        #expect(first.status == 200)
+        #expect(first.chain.count == 3)
+        #expect(Set(cookies.jar.cookies.map(\.name)) == ["ssp_sid", "uid", "uids"])
+        let pixelHop = first.chain[1]
+        #expect(pixelHop.cookies?.decisions.contains { if case .stored(let cookie) = $0 { cookie.name == "uid" } else { false } } == true)
+        #expect(pixelHop.cookies?.decisions.contains(.rejected(name: "lax", reason: .sameSiteCrossSite(.lax))) == true)
+        #expect(monitor.entry(id: first.entryID)?.category == .userSync)
+        // Within the run: the SSP's cookie from hop 1 comes back on hop 3 (setuid, the same SSP); the DSP had none yet.
+        #expect(transport.requests.map { headerValues("Cookie", in: $0.headers).first ?? "" } == ["", "", "ssp_sid=s1"])
+
+        // Run again: the cookies the chain set are sent back where they belong.
+        let second = try await run(monitor, cookies)
+        let sent = transport.requests.suffix(3).map { headerValues("Cookie", in: $0.headers).first ?? "" }
+        #expect(sent == ["ssp_sid=s1; uids=eyJkc3AiOiJhYmMxMjMifQ", "uid=abc123", "ssp_sid=s1; uids=eyJkc3AiOiJhYmMxMjMifQ"])
+        #expect(second.chain[1].cookies?.sent.map(\.name) == ["uid"])
+    }
+
+    /// The iPhone's browser (WebKit) blocks third-party cookies: the same chain stores nothing and sends nothing.
+    @Test func webKitBlocksTheThirdPartyChain() async throws {
+        let transport = syncTransport()
+        let monitor = makeMonitor(transport: transport)
+        let cookies = session(.blockThirdParty)
+
+        let response = try await run(monitor, cookies)
+        _ = try await run(monitor, cookies)
+
+        #expect(cookies.jar.cookies.isEmpty)
+        #expect(response.chain.allSatisfy { hop in
+            hop.cookies?.decisions.allSatisfy { if case .rejected(_, .thirdPartyBlocked) = $0 { true } else { false } } ?? true
+        })
+        #expect(transport.requests.allSatisfy { headerValues("Cookie", in: $0.headers).isEmpty })
+    }
+
+    /// A user-typed Cookie header never mixes with the jar's: the jar decides.
+    @Test func theJarReplacesAHandWrittenCookieHeader() async throws {
+        let transport = syncTransport()
+        let monitor = makeMonitor(transport: transport)
+        var request = ComposedRequest(url: syncStart, method: "GET", headers: ["cookie": "forged=1"], redirects: .all, purpose: .userSync,
+                                      cookies: session(.allowThirdParty))
+        request.trigger = "user sync"
+        _ = try await monitor.send(request, userAgent: deviceUA)
+        #expect(headerValues("Cookie", in: transport.requests[0].headers).isEmpty)
+        #expect(!transport.requests.contains { headerValues("Cookie", in: $0.headers).contains { $0.contains("forged") } })
+    }
+
+    @Test func aUserSyncIsNoTrackerAndOfflineSendsNothing() async throws {
+        #expect(!TrackerCategory.userSync.isTracker)
+        #expect(DispatchPolicy.permit(for: .userSync, isScript: false, mode: .simulated) != nil)
+        #expect(DispatchPolicy.permit(for: .userSync, isScript: false, mode: .real, offline: true) == nil)
+        let monitor = makeMonitor(transport: FailingTransport())
+        monitor.offline = true
+        await #expect(throws: NetworkMonitorError.self) { try await run(monitor, session(.allowThirdParty)) }
+        #expect(monitor.liveEntries.map(\.category) == [.userSync])
+    }
+}
+
+@Suite("Cookies on the wire", .serialized)
+struct CookieWireTests {
+    /// The real transport sends a hand-set Cookie header (cookie handling is off) and reports every Set-Cookie line,
+    /// joined, which `SetCookieLines.split` takes apart.
+    @MainActor
+    @Test func cookiesTravelBothWays() async throws {
+        let server = try LoopbackHTTPServer { _ in
+            LoopbackHTTPServer.Response(status: 200, headers: ["Set-Cookie": "a=1; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT\r\nSet-Cookie: b=2; Path=/"])
+        }
+        let port = try await server.start()
+        defer { server.stop() }
+        let monitor = NetworkMonitor(transport: URLSessionTransport(), publishInterval: .zero)
+        let cookies = CookieSession(context: CookieContext(topLevelSite: CookieSite(url: URL(string: "http://127.0.0.1:\(port)")!)!, policy: .allowThirdParty))
+        let url = "http://127.0.0.1:\(port)/sync"
+
+        _ = try await monitor.send(ComposedRequest(url: url, method: "GET", purpose: .userSync, cookies: cookies), userAgent: deviceUA)
+        _ = try await monitor.send(ComposedRequest(url: url, method: "GET", purpose: .userSync, cookies: cookies), userAgent: deviceUA)
+
+        #expect(Set(cookies.jar.cookies.map(\.name)) == ["a", "b"])
+        #expect(server.requests.first?.header("Cookie") == nil)
+        #expect(server.requests.last?.header("Cookie") == "a=1; b=2")
+    }
+}
