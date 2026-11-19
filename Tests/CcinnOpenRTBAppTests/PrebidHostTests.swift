@@ -324,17 +324,18 @@ struct PrebidHostTests {
     }
 
     /// A page being replaced says nothing more: while the next run loads, the old page still ticks (events and requests)
-    /// until WebKit swaps it out, and none of it reaches the app.
+    /// until WebKit swaps it out — its `pagehide` handler at the latest — and none of it reaches the app.
     @Test func aReplacedPageIsSilent() async throws {
         let core = #"""
         (function () {
           pbjs.version = 'v-tick'; pbjs.setConfig = function () {}; pbjs.addAdUnits = function () {}; pbjs.onEvent = function () {};
-          pbjs.requestBids = function () {
-            setInterval(function () {
-              window.webkit.messageHandlers.prebidEvents.postMessage({ type: 'tick', run: window.__ccinnRun, payload: JSON.stringify(window.__ccinnRun) });
-              fetch('https://bidder.test/xhr').catch(function () {});
-            }, 20);
-          };
+          function tick() {
+            window.webkit.messageHandlers.prebidEvents.postMessage({ type: 'tick', run: window.__ccinnRun, payload: JSON.stringify(window.__ccinnRun) });
+            fetch('https://bidder.test/xhr').catch(function () {});
+          }
+          pbjs.requestBids = function () { setInterval(tick, 20); };
+          // Runs as the page is swapped out: after the next run began, with this run's mark.
+          window.addEventListener('pagehide', tick);
           pbjs.processQueue = function () { var q = pbjs.que; pbjs.que = { push: function (f) { f(); } }; q.forEach(function (f) { f(); }); };
         })();
         """#
