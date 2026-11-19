@@ -90,6 +90,9 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
     /// The size of the request body, when the request has one (a composed POST); the body itself is kept by the monitor
     /// (`NetworkMonitor.requestBody(for:)`) up to its preview limit.
     public var requestBodyBytes: Int?
+    /// A request made with a cookie session (a Sync run): the cookies sent and withheld, and what became of each
+    /// `Set-Cookie` it received.
+    public var cookies: NetworkCookies?
 
     public init(id: UUID = UUID(), parentID: UUID? = nil, sequence: Int, startedAt: Date = Date(), finishedAt: Date? = nil,
                 category: TrackerCategory, trigger: String, source: String, template: String, url: String, method: String = "GET",
@@ -144,6 +147,20 @@ public struct NetworkEntry: Sendable, Hashable, Identifiable {
     /// Case-insensitive response header lookup.
     public func responseHeader(_ name: String) -> String? {
         HTTPHeaders.value(name, in: responseHeaders)
+    }
+}
+
+/// The cookies of one hop made with a cookie session.
+public struct NetworkCookies: Sendable, Hashable {
+    public var sent: [StoredCookie]
+    public var withheld: [WithheldCookie]
+    /// One per `Set-Cookie` line received.
+    public var decisions: [CookieDecision]
+
+    public init(sent: [StoredCookie] = [], withheld: [WithheldCookie] = [], decisions: [CookieDecision] = []) {
+        self.sent = sent
+        self.withheld = withheld
+        self.decisions = decisions
     }
 }
 

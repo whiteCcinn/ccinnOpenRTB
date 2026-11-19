@@ -236,7 +236,7 @@ public final class NetworkMonitor {
         let method = request.wireMethod
         let body = request.wireBody
         let startedAt = clock.now()
-        var record = NetworkEntry(sequence: 0, startedAt: startedAt, category: .bidRequest, trigger: request.trigger, source: request.source,
+        var record = NetworkEntry(sequence: 0, startedAt: startedAt, category: request.purpose.category, trigger: request.trigger, source: request.source,
                                   template: request.url, url: request.url, method: method, state: .pending,
                                   requestHeaders: HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: request.headers),
                                   sessionMode: mode, requestBodyBytes: body?.count)
@@ -252,7 +252,7 @@ public final class NetworkMonitor {
         let scheme = URLText.scheme(request.url)
         guard scheme == "http" || scheme == "https" else { throw refused(.unsupportedScheme(scheme ?? "")) }
         guard let requestURL = URLText.requestURL(request.url), requestURL.host?.isEmpty == false else { throw refused(.invalidURL(request.url)) }
-        switch DispatchPolicy.action(for: .bidRequest, isScript: false, mode: mode, offline: offline) {
+        switch DispatchPolicy.action(for: request.purpose.category, isScript: false, mode: mode, offline: offline) {
         case let .record(state, delivery, note):
             record.state = state
             record.delivery = delivery
@@ -267,7 +267,8 @@ public final class NetworkMonitor {
             record.delivery = .network
             let stored = appendComposed(record, body: body)
             let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: composedBodyLimit,
-                                failOnTruncation: true, acceptsAnyStatus: true, redirects: request.redirects, annotatesRedirects: true)
+                                failOnTruncation: true, acceptsAnyStatus: true, redirects: request.redirects, annotatesRedirects: true,
+                                cookies: request.cookies)
             let task = startLoad(stored, permit: permit, spec: spec)
             let loaded = try await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }.get()
             return ComposedResponse(status: loaded.status, headers: loaded.headers, body: loaded.body, url: loaded.url ?? requestURL, entryID: stored.id,
@@ -283,7 +284,7 @@ public final class NetworkMonitor {
             let failure: String? = if case let .failed(message) = entry.state { message } else { nil }
             return ComposedHop(entryID: entry.id, method: entry.method, url: entry.url, status: entry.status,
                                location: entry.responseHeader("Location"), bodyBytes: entry.requestBodyBytes, duration: entry.duration,
-                               note: entry.note, wasSent: entry.delivery == .network && entry.status != nil, failure: failure)
+                               note: entry.note, wasSent: entry.delivery == .network && entry.status != nil, failure: failure, cookies: entry.cookies)
         }
     }
 
@@ -567,7 +568,14 @@ public final class NetworkMonitor {
             }
             visited.insert(Self.visitKey(method: hopRequest.method, url: requestURL.absoluteString))
 
-            let headers = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: hopRequest.headers)
+            var headers = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: hopRequest.headers)
+            if let cookies = spec.cookies {
+                // The jar decides, as the browser would: a hand-written Cookie header never mixes in.
+                let selection = cookies.selection(for: requestURL, now: clock.now())
+                headers = HTTPHeaders.removing(["Cookie"], from: headers)
+                if let header = selection.header { headers["Cookie"] = header }
+                update(currentID) { $0.cookies = NetworkCookies(sent: selection.sent, withheld: selection.withheld) }
+            }
             let request = HTTPRequest(url: requestURL, method: hopRequest.method, headers: headers, body: hopRequest.body,
                                       timeout: Self.clampedTimeout(requestTimeout), maxBodyBytes: maxBodyBytes)
             update(currentID) { $0.requestHeaders = headers }
@@ -587,6 +595,14 @@ public final class NetworkMonitor {
             activeLoads[root.id]?.isSending = false
 
             record(response, for: currentID, maxBodyBytes: maxBodyBytes)
+            if let cookies = spec.cookies, let joined = HTTPHeaders.value("Set-Cookie", in: response.headers) {
+                let decisions = cookies.receive(SetCookieLines.split(joined), from: requestURL, now: clock.now())
+                update(currentID) { entry in
+                    var record = entry.cookies ?? NetworkCookies()
+                    record.decisions = decisions
+                    entry.cookies = record
+                }
+            }
 
             if Self.isRedirect(response.status), let location = response.location {
                 let next = URL(string: location, relativeTo: requestURL)?.absoluteURL ?? URLText.requestURL(location)
@@ -932,6 +948,8 @@ struct LoadSpec: Sendable {
     var redirects: RedirectPolicy = .all
     /// Hop notes say what changed on the way (method, body, credentials, a downgrade): composed requests only.
     var annotatesRedirects = false
+    /// A Sync run's jar: read before every hop, filled from every response.
+    var cookies: CookieSession?
 }
 
 /// What a load produced: the response of its final hop.

@@ -33,6 +33,7 @@ enum Theme {
         case .content: .adaptive(light: .hex(0x92400E), dark: .hex(0xFBBF24))
         case .creative: .adaptive(light: .hex(0x047857), dark: .hex(0x6EE7B7))
         case .bidRequest: .adaptive(light: .hex(0x334155), dark: .hex(0xCBD5E1))
+        case .userSync: .adaptive(light: .hex(0xA16207), dark: .hex(0xFDE047))
         }
         return Color(nsColor: color)
     }
@@ -52,6 +53,7 @@ enum Theme {
         case .content: "doc.richtext"
         case .creative: "paintbrush"
         case .bidRequest: "paperplane"
+        case .userSync: "link"
         }
     }
 
@@ -70,6 +72,7 @@ enum Theme {
         case .content: "Content"
         case .creative: "Creative"
         case .bidRequest: "Bid request"
+        case .userSync: "User sync"
         }
     }
 

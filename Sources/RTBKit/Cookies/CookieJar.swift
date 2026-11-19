@@ -207,8 +207,12 @@ public struct CookieJar: Sendable, Hashable {
                 sent.append(cookie)
             }
         }
-        // RFC 6265 §5.4: longer paths first, then earlier creation.
-        sent.sort { $0.path.count != $1.path.count ? $0.path.count > $1.path.count : $0.created < $1.created }
+        // RFC 6265 §5.4: longer paths first, then earlier creation, then the order they were stored in (deterministic).
+        sent = sent.enumerated().sorted { lhs, rhs in
+            if lhs.element.path.count != rhs.element.path.count { return lhs.element.path.count > rhs.element.path.count }
+            if lhs.element.created != rhs.element.created { return lhs.element.created < rhs.element.created }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         let header = sent.isEmpty ? nil : sent.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
         return CookieSelection(header: header, sent: sent, withheld: withheld)
     }
