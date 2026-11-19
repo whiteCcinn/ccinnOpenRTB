@@ -3,8 +3,8 @@ import Foundation
 // Tracking lifecycle and request contracts (design D7, D9).
 
 /// What a request is for. Trackers can be simulated; content is always fetched; creative requests are the HTML
-/// creative's own network; a bid request is one the user composed and sent from the Client tab, a user sync one the Sync
-/// tab ran (a cookie-sync chain).
+/// creative's own network; a bid request is one the user composed and sent from the Client tab, or one a Prebid.js
+/// adapter sent from the Prebid page; a user sync one the Sync tab ran (a cookie-sync chain).
 public enum TrackerCategory: String, Sendable, Hashable, Codable, CaseIterable {
     case win, billing, loss, impression, viewability, event, click, navigation, error, verification
     case content, creative

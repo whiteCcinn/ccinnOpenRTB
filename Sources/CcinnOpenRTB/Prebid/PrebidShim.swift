@@ -3,12 +3,15 @@ import Foundation
 /// The script injected into the Prebid page (and its frames) at document start, before any Prebid code: the page's
 /// network goes through the app.
 ///
+/// - Script `src` (set as a property or an attribute): the app answers with the file (Prebid.js's own, or a refusal),
+///   which runs from a same-origin `blob:` URL — the element keeps its `integrity`, so WebKit still checks Prebid's
+///   hashes, and `src` still reads the real URL (the loader reads its `?modules=` from `document.currentScript.src`).
 /// - `fetch` and `XMLHttpRequest` go to the `prebidNet` handler, which sends them with the window's network monitor and
 ///   answers with the response (a real `Response` for `fetch`). A `no-cors` fetch is a pixel (a tracker).
 /// - `navigator.sendBeacon` goes the same way, without waiting.
-/// - Image and iframe `src` (user syncs, pixels) are reported to the app and not loaded; the image says it loaded.
-/// - `document.cookie` lives in memory: a custom-scheme page keeps no cookies, and Prebid turns user syncs off when it
-///   cannot set one.
+/// - http(s) image and iframe `src` (user syncs, pixels) are reported to the app and not loaded; they say they loaded.
+/// - `document.cookie` lives in memory: every auction is a fresh visit, and Prebid turns user syncs off when it cannot
+///   set one.
 ///
 /// A content rule list blocks every other load of the page, so anything this does not cover fails closed.
 enum PrebidShim {
@@ -125,23 +128,61 @@ enum PrebidShim {
         navigator.sendBeacon = function (url, data) { send('beacon', url, 'POST', {}, data).catch(function () {}); return true; };
       }
 
+      var setAttribute = Element.prototype.setAttribute;
+      function isHTTP(url) { return /^https?:/i.test(url); }
+
       function interceptSource(prototype, kind) {
+        var native = Object.getOwnPropertyDescriptor(prototype, 'src');
         Object.defineProperty(prototype, 'src', {
           configurable: true,
-          get: function () { return this.__ccinnSource || ''; },
+          get: function () { return this.__ccinnSource !== undefined ? this.__ccinnSource : native.get.call(this); },
           set: function (value) {
-            var element = this;
-            element.__ccinnSource = String(value);
-            report('sync', { kind: kind, url: absolute(value) });
-            if (kind === 'image') { setTimeout(function () { element.dispatchEvent(new Event('load')); }, 0); }
+            var element = this, url = absolute(value);
+            if (!isHTTP(url)) { element.__ccinnSource = undefined; native.set.call(element, value); return; }
+            element.__ccinnSource = url;
+            report('sync', { kind: kind, url: url });
+            setTimeout(function () { element.dispatchEvent(new Event('load')); }, 0);
           }
         });
       }
       interceptSource(HTMLImageElement.prototype, 'image');
       interceptSource(HTMLIFrameElement.prototype, 'iframe');
-      var setAttribute = Element.prototype.setAttribute;
+
+      var nativeScriptSource = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+      function loadScript(element, value) {
+        var url = absolute(value);
+        element.__ccinnSource = url;
+        if (!isHTTP(url)) { nativeScriptSource.set.call(element, value); return; }
+        send('script', url, 'GET', {}, null).then(function (reply) {
+          if (reply.blocked) {
+            report('log', { level: 'warn', message: 'Script blocked (only Prebid.js runs on this page): ' + url });
+            element.dispatchEvent(new Event('error'));
+            return;
+          }
+          var blob = URL.createObjectURL(new Blob([fromBase64(reply.body)], { type: 'text/javascript' }));
+          var done = function () { URL.revokeObjectURL(blob); };
+          element.addEventListener('load', done, { once: true });
+          element.addEventListener('error', function () {
+            done();
+            report('scriptError', { url: url, reason: element.hasAttribute('integrity') ? 'its integrity check failed' : 'it did not run' });
+          }, { once: true });
+          setAttribute.call(element, 'src', blob);
+        }, function (error) {
+          report('scriptError', { url: url, reason: String(error && error.message || error) });
+          element.dispatchEvent(new Event('error'));
+        });
+      }
+      Object.defineProperty(HTMLScriptElement.prototype, 'src', {
+        configurable: true,
+        get: function () { return this.__ccinnSource !== undefined ? this.__ccinnSource : nativeScriptSource.get.call(this); },
+        set: function (value) { loadScript(this, value); }
+      });
+
       Element.prototype.setAttribute = function (name, value) {
-        if (String(name).toLowerCase() === 'src' && (this instanceof HTMLImageElement || this instanceof HTMLIFrameElement)) { this.src = value; return; }
+        if (String(name).toLowerCase() === 'src' && (this instanceof HTMLImageElement || this instanceof HTMLIFrameElement || this instanceof HTMLScriptElement)) {
+          this.src = value;
+          return;
+        }
         return setAttribute.call(this, name, value);
       };
 

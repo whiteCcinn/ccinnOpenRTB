@@ -12,6 +12,8 @@ struct MainView: View {
     @State private var client: ClientModel
     /// The window's Sync tab: cookie-sync runs with this window's in-memory cookie jar.
     @State private var sync: SyncModel
+    /// The window's Prebid tab: official Prebid.js on a publisher page, its requests through this session's monitor.
+    @State private var prebid: PrebidModel
     @Environment(\.openWindow) private var openWindow
     /// Offline is remembered per window (Real never is: every session starts Simulated unless it was Offline).
     @SceneStorage("ccinn.session.offline") private var remembersOffline = false
@@ -20,15 +22,28 @@ struct MainView: View {
         let session = AdSession()
         _session = State(initialValue: session)
         _client = State(initialValue: ClientModel(target: session))
-        _sync = State(initialValue: SyncModel(target: session))
+        let sync = SyncModel(target: session)
+        let prebid = PrebidModel(target: session)
+        prebid.syncModel = sync
+        _sync = State(initialValue: sync)
+        _prebid = State(initialValue: prebid)
     }
 
     var body: some View {
         HSplitView {
             SimulatorPane(session: session)
                 .frame(minWidth: 520, idealWidth: 880, maxWidth: .infinity, maxHeight: .infinity)
-            InputPanel(session: session, client: client, sync: sync)
+            InputPanel(session: session, client: client, sync: sync, prebid: prebid)
                 .frame(minWidth: 420, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // The Prebid page stays in the window whichever tab shows (a page out of the window has its timers throttled), at
+        // the device's viewport size (what its layout measures), invisible.
+        .background {
+            PrebidWebView(host: prebid.host)
+                .frame(width: CGFloat(prebid.device.viewportWidth), height: CGFloat(prebid.device.viewportHeight))
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .toolbar { MainToolbar(session: session) }
         // isPresented, not item: the confirmation's host list completes after the markup is inspected, and an item that

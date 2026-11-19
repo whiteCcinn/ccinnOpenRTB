@@ -7,8 +7,8 @@ import RTBKit
 /// in the cache, so a version once loaded also runs Offline. The page's script `integrity` (Prebid's own SHA-256 manifest)
 /// checks every chunk; the loader's embedded hash checks the manifest.
 ///
-/// Only `dist/…` and `metadata/…` files of a version written as digits and dots are served: the page cannot make the app
-/// fetch anything else.
+/// Only `dist/…` and `metadata/…` files of a version written as digits and dots are served, and the page gets scripts
+/// only from the `dist/` of the version it runs: it cannot make the app fetch anything else.
 @MainActor
 final class PrebidLibrary {
     static let jsDelivrBase = "https://cdn.jsdelivr.net/npm/prebid.js@"
@@ -37,12 +37,31 @@ final class PrebidLibrary {
 
     enum Failure: Error, Equatable, LocalizedError {
         case invalidPath(String)
+        /// A script that is not a file of the page's Prebid.js.
+        case notPrebid(String)
 
         var errorDescription: String? {
             switch self {
             case let .invalidPath(path): "Not a Prebid.js file: \(path.prefix(200))"
+            case let .notPrebid(url): "Not a script of this Prebid.js: \(url.prefix(200))"
             }
         }
+    }
+
+    /// Where `version`'s `dist/` lives upstream: the page loads its scripts from there, by these URLs.
+    func distBase(version: String) -> String {
+        upstreamBase + version + "/dist/"
+    }
+
+    /// The script at `url`, which must be a `dist/` file of `version` (its query, such as the loader's `?modules=` or the
+    /// manifest's `?callback=`, is the page's business).
+    func script(at url: String, version: String) async throws -> Data {
+        guard Self.isValid(version: version), var components = URLComponents(string: url) else { throw Failure.notPrebid(url) }
+        components.query = nil
+        components.fragment = nil
+        let base = distBase(version: version)
+        guard let bare = components.string, bare.hasPrefix(base), bare.count > base.count else { throw Failure.notPrebid(url) }
+        return try await file(version: version, path: "dist/" + bare.dropFirst(base.count))
     }
 
     static func isValid(version: String) -> Bool {

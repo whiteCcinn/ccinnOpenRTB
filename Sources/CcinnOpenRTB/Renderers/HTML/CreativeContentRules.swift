@@ -42,14 +42,17 @@ enum CreativeContentRules {
     private static var compiled: [String: WKContentRuleList] = [:]
     private static var inFlight: [String: Task<WKContentRuleList, any Error>] = [:]
 
-    static let prebidPageIdentifier = "ccinn.prebid.page.v1"
+    static let prebidPageIdentifier = "ccinn.prebid.page.v2"
 
-    /// The Prebid page: every load is blocked but the page's own scheme (the page, Prebid.js, its chunks). Its network
-    /// APIs are shimmed to go through the monitor; anything the shim does not cover fails closed here.
+    /// The Prebid page: every load is blocked but local ones (`blob:` — Prebid.js's scripts, handed over by the shim —
+    /// `data:` and `about:`). The page itself is a simulated response, never fetched; its network APIs are shimmed to go
+    /// through the monitor, and anything the shim does not cover (a stylesheet, an image in markup) fails closed here.
     static let prebidPageSource = """
     [
       {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
-      {"trigger": {"url-filter": "^ccinn-prebid:"}, "action": {"type": "ignore-previous-rules"}}
+      {"trigger": {"url-filter": "^blob:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^data:"}, "action": {"type": "ignore-previous-rules"}},
+      {"trigger": {"url-filter": "^about:"}, "action": {"type": "ignore-previous-rules"}}
     ]
     """
 

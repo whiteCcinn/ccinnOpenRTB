@@ -4,7 +4,7 @@ import RTBKit
 
 /// What a composed request is for: its Network category and its default trigger and source.
 public enum ComposedPurpose: String, Sendable, Hashable, Codable {
-    /// A bid request from the Client tab.
+    /// A bid request from the Client tab, or from a Prebid.js adapter on the Prebid page.
     case bidRequest
     /// A cookie-sync run from the Sync tab.
     case userSync

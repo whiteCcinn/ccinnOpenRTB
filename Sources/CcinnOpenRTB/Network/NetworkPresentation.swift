@@ -25,7 +25,7 @@ enum NetworkPresentation {
 
     private static func help(for category: TrackerCategory) -> String {
         if category.isTracker { return "Tracker: sent only in Real mode" }
-        if category == .bidRequest { return "Bid request: sent from the Client tab in Simulated and Real mode, recorded and not sent when Offline" }
+        if category == .bidRequest { return "Bid request: sent from the Client tab or the Prebid page in Simulated and Real mode, recorded and not sent when Offline" }
         if category == .userSync {
             return "User sync: a cookie-sync run from the Sync tab, with the in-app cookie jar; sent in Simulated and Real mode, recorded and not sent when Offline"
         }

@@ -1,12 +1,14 @@
 import RTBKit
 import SwiftUI
 
-/// The right half of the main window: the Client (send a bid request), the response and request editors, the Inspector,
-/// the Macros and the event log, with the bid picker and the status line.
+/// The right half of the main window: the Client (send a bid request), Sync (cookie mapping), Prebid (a Prebid.js
+/// auction), the response and request editors, the Inspector, the Macros and the event log, with the bid picker and the
+/// status line.
 struct InputPanel: View {
     enum Tab: String, CaseIterable, Identifiable {
         case client = "Client"
         case sync = "Sync"
+        case prebid = "Prebid"
         case response = "Response"
         case request = "Request"
         case inspector = "Inspector"
@@ -19,19 +21,17 @@ struct InputPanel: View {
     @Bindable var session: AdSession
     let client: ClientModel
     let sync: SyncModel
+    let prebid: PrebidModel
     @SceneStorage("inputPanel.tab") private var tab: Tab = .response
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Picker("Panel", selection: $tab) {
-                    ForEach(Tab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
+                // Segments while they fit; a menu in a narrow panel.
+                ViewThatFits(in: .horizontal) {
+                    tabPicker.pickerStyle(.segmented).fixedSize()
+                    tabPicker.pickerStyle(.menu).fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
@@ -44,6 +44,7 @@ struct InputPanel: View {
                 switch tab {
                 case .client: ClientPane(client: client, session: session)
                 case .sync: SyncPane(sync: sync)
+                case .prebid: PrebidPane(prebid: prebid, openSyncTab: { tab = .sync })
                 case .response: ResponsePane(session: session)
                 case .request: RequestPane(session: session)
                 case .inspector: InspectorPane(session: session)
@@ -55,6 +56,15 @@ struct InputPanel: View {
             Divider()
             StatusLine(session: session)
         }
+    }
+
+    private var tabPicker: some View {
+        Picker("Panel", selection: $tab) {
+            ForEach(Tab.allCases) { tab in
+                Text(tab.rawValue).tag(tab)
+            }
+        }
+        .labelsHidden()
     }
 }
 

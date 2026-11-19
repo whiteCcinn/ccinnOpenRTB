@@ -53,6 +53,7 @@ final class PrebidModel {
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var watchdog: Task<Void, Never>?
+    @ObservationIgnored private var catalogTask: Task<Void, Never>?
 
     /// Prebid's public AppNexus test placement: an ad unit that bids, to start from.
     static let starterAdUnit = PrebidAdUnit(code: "div-banner-1", mediaType: .banner, sizes: [AdSize(width: 300, height: 250), AdSize(width: 320, height: 50)],
@@ -92,27 +93,50 @@ final class PrebidModel {
         }
     }
 
-    /// The bidders of `setup.version`.
+    /// Another version: a running auction stops (its events belong to the old page) and the version's bidders load.
+    func choose(version: String) {
+        guard version != setup.version else { return }
+        stop()
+        setup.version = version
+        catalogTask?.cancel()
+        phase = .preparing
+        catalogTask = Task { [weak self] in await self?.loadCatalog() }
+    }
+
+    /// The bidders of `setup.version`. An answer for a version no longer chosen is dropped.
     func loadCatalog() async {
-        guard !setup.version.isEmpty else { return }
+        let version = setup.version
+        guard !version.isEmpty else { return }
         phase = .preparing
         do {
-            let bidders = try await library.catalog(version: setup.version)
+            let bidders = try await library.catalog(version: version)
+            guard version == setup.version else { return }
             catalog = Dictionary(bidders.map { ($0.code, $0) }, uniquingKeysWith: { first, _ in first })
             phase = .idle
         } catch {
+            guard version == setup.version else { return }
             catalog = [:]
-            phase = .failed("The bidders of Prebid.js \(setup.version) could not be read: " + ClientModel.message(for: error))
+            phase = .failed("The bidders of Prebid.js \(version) could not be read: " + ClientModel.message(for: error))
         }
     }
 
     // MARK: Auction
 
+    /// The simulated device as the page sees it (its screen, viewport, platform).
+    var device: PrebidDevice {
+        PrebidDevice(device: target.device, userAgent: userAgent)
+    }
+
+    /// The User-Agent of the device's browser: the page's and its requests'.
+    private var userAgent: String {
+        SyncBrowser.default(for: target.device).userAgent(for: target.device)
+    }
+
     /// Loads the page with the setup and runs `requestBids`. Problems in the setup stop it before anything loads.
     func runAuction() {
         let html: String
         do {
-            html = try PrebidPage.html(for: setup, catalog: catalog)
+            html = try PrebidPage.html(for: setup, catalog: catalog, distBase: library.distBase(version: setup.version), device: device)
         } catch {
             phase = .failed(error.problems.map(\.message).joined(separator: " "))
             return
@@ -128,7 +152,18 @@ final class PrebidModel {
         startedAt = now()
         phase = .running
         note("page", "Prebid.js \(setup.version) on \(setup.pageURL)")
-        Task { await host.load(html, at: url) }
+        let version = setup.version
+        let userAgent = userAgent
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.host.load(html, at: url, version: version, userAgent: userAgent)
+            } catch {
+                guard token == self.generation, self.phase == .running else { return }
+                self.watchdog?.cancel()
+                self.phase = .failed(ClientModel.message(for: error))
+            }
+        }
         // The auction ends with bidsBack; a page that never gets there (a loader that failed) ends here.
         let limit = Duration.milliseconds(setup.timeoutMilliseconds) + .seconds(20)
         watchdog?.cancel()
@@ -152,8 +187,11 @@ final class PrebidModel {
         _ = await target.loadExchange(request: "", response: response, device: nil, rendering: .always)
     }
 
+    /// The sync goes to the Sync tab, on this page: the page's site decides which of its cookies are third party.
     func useInSyncTab(_ sync: Sync) {
-        syncModel?.startURL = sync.url
+        guard let syncModel else { return }
+        syncModel.startURL = sync.url
+        syncModel.publisherURL = setup.pageURL
     }
 
     // MARK: Events
@@ -196,6 +234,12 @@ final class PrebidModel {
             }
         case "log":
             if let message = Self.string(value, "message") { warnings.append(String(message.prefix(500))) }
+        case "scriptError":
+            // A Prebid.js file that did not load or failed its integrity check: the loader gives up, so does the auction.
+            let url = Self.string(value, "url") ?? "?"
+            note(type, url)
+            watchdog?.cancel()
+            phase = .failed("Prebid.js did not load: \(URLText.hostAndPath(url).prefix(120)) — \(Self.string(value, "reason") ?? "it failed").")
         default:
             note(type, String(payload.prefix(120)))
         }

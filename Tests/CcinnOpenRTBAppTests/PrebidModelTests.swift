@@ -124,8 +124,47 @@ struct PrebidModelTests {
         defer { harness.cache.cleanUp() }
         let sync = SyncModel(target: SyncRecordingTarget(monitor: harness.monitor))
         harness.model.syncModel = sync
+        harness.model.setup.pageURL = "https://sports.example/live"
         harness.model.useInSyncTab(PrebidModel.Sync(kind: "image", url: "https://sync.dsp.example/pixel?x=1"))
         #expect(sync.startURL == "https://sync.dsp.example/pixel?x=1")
+        #expect(sync.publisherURL == "https://sports.example/live", "the sync fired on the Prebid page: its site decides what is third party")
+    }
+
+    /// Choosing a version loads its bidders; a slower answer for a version no longer chosen never replaces them.
+    @Test func theChosenVersionsBiddersWin() async throws {
+        let harness = Harness()
+        defer { harness.cache.cleanUp() }
+        await harness.model.prepare()
+        harness.transport.answer("https://cdn.test/npm/prebid.js@1.1.0/metadata/modules.json",
+                                 .init(body: #"{"newBidAdapter":{"components":[{"componentType":"bidder","componentName":"newcomer"}]}}"#, delay: .milliseconds(400)))
+
+        harness.model.choose(version: "1.1.0")
+        #expect(harness.model.phase == .preparing)
+        harness.model.choose(version: "1.0.0")
+        let settled = await Wait.until(timeout: .seconds(5)) { harness.model.phase == .idle }
+        #expect(settled)
+        try await Task.sleep(for: .milliseconds(600))
+
+        #expect(harness.model.setup.version == "1.0.0")
+        #expect(harness.model.catalog.keys.sorted() == ["appnexus", "fake"])
+        #expect(harness.model.phase == .idle)
+    }
+
+    /// A new version mid-auction stops the auction: its events belong to the old page.
+    @Test func choosingAVersionStopsARunningAuction() async throws {
+        let harness = Harness()
+        defer { harness.cache.cleanUp() }
+        await harness.model.prepare()
+        harness.transport.answer("https://bidder.test/bid", .init(body: #"{"cpm":1,"ad":"<div/>"}"#, delay: .seconds(30)))
+        harness.model.setup.adUnits[0].bids = [PrebidBidderParams(bidder: "fake", params: "{}")]
+        harness.model.runAuction()
+        #expect(harness.model.phase == .running)
+
+        harness.model.choose(version: "1.1.0")
+
+        #expect(harness.model.phase == .preparing)
+        harness.model.handle(type: "bidsBack", payload: #"[{"bidderCode":"fake","adId":"a","cpm":1,"ad":"<div/>"}]"#)
+        #expect(harness.model.bids.isEmpty, "the stopped page's events are ignored")
     }
 }
 

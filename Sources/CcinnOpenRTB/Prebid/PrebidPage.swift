@@ -1,70 +1,89 @@
 import Foundation
 import RTBKit
 
-/// The publisher page that runs Prebid.js: served by the `ccinn-prebid` scheme under the page's own host, it loads the
-/// official per-version loader (`dist/bundle.js?modules=…`) with every chunk from the same scheme (so Prebid's own SRI
-/// checks hold), sets the config (`pageUrl` is the real https page), adds the ad units, reports Prebid's events to the
-/// app and runs the auction. Everything typed reaches the page as JSON, never as script. Pure.
+/// The publisher page that runs Prebid.js, loaded as the response to the page's own URL (`https://news.example/article`)
+/// so Prebid sees the page bidders should see — `location`, referrer detection, a secure context. It loads the official
+/// per-version loader (`dist/bundle.js?modules=…`) from where it lives (jsDelivr), the shim handing every Prebid script
+/// to the page from the app's library with its `integrity` intact. It emulates the device's screen, sets the config
+/// (production: no debug), adds the ad units, reports Prebid's events and runs the auction. Everything typed reaches the
+/// page as JSON, never as script. Pure.
 enum PrebidPage {
-    static let scheme = "ccinn-prebid"
     /// The message handler the page reports to.
     static let eventsHandler = "prebidEvents"
 
-    /// The page's host: the publisher's (`news.example`).
-    static func host(of setup: PrebidSetup) -> String {
-        URL(string: setup.pageURL)?.host ?? "publisher.example"
-    }
-
-    /// `ccinn-prebid://news.example/prebid/11.51.0/dist/`.
-    static func distBase(of setup: PrebidSetup) -> String {
-        "\(scheme)://\(host(of: setup))/prebid/\(setup.version)/dist/"
-    }
-
+    /// The page's URL: the setup's https page.
     static func pageURL(of setup: PrebidSetup) -> URL? {
-        URL(string: "\(scheme)://\(host(of: setup))/index.html")
+        guard let url = URL(string: setup.pageURL), url.scheme == "https", url.host?.isEmpty == false else { return nil }
+        return url
     }
 
-    static func html(for setup: PrebidSetup, catalog: [String: PrebidBidder]) throws(PrebidSetup.Invalid) -> String {
+    /// The official loader of the version at `distBase` (`…/prebid.js@11.51.0/dist/`), with the modules and its chunks'
+    /// base.
+    static func loaderURL(distBase: String, modules: [String]) -> String {
+        "\(distBase)bundle.js?modules=\(modules.joined(separator: ","))&distUrlBase=\(distBase)chunks/"
+    }
+
+    static func html(for setup: PrebidSetup, catalog: [String: PrebidBidder], distBase: String,
+                     device: PrebidDevice) throws(PrebidSetup.Invalid) -> String {
         let modules = try setup.modules(catalog: catalog)
-        let base = distBase(of: setup)
-        let loader = "\(base)bundle.js?modules=\(modules.joined(separator: ","))&distUrlBase=\(base)chunks/"
+        let loader = json(.string(loaderURL(distBase: distBase, modules: modules)))
         let config = json(.object(configObject(setup, catalog: catalog)))
         let units = json(.array(setup.adUnits.map(adUnitObject)))
         let divs = setup.adUnits.map { "<div id=\"\(attribute($0.code))\" class=\"slot\"></div>" }.joined(separator: "\n")
         return """
         <!doctype html>
-        <html><head><meta charset="utf-8"><title>Prebid.js \(attribute(setup.version))</title>
+        <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Prebid.js \(attribute(setup.version))</title>
         <style>body{font:12px -apple-system,sans-serif;margin:8px}.slot{border:1px dashed #999;min-height:20px;margin:4px 0}</style>
-        <script>window.pbjs = window.pbjs || {}; window.pbjs.que = window.pbjs.que || [];</script>
-        <script src="\(attribute(loader))"></script>
-        </head><body>
-        \(divs)
         <script>
         (function () {
-          var post = function (type, payload) {
-            try { window.webkit.messageHandlers.\(eventsHandler).postMessage({ type: type, payload: JSON.stringify(payload, safe()) }); } catch (e) {}
-          };
+          \(emulation(device))
           function safe() {
             var seen = new WeakSet();
             return function (key, value) {
               if (typeof value === 'function') return undefined;
+              if (value instanceof Error) return String(value);
               if (value && typeof value === 'object') { if (seen.has(value)) return undefined; seen.add(value); }
               return value;
             };
           }
+          function post(type, payload) {
+            try { window.webkit.messageHandlers.\(eventsHandler).postMessage({ type: type, payload: JSON.stringify(payload, safe()) }); } catch (e) {}
+          }
+          // console.warn('%cPrebid', 'css…', 'WARNING: …') reads "Prebid WARNING: …".
+          function text(args) {
+            args = Array.prototype.slice.call(args || []);
+            if (typeof args[0] === 'string' && args[0].indexOf('%c') >= 0) {
+              var styles = args[0].split('%c').length - 1;
+              args = [args[0].split('%c').join(' ')].concat(args.slice(1 + styles));
+            }
+            return args.map(function (value) {
+              if (typeof value === 'string') return value;
+              if (value instanceof Error) return String(value);
+              try { return JSON.stringify(value, safe()); } catch (e) { return String(value); }
+            }).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 2000);
+          }
           ['warn', 'error'].forEach(function (level) {
             var original = console[level];
             console[level] = function () {
-              try { post('log', { level: level, message: Array.prototype.map.call(arguments, String).join(' ').slice(0, 2000) }); } catch (e) {}
+              post('log', { level: level, message: text(arguments) });
               return original.apply(console, arguments);
             };
           });
-          window.addEventListener('error', function (event) { post('log', { level: 'error', message: String(event.message) }); });
+          window.addEventListener('error', function (event) { if (event.message) post('log', { level: 'error', message: String(event.message) }); });
+          window.addEventListener('unhandledrejection', function (event) { post('log', { level: 'error', message: 'Unhandled rejection: ' + text([event.reason]) }); });
+          window.pbjs = window.pbjs || {};
+          pbjs.que = pbjs.que || [];
           pbjs.que.push(function () {
-            pbjs.setConfig(\(config));
-            pbjs.addAdUnits(\(units));
+            // Prebid emits its warnings and errors as auctionDebug whether or not debug is on.
+            pbjs.onEvent('auctionDebug', function (data) {
+              var level = String(data && data.type || 'WARNING').toLowerCase();
+              post('log', { level: level, message: (data && data.bidder ? data.bidder + ': ' : '') + text(data && data.arguments) });
+            });
             ['auctionInit', 'bidRequested', 'bidResponse', 'noBid', 'bidTimeout', 'bidderDone', 'bidderError', 'auctionEnd', 'adRenderFailed']
               .forEach(function (name) { pbjs.onEvent(name, function (data) { post(name, data); }); });
+            pbjs.setConfig(\(config));
+            pbjs.addAdUnits(\(units));
             post('ready', { version: pbjs.version });
             pbjs.requestBids({
               timeout: \(setup.timeoutMilliseconds),
@@ -75,15 +94,43 @@ enum PrebidPage {
               }
             });
           });
+          var loader = document.createElement('script');
+          loader.src = \(loader);
+          document.head.appendChild(loader);
         })();
         </script>
+        </head><body>
+        \(divs)
         </body></html>
+        """
+    }
+
+    /// The device as the page's scripts read it: the screen, the viewport, the pixel ratio, the platform, touch and the
+    /// languages (the monitor's `Accept-Language`).
+    private static func emulation(_ device: PrebidDevice) -> String {
+        let values = json(.object([
+            "screenWidth": .int(Int64(device.screenWidth)), "screenHeight": .int(Int64(device.screenHeight)),
+            "viewportWidth": .int(Int64(device.viewportWidth)), "viewportHeight": .int(Int64(device.viewportHeight)),
+            "pixelRatio": .double(device.pixelRatio), "platform": .string(device.platform),
+            "maxTouchPoints": .int(Int64(device.maxTouchPoints)), "languages": .array(device.languages.map { .string($0) }),
+        ]))
+        return """
+        (function (d) {
+            function define(target, name, value) { try { Object.defineProperty(target, name, { configurable: true, get: function () { return value; } }); } catch (e) {} }
+            var screenType = Object.getPrototypeOf(screen), navigatorType = Object.getPrototypeOf(navigator);
+            define(screenType, 'width', d.screenWidth); define(screenType, 'height', d.screenHeight);
+            define(screenType, 'availWidth', d.screenWidth); define(screenType, 'availHeight', d.screenHeight);
+            define(window, 'devicePixelRatio', d.pixelRatio);
+            define(window, 'innerWidth', d.viewportWidth); define(window, 'innerHeight', d.viewportHeight);
+            define(window, 'outerWidth', d.screenWidth); define(window, 'outerHeight', d.screenHeight);
+            define(navigatorType, 'platform', d.platform); define(navigatorType, 'maxTouchPoints', d.maxTouchPoints);
+            define(navigatorType, 'language', d.languages[0]); define(navigatorType, 'languages', Object.freeze(d.languages.slice()));
+          })(\(values));
         """
     }
 
     private static func configObject(_ setup: PrebidSetup, catalog: [String: PrebidBidder]) -> [String: JSONValue] {
         var config: [String: JSONValue] = [
-            "debug": .bool(true),
             "pageUrl": .string(setup.pageURL),
             "bidderTimeout": .int(Int64(setup.timeoutMilliseconds)),
             "enableSendAllBids": .bool(true),
