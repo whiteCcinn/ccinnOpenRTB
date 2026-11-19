@@ -49,6 +49,21 @@ public struct StoredCookie: Sendable, Hashable, Codable, Identifiable {
     public var partitionSite: CookieSite?
     public var created: Date
 
+    public init(name: String, value: String, domain: String, hostOnly: Bool, path: String, expires: Date?, secure: Bool, httpOnly: Bool,
+                sameSite: SameSite, partitionSite: CookieSite?, created: Date) {
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.hostOnly = hostOnly
+        self.path = path
+        self.expires = expires
+        self.secure = secure
+        self.httpOnly = httpOnly
+        self.sameSite = sameSite
+        self.partitionSite = partitionSite
+        self.created = created
+    }
+
     public var id: String { [partitionSite?.description ?? "", domain, path, name].joined(separator: "|") }
 
     func isExpired(at now: Date) -> Bool { expires.map { $0 <= now } ?? false }

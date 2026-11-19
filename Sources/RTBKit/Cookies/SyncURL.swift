@@ -102,6 +102,42 @@ public enum SyncURL {
         return placeholderPattern.matches(in: text, range: range).compactMap { Range($0.range, in: text).map { String(text[$0]) } }
     }
 
+    /// The placeholders of `url` itself: its path and the query values that are not URLs. A URL passed as a parameter
+    /// (`redir=https://ssp.example/setuid?uid=$UID`) is the next party's template, where a placeholder belongs.
+    public static func ownPlaceholders(in url: String) -> [String] {
+        let parts = split(url)
+        var found = leftoverPlaceholders(in: parts.path)
+        for item in parts.query {
+            found += leftoverPlaceholders(in: item.name)
+            let lowered = item.value.lowercased()
+            if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") || lowered.hasPrefix("//") { continue }
+            found += leftoverPlaceholders(in: item.value)
+        }
+        return found
+    }
+
+    /// The path and the percent-decoded query pairs of `url`, read leniently: sync URLs carry characters `URLComponents`
+    /// refuses (`${GDPR}`, `{uid}`).
+    static func split(_ url: String) -> (path: String, query: [Parameter]) {
+        let withoutFragment = url.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? url
+        let halves = withoutFragment.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        var path = String(halves.first ?? "")
+        if let scheme = path.range(of: "://") {
+            let afterScheme = path[scheme.upperBound...]
+            path = afterScheme.firstIndex(of: "/").map { String(afterScheme[$0...]) } ?? "/"
+        }
+        guard halves.count == 2 else { return (path, []) }
+        let query = halves[1].split(separator: "&").map { pair -> Parameter in
+            let sides = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let decode: (Substring) -> String = { part in
+                let plus = part.replacingOccurrences(of: "+", with: " ")
+                return plus.removingPercentEncoding ?? plus
+            }
+            return Parameter(name: decode(sides[0]), value: sides.count > 1 ? decode(sides[1]) : "")
+        }
+        return (path, query)
+    }
+
     private static let placeholderPattern: NSRegularExpression = {
         // Ordered so the longer forms win: ${X} before $X, {{x}} before {x}.
         let pattern = #"\$\{[A-Za-z0-9_]+\}|\{\{[A-Za-z0-9_]+\}\}|\$[A-Z][A-Z0-9_]*|\[[A-Z][A-Z0-9_]*\]|\{[A-Za-z0-9_]+\}"#
@@ -110,15 +146,17 @@ public enum SyncURL {
 
     /// The user ids and partners in `url`'s query.
     public static func mappingParameters(in url: String) -> Mapping {
-        let items = URLComponents(string: url)?.queryItems ?? []
         var ids: [Parameter] = []
         var partners: [Parameter] = []
-        for item in items {
-            guard let value = item.value, !value.isEmpty else { continue }
+        for item in split(url).query {
+            let value = item.value
+            guard !value.isEmpty else { continue }
             let key = item.name.lowercased()
             if partnerKeys.contains(key) {
                 partners.append(Parameter(name: item.name, value: value))
             } else if idKeys.contains(key) || key.hasSuffix("_uid") || key.hasSuffix("userid") {
+                // An unsubstituted placeholder is no id: the partner did not fill it in.
+                guard leftoverPlaceholders(in: value).isEmpty else { continue }
                 ids.append(Parameter(name: item.name, value: value))
             }
         }
