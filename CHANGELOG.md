@@ -5,11 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-11-19
-
 ### Added
 
 - **Sync tab — cookie mapping:** run a user-sync chain from a start URL on a publisher page as the device's browser would: the image request, every redirect followed, and the window's in-memory cookie jar read and filled on every hop. The browser follows the device or is chosen — Safari or an iOS app web view (WebKit: third-party cookies blocked), Chrome on Android (`SameSite=None; Secure`, Lax by default, CHIPS), an Android app WebView (third-party cookies off by default), Firefox (partitioned), a TV app — and sets both the cookie policy and the User-Agent. IAB consent URL macros are filled. Every hop shows the cookies sent, withheld (why), stored (attributes) and rejected (why); verdicts name the ids passed along, "no id" answers (`uid=0` …), placeholders a partner left unsubstituted (`$UID`, `{{.UID}}` …; templates passed along are not flagged), cookies the browser blocked, and what happened before a run failed. The jar follows the browsers' storage model (host-only vs Domain identity, no http overlay of Secure cookies, 400-day cap, 180 per domain). Run Again reuses the jar; the jar is never the Mac's cookies and never written to disk. Network window: a **User sync** category.
+
+## [1.2.0] - 2026-11-19
+
+### Added
 
 - **Redirect following in the Client:** each request has a **Redirects** setting — **Follow all** (like `curl -L`: across origins, at most 10 hops, loops detected; `Authorization`, `Proxy-Authorization` and `Cookie` stay behind on a hop to another origin, and a downgrade to http is flagged), **Within the origin** (the default, as in 1.1.0) or **Don't follow**. Settings ▸ Network ▸ Client sets it for new requests; requests saved by 1.1.0 keep their behaviour.
 - **The redirect chain:** a **Redirects** tab lists every request of the chain — method, URL, status, `Location`, time, body, what changed on the way and why the chain ended. A loop, too many hops or a target that is not http(s) is now an answer to inspect instead of an error. A redirect left unfollowed by the setting offers **Follow to ‹host› and Send**: the same request, following every redirect for that send only, opening on the chain. Copy as curl adds `--location` when the request follows all redirects.
