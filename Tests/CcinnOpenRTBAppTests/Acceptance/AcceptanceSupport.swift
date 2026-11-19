@@ -59,7 +59,8 @@ enum SampleCopies {
 
 /// A loopback HTTP/1.1 server: it counts connections, records each request once (method, target, headers) and answers
 /// `200` with a 1×1 GIF (an empty script for `.js` paths), or `302 Found` to `/landed/…` for targets under `/redirect/`. `Connection: close` on every
-/// response, so one connection is one request.
+/// response, so one connection is one request. Targets under `/hold/` are never answered (until `stop()`): a page with
+/// such a load never finishes loading.
 final class EchoServer: @unchecked Sendable {
     struct Received: Sendable, Equatable {
         var method: String
@@ -80,6 +81,7 @@ final class EchoServer: @unchecked Sendable {
     private let lock = NSLock()
     private var connections = 0
     private var received: [Received] = []
+    private var held: [NWConnection] = []
 
     init() throws {
         let parameters = NWParameters.tcp
@@ -101,7 +103,10 @@ final class EchoServer: @unchecked Sendable {
         return nil
     }
 
-    func stop() { listener.cancel() }
+    func stop() {
+        listener.cancel()
+        for connection in lock.withLock({ held }) { connection.cancel() }
+    }
 
     private func serve(_ connection: NWConnection) {
         lock.withLock { connections += 1 }
@@ -141,6 +146,10 @@ final class EchoServer: @unchecked Sendable {
         }
         let target = String(requestLine[1])
         lock.withLock { received.append(Received(method: String(requestLine[0]), target: target, headers: headers)) }
+        if target.hasPrefix("/hold/") {
+            lock.withLock { held.append(connection) }
+            return
+        }
         var response: Data
         if target.hasPrefix("/redirect/") {
             let location = "/landed/" + String(target.dropFirst("/redirect/".count))

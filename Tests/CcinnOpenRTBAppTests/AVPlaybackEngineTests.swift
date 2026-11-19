@@ -55,8 +55,15 @@ struct AVPlaybackEngineTests {
         engine.play()
         #expect(await Wait.until(timeout: .seconds(10)) { (recorder.lastTick ?? 0) >= 0.5 }, "\(recorder.events.suffix(5))")
         engine.pause()
-        try await Task.sleep(for: .milliseconds(300))
-        let paused = recorder.lastTick ?? 0
+        // Ticks made before the pause may still be on their way (a loaded CI runner delivers them late): read the paused
+        // position once they have settled. A playhead that kept moving never settles, and fails below anyway.
+        var paused = recorder.lastTick ?? 0
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(300))
+            let latest = recorder.lastTick ?? 0
+            if latest == paused { break }
+            paused = latest
+        }
         try await Task.sleep(for: .milliseconds(500))
         #expect((recorder.lastTick ?? 0) - paused < 0.05, "the playhead stands still while paused")
         engine.stop()

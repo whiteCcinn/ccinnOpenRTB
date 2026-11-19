@@ -11,8 +11,10 @@ import Testing
 @MainActor
 @Suite("Real mode ends at once", .serialized)
 struct RealModeTeardownTests {
+    /// A jstracker that beats every 100 ms and never finishes loading (an image the server holds): otherwise its web view
+    /// ends by itself 2 s after the load (the linger), and the test could not tell a teardown from that.
     private static func response(port: UInt16) -> String {
-        let beacon = #"<script>setInterval(function () { new Image().src = 'http://127.0.0.1:\#(port)/beat?' + Date.now(); }, 100);</script>"#
+        let beacon = #"<img src="http://127.0.0.1:\#(port)/hold/pixel"><script>setInterval(function () { new Image().src = 'http://127.0.0.1:\#(port)/beat?' + Date.now(); }, 100);</script>"#
         let native = """
         {"native":{"ver":"1.2","assets":[{"id":1,"title":{"text":"Beat"}}],"link":{"url":"https://adv.example/"},
           "jstracker":\(JSONValue.string(beacon).serialized())}}
@@ -40,17 +42,18 @@ struct RealModeTeardownTests {
 
     /// The page stopped: no beacon was *made* after the change. Each beacon carries the page's `Date.now()`, so a beacon
     /// made before teardown that lands late (on a loaded 3-core CI runner one arrived after more than 1 s) is told apart
-    /// from a page still running, which would make about 20 in the window. Teardown happens in the change's turn on the
-    /// UI side; the web content process may lag it, so beacons made within 1 s of the change are allowed.
+    /// from a page still running, which would make about 20 in the last 2 s of the window. Teardown happens in the
+    /// change's turn on the UI side; the web content process acts on it over IPC, which a starved runner has delayed by
+    /// just over 1 s, so beacons made within 2 s of the change are allowed.
     private func expectSilence(_ server: EchoServer, after change: String) async throws {
         let changedAt = Date().timeIntervalSince1970 * 1000
-        try await Task.sleep(for: .milliseconds(3000))
+        try await Task.sleep(for: .milliseconds(4000))
         let made = server.requests.compactMap { request -> Double? in
             guard let mark = request.target.firstIndex(of: "?") else { return nil }
             return Double(request.target[request.target.index(after: mark)...])
         }
-        let afterTeardown = made.filter { $0 > changedAt + 1000 }
-        #expect(afterTeardown.isEmpty, "\(change): \(afterTeardown.count) beacons made more than 1 s after the change (\(made.count) in all)")
+        let afterTeardown = made.filter { $0 > changedAt + 2000 }
+        #expect(afterTeardown.isEmpty, "\(change): \(afterTeardown.count) beacons made more than 2 s after the change (\(made.count) in all)")
         #expect(!made.isEmpty, "\(change): the beacons carry the page's clock")
     }
 
