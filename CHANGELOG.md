@@ -8,10 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 ### Added
 
 - **Prebid tab — official Prebid.js:** pick any Prebid.js release from npm (by default the newest at least two weeks old), add bidders from that release's adapter catalogue (aliases and GVL ids included) with their params as JSON, ad units (banner, outstream video, native) and static consent (TCF, US Privacy, GPP), and run the auction. The page loads the official per-version loader with exactly those adapters, from jsDelivr through the window's network gate into a cache (a release once loaded also runs Offline); every chunk keeps its `integrity`, so WebKit checks Prebid's own hashes. The page is at the publisher URL you enter — Prebid's referer detection and `location` read it — and emulates the device's screen, viewport, pixel ratio and platform; bidder requests carry the browser's `Origin`, `Referer` and `Sec-Fetch-*` and the device's User-Agent, and no cookies. Results: the bids (**Render** shows one on the device as that bidder's OpenRTB 2.6 bid), a timeline of Prebid's events, the user syncs the adapters asked for (**Use in Sync Tab**), and Prebid's warnings and errors. Every bidder request is a **Bid request** entry in the Network window; any other script is refused, and a content rule list blocks every other load.
+- **The browser's rules on the Prebid page:** requests are built by WebKit's own `Request` (forbidden headers dropped, the body's `Content-Type` as Safari sets it); a cross-origin request gets its CORS preflight when one is due (recorded), and a response the bidder's CORS headers do not allow is withheld from Prebid as Safari would, with the reason in the Log; http from the https page is mixed content (loopback aside); only exposed response headers are readable. Chrome on Android sends its client hints and has `navigator.userAgentData`.
 
 ### Changed
 
 - The window's panel tabs become a menu when the panel is too narrow for them all.
+
+### Security
+
+- The network gate refuses any composed request whose method or header could split on the wire — a method or header name that is not an HTTP token, a value with CR, LF or NUL — and `CONNECT`, `TRACE` and `TRACK`, whichever tab composed it (the Client tab already refused them in its own form).
 
 ## [1.3.0] - 2026-11-19
 

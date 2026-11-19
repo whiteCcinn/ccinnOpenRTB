@@ -149,13 +149,14 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **广告单元**：代码（div id）、banner、video（outstream）或 native，以及尺寸。标签页预置了 Prebid 公开的 AppNexus 测试广告位（`placementId` 13144370）。
 - **同意（静态）**：TCF（是否适用 GDPR、TC 字符串；目的 1–11 及各竞价方的供应商均已同意）、US Privacy 与 GPP，以 `cmpApi: 'static'` 设置，不查询任何 CMP。
 - **Run Auction**（⌘↩）加载页面并以你设置的超时调用 `pbjs.requestBids`；**Stop**（⌘.）卸载页面。
-- **竞价方看到的是设备上的页面**：页面位于你填写的页面 URL（默认 `https://news.example/article`）——`location`、Prebid 的 referer 检测、`pageUrl` 和安全上下文都如此显示，且不会为它发出任何请求。它的请求带有设备浏览器的 User-Agent、`Accept-Language`、`Origin`、`Referer`（按默认的 `strict-origin-when-cross-origin` 策略，为页面的源）以及 `Sec-Fetch-*`。页面脚本读到的是设备的屏幕（iPhone 18 Pro 为 402×874、@3x）、视口、像素比、`navigator.platform` 与触点数。Prebid 使用生产配置运行（关闭 debug），适配器的行为与线上站点一致。
+- **竞价方看到的是设备上的页面**：页面位于你填写的页面 URL（默认 `https://news.example/article`）——`location`、Prebid 的 referer 检测、`pageUrl` 和安全上下文都如此显示，且不会为它发出任何请求。它的请求由 WebKit 自己的 `Request` 构造（方法、请求头、请求体及其 `Content-Type` 与 Safari 发出的一致），带有设备浏览器的 User-Agent、`Accept-Language`、`Origin`、`Referer`（按默认的 `strict-origin-when-cross-origin` 策略，为页面的源）以及 `Sec-Fetch-*`；Android 上的 Chrome 还会带上其客户端提示（`Sec-CH-UA*`、`navigator.userAgentData`，Prebid 会将其读入 `device.sua`）。页面脚本读到的是设备的屏幕（iPhone 18 Pro 为 402×874、@3x）、视口、像素比、`navigator.platform`、`navigator.vendor` 与触点数。Prebid 使用生产配置运行（关闭 debug），适配器的行为与线上站点一致。
+- **浏览器的规则**：需要预检的跨源请求会先发出 CORS 预检（`OPTIONS`，可在 Network 窗口中看到）；若竞价方的响应不允许页面的源——没有 `Access-Control-Allow-Origin`、带凭据的请求（Prebid 的 `withCredentials`）却返回 `*`、缺少 `Access-Control-Allow-Credentials: true`——响应就会像在 Safari 中一样丢失，**Log** 会说明原因。https 页面发出的 http 请求属于混合内容，会被拒绝（本机的 `localhost` 除外，便于本地测试竞价方）。页面只能读到竞价方公开的响应头。
 - **结果**：**Bids** 列出每个出价：竞价方、CPM、尺寸、格式与广告单元。**Render** 把某个出价作为该竞价方的 OpenRTB 2.6 出价显示在设备上（`${AUCTION_PRICE}` 填入其 CPM，VAST 标签被包装，Native 取自其 ORTB 响应），并使用模拟器的广告位与监测。**Timeline** 按时间列出 Prebid 的事件：每个竞价方的请求、响应、无出价、超时与错误。**Syncs** 列出适配器请求的图片与 iframe 用户同步；**Use in Sync Tab** 把其中一个放到 [Sync](#sync-标签页) 标签页、同一个页面上，用其 Cookie 罐运行。**Log** 显示 Prebid 的警告与错误：无效参数、被拒绝的出价、同意问题。
 - 每个竞价方的请求在 Network 窗口中是一条 **Bid request** 记录（来源 `prebid › page`），带有请求头与请求体；在模拟模式与真实模式下都会发出（你按下了 Run），离线模式下只记录、不发出。Prebid 自身的文件是 **Content** 记录。
 
-**页面能访问什么**：一切都经过网络关口。`fetch`、XHR 与 `sendBeacon` 由应用发出。唯一能运行的脚本是所选版本的 Prebid 自身文件，从缓存以同源 `blob:` 脚本交给页面，WebKit 仍会校验其 `integrity`；其他任何脚本都会被拒绝并记入日志。用户同步的图片与 iframe 只列出、不加载。WebKit 内容规则列表拦截其他所有加载（样式表、标记中的图片、媒体、WebSocket……），页面也无法跳转离开。每次竞价都是一次全新访问（`document.cookie` 只存在于内存中），其请求不带任何 Cookie——iPhone 上的浏览器 Safari 本来也不发送第三方 Cookie；要查看映射后的 id，请在 Sync 标签页中运行同步。
+**页面能访问什么**：一切都经过网络关口。`fetch`、XHR 与 `sendBeacon` 由应用发出。唯一能加载的脚本是所选版本的 Prebid 自身文件，从缓存以同源 `blob:` 脚本交给页面，WebKit 仍会校验其 `integrity`；其他任何脚本 URL 都会被拒绝并记入日志。用户同步的图片与 iframe 只列出、不加载。WebRTC 与 WebTransport（它们有自己的套接字）在每个框架中都被移除，Worker 被拒绝；点击链接不会跳转。内容安全策略（CSP）与 WebKit 内容规则列表拦截其他所有加载（样式表、标记中的图片、媒体、WebSocket、表单……），页面也无法跳转离开。每次竞价都是一次全新访问（先清空网站数据；`document.cookie` 只存在于内存中），其请求不带任何 Cookie——iPhone 上的浏览器 Safari 本来也不发送第三方 Cookie；要查看映射后的 id，请在 Sync 标签页中运行同步。
 
-未模拟：在页面内渲染胜出者（`pbjs.renderAd`、Prebid Universal Creative）、广告服务器定向、用户 ID、RTD 与分析模块，以及 Prebid Server（`s2sConfig`）。
+未模拟：在页面内渲染胜出者（`pbjs.renderAd`、Prebid Universal Creative）、广告服务器定向、用户 ID、RTD 与分析模块、Prebid Server（`s2sConfig`）、预检缓存（每个需要预检的请求都会预检一次），以及跨源重定向后 `Origin` 与 `Referer` 的变化。
 
 ## Network 窗口
 
