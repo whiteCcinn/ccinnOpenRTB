@@ -104,7 +104,9 @@ struct NativeAdModelTests {
         let loading = Task { await model.loadImages() }
         defer { loading.cancel() }
         #expect(!(await Wait.until(timeout: .milliseconds(700)) { !host.events.isEmpty }), "not before the cap")
-        #expect(await Wait.until(timeout: .seconds(2)) { host.events == [.rendered] }, "\(host.events)")
+        // The cap is 1 s; the hung images would take 30 s. The bound only guards against that (a loaded 3-core CI runner
+        // needed more than 2 s to run the 1 s timer).
+        #expect(await Wait.until(timeout: .seconds(15)) { host.events == [.rendered] }, "\(host.events)")
     }
 
     @Test func aNativeAdWithoutImagesIsRenderedWhenItAppears() {
