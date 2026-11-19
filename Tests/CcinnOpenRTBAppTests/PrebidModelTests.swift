@@ -151,6 +151,23 @@ struct PrebidModelTests {
         #expect(harness.model.phase == .idle)
     }
 
+    /// A preparation that finishes during an auction (the tab's own, started on appearing) leaves the auction running.
+    @Test func aLatePreparationDoesNotEndAnAuction() async throws {
+        let harness = Harness()
+        defer { harness.cache.cleanUp() }
+        await harness.model.prepare()
+        harness.transport.answer("https://bidder.test/bid", .init(headers: ["Access-Control-Allow-Origin": "*"], body: #"{"cpm":1,"ad":"<div/>"}"#,
+                                                                  delay: .seconds(30)))
+        harness.model.setup.adUnits[0].bids = [PrebidBidderParams(bidder: "fake", params: "{}")]
+        harness.model.runAuction()
+
+        await harness.model.loadCatalog()
+        await harness.model.prepare()
+
+        #expect(harness.model.phase == .running)
+        harness.model.stop()
+    }
+
     /// A new version mid-auction stops the auction: its events belong to the old page.
     @Test func choosingAVersionStopsARunningAuction() async throws {
         let harness = Harness()

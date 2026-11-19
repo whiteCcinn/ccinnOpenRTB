@@ -29,8 +29,8 @@ struct PrebidLiveTests {
         harness.window.appearance = NSAppearance(named: .aqua)
         defer { harness.close() }
 
-        await prebid.prepare()
-        #expect(prebid.phase == .idle, "\(prebid.phase)")
+        prebid.start()
+        #expect(await Wait.until(timeout: .seconds(60)) { !prebid.catalog.isEmpty && prebid.phase == .idle }, "\(prebid.phase)")
         let version = try #require(prebid.defaultVersion)
         #expect(prebid.setup.version == version)
         #expect(prebid.catalog["appnexus"] != nil && prebid.catalog.count > 100, "\(prebid.catalog.count) bidders")

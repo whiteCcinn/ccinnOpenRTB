@@ -120,7 +120,7 @@ final class PrebidModel {
 
     /// Loads the versions (the default: the newest stable release at least two weeks old) and the chosen version's bidders.
     func prepare() async {
-        phase = .preparing
+        if phase != .running { phase = .preparing }
         do {
             let dates = try await library.releaseDates()
             versions = PrebidVersions.stableVersions(dates)
@@ -128,7 +128,7 @@ final class PrebidModel {
             if setup.version.isEmpty || !versions.contains(setup.version) { setup.version = defaultVersion ?? versions.first ?? "" }
             await loadCatalog()
         } catch {
-            phase = .failed("The Prebid.js versions could not be read: " + ClientModel.message(for: error))
+            if phase == .preparing { phase = .failed("The Prebid.js versions could not be read: " + ClientModel.message(for: error)) }
         }
     }
 
@@ -146,16 +146,17 @@ final class PrebidModel {
     func loadCatalog() async {
         let version = setup.version
         guard !version.isEmpty else { return }
-        phase = .preparing
+        if phase != .running { phase = .preparing }
         do {
             let bidders = try await library.catalog(version: version)
             guard version == setup.version else { return }
             catalog = Dictionary(bidders.map { ($0.code, $0) }, uniquingKeysWith: { first, _ in first })
-            phase = .idle
+            // Only a preparation ends here: an auction started meanwhile keeps its phase.
+            if phase == .preparing { phase = .idle }
         } catch {
             guard version == setup.version else { return }
             catalog = [:]
-            phase = .failed("The bidders of Prebid.js \(version) could not be read: " + ClientModel.message(for: error))
+            if phase == .preparing { phase = .failed("The bidders of Prebid.js \(version) could not be read: " + ClientModel.message(for: error)) }
         }
     }
 
