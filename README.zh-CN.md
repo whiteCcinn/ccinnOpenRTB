@@ -60,6 +60,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | **`data:` URL 与内置示例媒体**（`ccinn-sample://`） | 在本机解码或生成 | 在本机解码或生成 | 在本机解码或生成 |
 | **点击跳转** | 记录为导航，永不打开 | 记录为导航，永不打开 | 记录；只有在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭）才会打开，并且使用默认 Web 浏览器——即打开网页链接的那个应用，绝不会交给声明了该链接的其他应用。 |
 | **你在 [Client](#client-标签页) 标签页中发送的竞价请求** | 记录为 `offline`，**不发出** | 按你输入的内容发往你填写的 URL | 按你输入的内容发往你填写的 URL |
+| **[Sync](#sync-标签页) 标签页中的 Cookie 同步运行** | 记录为 `offline`，**不发出** | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 |
 
 - 切换到真实模式时会弹出确认框。它列出所选出价的监测请求主机名，说明哪些请求无法事先列出（脚本类监测、创意自身的脚本），列出本次渲染已经访问过的内容主机，并在本会话中已经发出过同一次竞价的竞价成功、计费或竞价失败通知时给出警告：再次发送可能导致 DSP 重复计数。取消则保持当前模式。
 - 该确认只对当前会话有效，并且只针对确定的一个出价、设备与广告位：确认框显示期间只要其中任何一项发生变化，就会重新询问。
@@ -79,6 +80,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 ## 功能特性
 
 - **像 Postman 一样发送竞价请求**：[Client](#client-标签页) 标签页把你输入的请求发往一个端点，展示响应，并按请求与响应所对应的格式和广告位在设备上渲染。可以把请求连同响应一起保存，日后再打开。
+- **调试 Cookie 映射**：[Sync](#sync-标签页) 标签页按设备浏览器的方式运行用户同步链路——iPhone 上的 WebKit 拦截第三方 Cookie，Chrome 需要 `SameSite=None; Secure`——并展示每一跳的 Cookie、传递的 id 以及未替换的占位符。
 - **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。
 - **也模拟 Exchange 的那一部分**：和 Exchange 一样（OpenRTB 2.6 §4.4），模拟器会在设备拿到出价的内嵌 `adm`（HTML、Native JSON 或 VAST XML）之前，替换其中的 `${AUCTION_*}` / `${OPENRTB_*}` 宏；VAST 的 `[MACROS]` 留给播放器，在每个监测请求触发时才填充。DSP 在竞价成功后返回的素材（`nurl` 响应、`display.curl`）按原样使用。
 - **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。出价对应的曝光位决定广告单元：`imp.rwdd`（或 `imp.ext.is_rewarded_inventory`、`imp.ext.prebid.is_rewarded_inventory`；AdCOM `placement.reward`）表示激励，`imp.instl` 或 `video.plcmt` 为 3（AdCOM `display.instl`）表示插屏。
@@ -114,6 +116,23 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
   每一跳中，307 与 308 会重复方法与请求体；303（以及 POST 之后的 301 或 302）改为不带请求体的 GET。
 - **重定向链路**：响应的 **Redirects** 标签页按顺序列出链路中的每个请求：方法、URL、状态码、指向的 `Location`、耗时、携带的请求体、途中的变化（方法、请求体、未携带的请求头、降级到 http），以及链路结束的原因（未跟随、循环、超过 10 跳）。循环、跳数过多或目标不是 http(s) 都是可以检查的响应，而不是错误。该请求在 Network 窗口中是一条 **Bid request** 记录，每一跳都是带有相同说明的子条目。
 
+## Sync 标签页
+
+按设备浏览器的方式运行 Cookie 映射（用户同步）：SSP 的同步端点重定向到合作方的像素，合作方带着自己的用户 id 重定向回 SSP 的 `setuid` URL，双方各自保存一个 Cookie。匹配率下降时并不会报错——这个标签页告诉你原因。
+
+- 在一个**页面**（发布方 URL：它的站点决定哪些 Cookie 属于第三方，它的源作为 `Referer`）上 **Run**（⌘↩）一个起始 URL——SSP 的同步端点或合作方的像素。请求以图片像素的方式发出，跟随每一次重定向，并在每一跳之前读取、之后写入该窗口的 **Cookie 罐**。
+- **浏览器的 Cookie 策略**跟随所模拟的设备，也可以手动选择：
+  - **Third-party cookies blocked**——WebKit：Safari 以及 iPhone 和 iPad 上的所有应用内 Web 视图（iPhone 18 Pro 的默认值）。在 Chrome 中能成功的同一条链路在这里什么也存不下，标签页会说明这一点。
+  - **Third-party cookies allowed**——Chrome 与 Android Web 视图：需要 `SameSite=None; Secure`，没有 `SameSite` 的 Cookie 视为 Lax（跨站时既不发送也不保存），`Partitioned` Cookie（CHIPS）按顶级站点分区保存。
+  - **Third-party cookies partitioned**——Firefox 全面 Cookie 保护：按顶级站点分区保存；第一方设置的 Cookie 不可见。
+- 起始 URL 中的**同意宏**会用你提供的值填充：`${GDPR}`、`${GDPR_CONSENT_<id>}`、`${GDPR_PD}`、`${ADDTL_CONSENT}`、`${US_PRIVACY}`、`${GPP_STRING_<id>}`、`${GPP_SID}`（IAB TCF“基于 URL 的服务”宏与 GPP URL 宏，经 URL 编码）。
+- **每一跳**都会显示发送了哪些 Cookie、哪些没有发送及原因（跨站请求上的 `SameSite=Lax`、第三方被拦截、http 上的 `Secure`、属于其他站点），以及每个 `Set-Cookie` 的结果：连同属性一起保存，或被拒绝并给出原因（没有 `Secure` 的 `SameSite=None`、跨站响应中默认的 Lax、公共后缀或不匹配的 `Domain`、`__Secure-` / `__Host-` 规则、来自 http 的 `Secure`、过大）。
+- **结论**：链路中传递的 id（`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`）、合作方在自己的 URL 中未替换的占位符（`$UID`、`${UID}`、`[UID]`、`{uid}`、`{{UID}}`——作为参数传递的 URL 是下一方的模板，不会被标记）、被浏览器拦截的 Cookie，以及链路在哪里停止。
+- **Run Again** 会复用 Cookie 罐，第二次运行即可看出映射是否稳定；**Cookie Jar** 按域名列出 Cookie；**Clear Cookies** 从头开始。Cookie 罐只存在于该窗口的内存中：绝不是 Mac 浏览器的 Cookie，也绝不写入磁盘。
+- 同步请求在 Network 窗口中是 **User sync** 记录，每一跳都带有其 Cookie。它们在模拟模式与真实模式下都会发出（你按下了 Run），离线模式下只记录、不发出。
+
+未模拟：真实浏览器的其他启发式机制（ITP 的分类、存储访问提示），以及 iframe 同步中的脚本。
+
 ## Network 窗口
 
 通过 **Window ▸ Network**（**⌥⌘N**）打开。Network 窗口只有一个，它显示当前处于焦点的主窗口的会话。
@@ -143,6 +162,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、Native `assetsurl`、`display.curl` 素材 |
 | `creative` | HTML 创意自己加载或尝试加载的一切 |
 | `bidRequest` | 你在 Client 标签页中发送的竞价请求，包括方法、请求头与请求体 |
+| `userSync` | Sync 标签页发出的 Cookie 同步请求，每一跳都带有发送与设置的 Cookie |
 
 HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（即 Sent）、`blocked`、`offline`、`local`、`renderer` 或 `browser`；`_ccinn.mode` 是会话的监测模式。
 
