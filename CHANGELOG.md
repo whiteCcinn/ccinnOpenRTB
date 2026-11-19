@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-19
+
 ### Added
 
 - **Redirect following in the Client:** each request has a **Redirects** setting — **Follow all** (like `curl -L`: across origins, at most 10 hops, loops detected; `Authorization`, `Proxy-Authorization` and `Cookie` stay behind on a hop to another origin, and a downgrade to http is flagged), **Within the origin** (the default, as in 1.1.0) or **Don't follow**. Settings ▸ Network ▸ Client sets it for new requests; requests saved by 1.1.0 keep their behaviour.
@@ -62,6 +64,7 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/whiteCcinn/ccinnopenrtb/releases/tag/v1.0.0

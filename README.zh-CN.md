@@ -267,7 +267,7 @@ git clone https://github.com/whiteCcinn/ccinnopenrtb.git && cd ccinnopenrtb
 swift build                          # Debug 构建
 swift test                           # 单元测试、渲染器测试与端到端验收测试
 scripts/build-app.sh --open          # 构建 dist/CcinnOpenRTB.app 并启动
-scripts/package-release.sh 1.1.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
+scripts/package-release.sh 1.2.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
 ```
 
 ### 用于检查的启动参数
