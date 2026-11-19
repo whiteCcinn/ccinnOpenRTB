@@ -61,6 +61,7 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 | **Click-throughs** | Recorded as navigation, never opened | Recorded as navigation, never opened | Recorded. Opened only when **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** is on (off by default), in the default web browser — the app that opens web links, never an app that claims the link. |
 | **A bid request you send from the [Client](#the-client-tab) tab** | Recorded as `offline`, **not sent** | Sent to the URL you entered, exactly as you typed it | Sent to the URL you entered, exactly as you typed it |
 | **A cookie-sync run from the [Sync](#the-sync-tab) tab** | Recorded as `offline`, **not sent** | Sent with the window's in-memory cookie jar, every redirect followed | Sent with the window's in-memory cookie jar, every redirect followed |
+| **A Prebid.js auction from the [Prebid](#the-prebid-tab) tab** | Prebid.js runs if that version was loaded before (it is cached); the bidders' requests are recorded as `offline`, **not sent** | Prebid.js fetched from jsDelivr once per version; the bidders' requests sent to their endpoints, without cookies | Same as Simulated |
 
 - Switching to Real asks for confirmation. The sheet lists the tracker hosts of the selected bid, says which requests cannot be listed in advance (script trackers, a creative's own scripts), lists the content hosts the render already contacted, and warns when win, billing or loss notices of the same auction were already sent in this session: sending again may double-count at the DSP. Cancelling keeps the current mode.
 - The confirmation lasts for the current session only, and describes exactly one bid, device and placement: if any of them changes while it is shown, it asks again.
@@ -80,6 +81,7 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 ## Features
 
 - **Send a bid request, Postman-style.** The [Client](#the-client-tab) tab sends the request you type to an endpoint, shows the response, and renders it on the device with the format and placement the request and response imply. Save requests with their responses and open them again later.
+- **Run official Prebid.js.** The [Prebid](#the-prebid-tab) tab hosts any Prebid.js release on a publisher page the way the device's browser would show it, with the bid adapters you pick: their requests go to the real endpoints through the window's network gate, and their bids render on the device.
 - **Debug cookie mapping.** The [Sync](#the-sync-tab) tab runs a user-sync chain as the device's browser would — WebKit blocks third-party cookies on iPhone, Chrome needs `SameSite=None; Secure` — with every hop's cookies, the ids passed along and the placeholders left unsubstituted.
 - **Paste what an exchange returns.** An OpenRTB 2.x or 3.0 bid response, a bare `adm` (HTML, Native JSON or VAST XML) or a VAST tag URL. The input type and version are detected automatically. Parsing is lenient: wrong types become validation issues and unknown fields are kept. A no-bid response shows "No bid" with the `nbr` reason named.
 - **The exchange's part, too.** Like an exchange (OpenRTB 2.6 §4.4), the simulator substitutes its `${AUCTION_*}` / `${OPENRTB_*}` macros in the bid's inline `adm` — HTML, Native JSON or VAST XML — before the device sees it; VAST `[MACROS]` stay for the player and are filled when each tracker fires. Markup the DSP returns after the win (`nurl` response, `display.curl`) is used as delivered.
@@ -138,6 +140,23 @@ Cookie mapping (user sync) as the device's browser would run it: an SSP's sync e
 
 Not modelled: a real browser's other heuristics (ITP's classification, storage-access prompts), and scripts in iframe syncs.
 
+## The Prebid tab
+
+Official [Prebid.js](https://prebid.org) on a simulated publisher page: choose a release and the bidders, send their requests to the real endpoints, and see the bids on the device.
+
+- **Version.** Every release on npm; the default is the newest one at least two weeks old (a brand-new release can carry fresh regressions, or a compromised publish). Its files — the official loader `dist/bundle.js?modules=…`, its manifest and chunks — are fetched from jsDelivr through the window's network gate and cached in `~/Library/Caches/CcinnOpenRTB/prebid`, so a release once loaded also runs Offline (its bidders' requests are then recorded, not sent).
+- **Bidders.** **Add Bidder** searches every bid adapter of that release, aliases included, with their IAB GVL ids (from the release's `metadata/modules.json`); each bidder's params are JSON. The page loads exactly the adapters of the bidders you added, plus the consent modules you use. A bidder the release does not have, params that are not a JSON object, or an ad unit without a code, a size or a bidder are flagged before anything loads.
+- **Ad units**: code (the div id), banner, video (outstream) or native, and sizes. The tab starts with Prebid's public AppNexus test placement (`placementId` 13144370).
+- **Consent (static)**: TCF (GDPR applies or not, the TC string; purposes 1–11 and the bidders' vendors are consented), US Privacy and GPP, set with `cmpApi: 'static'` so no CMP is looked up.
+- **Run Auction** (⌘↩) loads the page and calls `pbjs.requestBids` with your timeout; **Stop** (⌘.) unloads it.
+- **The bidders see a page on the device.** The page is at your page URL (`https://news.example/article` by default): `location`, Prebid's referer detection, `pageUrl` and a secure context all say so, and nothing is fetched for it. Its requests carry the device browser's User-Agent, `Accept-Language`, `Origin`, `Referer` (the page's origin, under the default `strict-origin-when-cross-origin` policy) and `Sec-Fetch-*`. Its scripts read the device's screen (402×874 at @3x for the iPhone 18 Pro), viewport, pixel ratio, `navigator.platform` and touch points. Prebid runs with its production configuration (debug off), so adapters behave as on a live site.
+- **Results.** **Bids** lists every bid: bidder, CPM, size, format and ad unit. **Render** shows one on the device as an OpenRTB 2.6 bid of that bidder (`${AUCTION_PRICE}` filled with its CPM, a VAST tag wrapped, Native from its ORTB response), with the simulator's placements and trackers. **Timeline** lists Prebid's events with their times: each bidder's request, response, no-bid, timeout and error. **Syncs** lists the image and iframe user syncs the adapters asked for; **Use in Sync Tab** puts one in the [Sync](#the-sync-tab) tab, on the same page, to run with its cookie jar. **Log** shows Prebid's warnings and errors: invalid params, rejected bids, consent.
+- Each bidder's request is a **Bid request** entry in the Network window (source `prebid › page`) with its headers and body, sent in Simulated and Real mode (you pressed Run), recorded and not sent when Offline. Prebid's own files are **Content** entries.
+
+**What the page can reach.** Everything goes through the network gate. `fetch`, XHR and `sendBeacon` are sent by the app. The only scripts that run are Prebid's own files of the chosen release, handed to the page from the cache as same-origin `blob:` scripts whose `integrity` WebKit still checks; any other script is refused and logged. User-sync images and iframes are listed, not loaded. A WebKit content rule list blocks every other load (stylesheets, images in markup, media, WebSocket …), and the page cannot navigate away. Every auction is a fresh visit (`document.cookie` lives in memory) and its requests carry no cookies — Safari, the iPhone's browser, sends no third-party cookies anyway; to see a mapped id, run the sync in the Sync tab.
+
+Not modelled: rendering the winner inside the page (`pbjs.renderAd`, Prebid Universal Creative), ad server targeting, user ID, RTD and analytics modules, and Prebid Server (`s2sConfig`).
+
 ## The Network window
 
 Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; it shows the session of the focused main window.
@@ -164,9 +183,9 @@ Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; 
 | `navigation` | A click-through target: Native `link.url`, VAST `ClickThrough`, `mraid.open`, `window.open`, links |
 | `error` | VAST `Error` URLs with `[ERRORCODE]` |
 | `verification` | VAST `AdVerifications` tracking, such as `verificationNotExecuted` |
-| `content` | What the app fetches to render the ad: VAST wrappers and tags, images, media, Native `assetsurl`, `display.curl` markup |
+| `content` | What the app fetches to render the ad: VAST wrappers and tags, images, media, Native `assetsurl`, `display.curl` markup; Prebid.js's files and its version list |
 | `creative` | Whatever the HTML creative loads, or tries to load |
-| `bidRequest` | A bid request you sent from the Client tab, with its method, headers and body |
+| `bidRequest` | A bid request you sent from the Client tab, or one a Prebid.js adapter sent from the Prebid tab, with its method, headers and body |
 | `userSync` | A cookie-sync request from the Sync tab, with the cookies sent and set on each hop |
 
 In HAR exports the mode is `_ccinn.delivery`: `simulated`, `network` (Sent), `blocked`, `offline`, `local`, `renderer` or `browser`; `_ccinn.mode` is the session's tracking mode.
@@ -260,11 +279,11 @@ The project page, release notes and issue tracker are also in the **Help** menu,
 3. Press **⌥⌘N** to open the Network window and watch the trackers fire. Move the **Viewability** slider, or use the **Fire** buttons, to trigger more events.
 4. Optionally paste the bid request into **Request**, pick another seat or bid, and set the clearing price or other macro values.
 
-Or start from a request: open the **Client** tab, enter your endpoint and the bid request, and press **⌘↩**. The response is shown on the device.
+Or start from a request: open the **Client** tab, enter your endpoint and the bid request, and press **⌘↩**. The response is shown on the device. Or from Prebid.js: open the **Prebid** tab, add your bidders and their params, and press **⌘↩**.
 
 | Shortcut | Action |
 |---|---|
-| **⌘↩** | Send the request (Client tab) |
+| **⌘↩** | Send the request (Client tab), run the sync (Sync tab), run the auction (Prebid tab) |
 | **⌘S** | Save the request and its response (Client tab) |
 | **⌥⌘N** | Network window |
 | **⌘K** | Clear the Network window's list |
@@ -325,7 +344,7 @@ CcinnOpenRTB (SwiftUI app: shell, simulator, renderers, Network window)
 ```
 
 - **A deterministic core.** RTBKit uses only Foundation and does no I/O. Parsing, wrapper merging, macro expansion and the tracking plan are pure functions of their input, so the order of trackers is covered by unit tests. VAST wrapper fetches go through a `VASTFetcher` protocol that the app implements on top of the network monitor.
-- **One gate to the network.** Every request goes through one dispatch policy — trackers, content, the media player's byte ranges and HLS playlists and segments, and the bid requests you send from the Client tab alike. The transport can only be called with a send permit; the policy issues none for a tracker in Simulated or Offline mode, and none for remote content when Offline. Switching back to Simulated stops a tracker's redirect chain before its next hop.
+- **One gate to the network.** Every request goes through one dispatch policy — trackers, content, the media player's byte ranges and HLS playlists and segments, and the bid requests you send from the Client tab or Prebid.js adapters send from the Prebid tab alike. The transport can only be called with a send permit; the policy issues none for a tracker in Simulated or Offline mode, and none for remote content when Offline. Switching back to Simulated stops a tracker's redirect chain before its next hop.
 - **Every hop is visible.** The transport sends exactly one request and never follows redirects. The monitor records each 3xx and follows it itself.
 - **Never crash on input.** Wrong types and missing fields become validation issues with a location; unknown fields are kept.
 - **Concurrency safety.** The project builds in Swift 6 strict-concurrency mode. Network updates are batched before they reach the UI, so a burst of trackers does not stall the window.

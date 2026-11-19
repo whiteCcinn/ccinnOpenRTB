@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Prebid tab — official Prebid.js:** pick any Prebid.js release from npm (by default the newest at least two weeks old), add bidders from that release's adapter catalogue (aliases and GVL ids included) with their params as JSON, ad units (banner, outstream video, native) and static consent (TCF, US Privacy, GPP), and run the auction. The page loads the official per-version loader with exactly those adapters, from jsDelivr through the window's network gate into a cache (a release once loaded also runs Offline); every chunk keeps its `integrity`, so WebKit checks Prebid's own hashes. The page is at the publisher URL you enter — Prebid's referer detection and `location` read it — and emulates the device's screen, viewport, pixel ratio and platform; bidder requests carry the browser's `Origin`, `Referer` and `Sec-Fetch-*` and the device's User-Agent, and no cookies. Results: the bids (**Render** shows one on the device as that bidder's OpenRTB 2.6 bid), a timeline of Prebid's events, the user syncs the adapters asked for (**Use in Sync Tab**), and Prebid's warnings and errors. Every bidder request is a **Bid request** entry in the Network window; any other script is refused, and a content rule list blocks every other load.
+
+### Changed
+
+- The window's panel tabs become a menu when the panel is too narrow for them all.
+
 ## [1.3.0] - 2026-11-19
 
 ### Added

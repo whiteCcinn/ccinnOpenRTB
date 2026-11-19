@@ -61,6 +61,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | **点击跳转** | 记录为导航，永不打开 | 记录为导航，永不打开 | 记录；只有在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭）才会打开，并且使用默认 Web 浏览器——即打开网页链接的那个应用，绝不会交给声明了该链接的其他应用。 |
 | **你在 [Client](#client-标签页) 标签页中发送的竞价请求** | 记录为 `offline`，**不发出** | 按你输入的内容发往你填写的 URL | 按你输入的内容发往你填写的 URL |
 | **[Sync](#sync-标签页) 标签页中的 Cookie 同步运行** | 记录为 `offline`，**不发出** | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 |
+| **[Prebid](#prebid-标签页) 标签页中的 Prebid.js 竞价** | 若该版本此前加载过（已缓存），Prebid.js 照常运行；各竞价方的请求记录为 `offline`，**不发出** | 每个版本从 jsDelivr 获取一次 Prebid.js；各竞价方的请求发往其端点，不带 Cookie | 与模拟模式相同 |
 
 - 切换到真实模式时会弹出确认框。它列出所选出价的监测请求主机名，说明哪些请求无法事先列出（脚本类监测、创意自身的脚本），列出本次渲染已经访问过的内容主机，并在本会话中已经发出过同一次竞价的竞价成功、计费或竞价失败通知时给出警告：再次发送可能导致 DSP 重复计数。取消则保持当前模式。
 - 该确认只对当前会话有效，并且只针对确定的一个出价、设备与广告位：确认框显示期间只要其中任何一项发生变化，就会重新询问。
@@ -80,6 +81,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 ## 功能特性
 
 - **像 Postman 一样发送竞价请求**：[Client](#client-标签页) 标签页把你输入的请求发往一个端点，展示响应，并按请求与响应所对应的格式和广告位在设备上渲染。可以把请求连同响应一起保存，日后再打开。
+- **运行官方 Prebid.js**：[Prebid](#prebid-标签页) 标签页在发布方页面上托管任意 Prebid.js 版本，呈现方式与设备浏览器一致，并加载你选择的竞价适配器：它们的请求经由窗口的网络关口发往真实端点，返回的出价在设备上渲染。
 - **调试 Cookie 映射**：[Sync](#sync-标签页) 标签页按设备浏览器的方式运行用户同步链路——iPhone 上的 WebKit 拦截第三方 Cookie，Chrome 需要 `SameSite=None; Secure`——并展示每一跳的 Cookie、传递的 id 以及未替换的占位符。
 - **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。
 - **也模拟 Exchange 的那一部分**：和 Exchange 一样（OpenRTB 2.6 §4.4），模拟器会在设备拿到出价的内嵌 `adm`（HTML、Native JSON 或 VAST XML）之前，替换其中的 `${AUCTION_*}` / `${OPENRTB_*}` 宏；VAST 的 `[MACROS]` 留给播放器，在每个监测请求触发时才填充。DSP 在竞价成功后返回的素材（`nurl` 响应、`display.curl`）按原样使用。
@@ -138,6 +140,23 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 
 未模拟：真实浏览器的其他启发式机制（ITP 的分类、存储访问提示），以及 iframe 同步中的脚本。
 
+## Prebid 标签页
+
+在模拟的发布方页面上运行官方 [Prebid.js](https://prebid.org)：选择版本和竞价方，把它们的请求发往真实端点，并在设备上查看出价。
+
+- **版本**：npm 上的所有正式版本；默认选择发布至少两周的最新版本（刚发布的版本可能带有新的回归问题，甚至是被篡改的发布）。该版本的文件——官方加载器 `dist/bundle.js?modules=…`、它的 manifest 与各分块——经由窗口的网络关口从 jsDelivr 获取，并缓存在 `~/Library/Caches/CcinnOpenRTB/prebid`，因此加载过的版本在离线模式下也能运行（此时各竞价方的请求只记录、不发出）。
+- **竞价方**：**Add Bidder** 可搜索该版本的所有竞价适配器，包括别名及其 IAB GVL id（来自该版本的 `metadata/modules.json`）；每个竞价方的参数是 JSON。页面只加载你添加的竞价方所需的适配器，以及你用到的同意管理模块。该版本不存在的竞价方、不是 JSON 对象的参数、缺少代码、尺寸或竞价方的广告单元，都会在加载任何内容之前被标出。
+- **广告单元**：代码（div id）、banner、video（outstream）或 native，以及尺寸。标签页预置了 Prebid 公开的 AppNexus 测试广告位（`placementId` 13144370）。
+- **同意（静态）**：TCF（是否适用 GDPR、TC 字符串；目的 1–11 及各竞价方的供应商均已同意）、US Privacy 与 GPP，以 `cmpApi: 'static'` 设置，不查询任何 CMP。
+- **Run Auction**（⌘↩）加载页面并以你设置的超时调用 `pbjs.requestBids`；**Stop**（⌘.）卸载页面。
+- **竞价方看到的是设备上的页面**：页面位于你填写的页面 URL（默认 `https://news.example/article`）——`location`、Prebid 的 referer 检测、`pageUrl` 和安全上下文都如此显示，且不会为它发出任何请求。它的请求带有设备浏览器的 User-Agent、`Accept-Language`、`Origin`、`Referer`（按默认的 `strict-origin-when-cross-origin` 策略，为页面的源）以及 `Sec-Fetch-*`。页面脚本读到的是设备的屏幕（iPhone 18 Pro 为 402×874、@3x）、视口、像素比、`navigator.platform` 与触点数。Prebid 使用生产配置运行（关闭 debug），适配器的行为与线上站点一致。
+- **结果**：**Bids** 列出每个出价：竞价方、CPM、尺寸、格式与广告单元。**Render** 把某个出价作为该竞价方的 OpenRTB 2.6 出价显示在设备上（`${AUCTION_PRICE}` 填入其 CPM，VAST 标签被包装，Native 取自其 ORTB 响应），并使用模拟器的广告位与监测。**Timeline** 按时间列出 Prebid 的事件：每个竞价方的请求、响应、无出价、超时与错误。**Syncs** 列出适配器请求的图片与 iframe 用户同步；**Use in Sync Tab** 把其中一个放到 [Sync](#sync-标签页) 标签页、同一个页面上，用其 Cookie 罐运行。**Log** 显示 Prebid 的警告与错误：无效参数、被拒绝的出价、同意问题。
+- 每个竞价方的请求在 Network 窗口中是一条 **Bid request** 记录（来源 `prebid › page`），带有请求头与请求体；在模拟模式与真实模式下都会发出（你按下了 Run），离线模式下只记录、不发出。Prebid 自身的文件是 **Content** 记录。
+
+**页面能访问什么**：一切都经过网络关口。`fetch`、XHR 与 `sendBeacon` 由应用发出。唯一能运行的脚本是所选版本的 Prebid 自身文件，从缓存以同源 `blob:` 脚本交给页面，WebKit 仍会校验其 `integrity`；其他任何脚本都会被拒绝并记入日志。用户同步的图片与 iframe 只列出、不加载。WebKit 内容规则列表拦截其他所有加载（样式表、标记中的图片、媒体、WebSocket……），页面也无法跳转离开。每次竞价都是一次全新访问（`document.cookie` 只存在于内存中），其请求不带任何 Cookie——iPhone 上的浏览器 Safari 本来也不发送第三方 Cookie；要查看映射后的 id，请在 Sync 标签页中运行同步。
+
+未模拟：在页面内渲染胜出者（`pbjs.renderAd`、Prebid Universal Creative）、广告服务器定向、用户 ID、RTD 与分析模块，以及 Prebid Server（`s2sConfig`）。
+
 ## Network 窗口
 
 通过 **Window ▸ Network**（**⌥⌘N**）打开。Network 窗口只有一个，它显示当前处于焦点的主窗口的会话。
@@ -164,9 +183,9 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | `navigation` | 点击跳转目标：Native `link.url`、VAST `ClickThrough`、`mraid.open`、`window.open`、链接 |
 | `error` | 带 `[ERRORCODE]` 的 VAST `Error` URL |
 | `verification` | VAST `AdVerifications` 的监测，例如 `verificationNotExecuted` |
-| `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、Native `assetsurl`、`display.curl` 素材 |
+| `content` | 应用为渲染广告而请求的内容：VAST Wrapper 与标签、图片、媒体文件、Native `assetsurl`、`display.curl` 素材；Prebid.js 的文件及其版本列表 |
 | `creative` | HTML 创意自己加载或尝试加载的一切 |
-| `bidRequest` | 你在 Client 标签页中发送的竞价请求，包括方法、请求头与请求体 |
+| `bidRequest` | 你在 Client 标签页中发送的竞价请求，或 Prebid.js 适配器在 Prebid 标签页中发出的请求，包括方法、请求头与请求体 |
 | `userSync` | Sync 标签页发出的 Cookie 同步请求，每一跳都带有发送与设置的 Cookie |
 
 HAR 导出中，模式记录在 `_ccinn.delivery`：`simulated`、`network`（即 Sent）、`blocked`、`offline`、`local`、`renderer` 或 `browser`；`_ccinn.mode` 是会话的监测模式。
@@ -260,11 +279,11 @@ CcinnOpenRTB 每天也会在后台自动检查一次，可以在 **Settings ▸ 
 3. 按 **⌥⌘N** 打开 Network 窗口，观察监测请求的触发。拖动 **Viewability** 滑块，或使用 **Fire** 按钮，触发更多事件。
 4. 可选：在 **Request** 中粘贴竞价请求，选择其他 seat 或出价，设置成交价或其他宏的取值。
 
-也可以从请求开始：打开 **Client** 标签页，填写端点和竞价请求，然后按 **⌘↩**。响应会显示在设备上。
+也可以从请求开始：打开 **Client** 标签页，填写端点和竞价请求，然后按 **⌘↩**。响应会显示在设备上。或者从 Prebid.js 开始：打开 **Prebid** 标签页，添加竞价方及其参数，然后按 **⌘↩**。
 
 | 快捷键 | 作用 |
 |---|---|
-| **⌘↩** | 发送请求（Client 标签页） |
+| **⌘↩** | 发送请求（Client 标签页）、运行同步（Sync 标签页）、运行竞价（Prebid 标签页） |
 | **⌘S** | 保存请求及其响应（Client 标签页） |
 | **⌥⌘N** | Network 窗口 |
 | **⌘K** | 清空 Network 窗口的列表 |
@@ -325,7 +344,7 @@ CcinnOpenRTB（SwiftUI 应用：外壳、模拟器、渲染器、Network 窗口�
 ```
 
 - **确定性的核心**：RTBKit 只依赖 Foundation，不做任何 I/O。解析、Wrapper 合并、宏展开和监测计划都是输入的纯函数，因此监测请求的顺序由单元测试覆盖。VAST Wrapper 的请求通过 `VASTFetcher` 协议完成，由应用基于网络监视器实现。
-- **通往网络的唯一关口**：所有请求都经过同一个分发策略——监测请求、内容、媒体播放器的字节范围请求、HLS 播放列表与分片，以及你在 Client 标签页中发送的竞价请求都是如此。传输层只能凭发送许可调用；该策略不会为模拟模式或离线模式下的监测请求签发许可，离线时也不会为远程内容签发许可。切回模拟模式后，监测请求的重定向链会在下一跳之前停止。
+- **通往网络的唯一关口**：所有请求都经过同一个分发策略——监测请求、内容、媒体播放器的字节范围请求、HLS 播放列表与分片，以及你在 Client 标签页中发送、或 Prebid.js 适配器在 Prebid 标签页中发出的竞价请求都是如此。传输层只能凭发送许可调用；该策略不会为模拟模式或离线模式下的监测请求签发许可，离线时也不会为远程内容签发许可。切回模拟模式后，监测请求的重定向链会在下一跳之前停止。
 - **每一跳都可见**：传输层每次只发送一个请求，从不跟随重定向。监视器记录每个 3xx 响应，并自行跟随。
 - **输入永不导致崩溃**：类型错误和缺失字段会成为带位置信息的校验问题，未知字段会被保留。
 - **并发安全**：项目在 Swift 6 严格并发模式下编译。网络更新会先合并再送到界面，大量监测请求同时到来也不会卡住窗口。
