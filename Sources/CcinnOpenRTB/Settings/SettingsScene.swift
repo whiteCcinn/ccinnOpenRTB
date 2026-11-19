@@ -46,6 +46,7 @@ struct GeneralSettingsView: View {
 struct NetworkSettingsView: View {
     @AppStorage(NetworkPreferences.requestTimeoutKey) private var timeout = NetworkPreferences.defaultRequestTimeout
     @AppStorage(NetworkPreferences.openClickThroughsKey) private var openClickThroughs = false
+    @AppStorage(NetworkPreferences.clientRedirectsKey) private var clientRedirects = NetworkPreferences.defaultClientRedirects.rawValue
 
     var body: some View {
         Form {
@@ -75,6 +76,15 @@ struct NetworkSettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            }
+            Section("Client") {
+                Picker("Redirects of new requests", selection: $clientRedirects) {
+                    ForEach(RedirectPolicy.allCases) { Text(ClientPresentation.title(for: $0)).tag($0.rawValue) }
+                }
+                Text("Each request keeps its own setting (Redirects, next to Body and Headers). Following redirects to other origins sends your other headers and, on 307/308, the body there too; Authorization, Proxy-Authorization and Cookie stay behind.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("Content") {
                 Text("VAST wrappers, media, images and win-notice markup are fetched in both modes because they are needed to render the ad. `data:` URLs and built-in sample media never leave the Mac.")

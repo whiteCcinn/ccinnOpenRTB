@@ -53,6 +53,39 @@ enum ClientPresentation {
         }
     }
 
+    static func title(for policy: RedirectPolicy) -> String {
+        switch policy {
+        case .all: "Follow all redirects"
+        case .sameOrigin: "Follow redirects within the origin"
+        case .none: "Don’t follow redirects"
+        }
+    }
+
+    static func shortTitle(for policy: RedirectPolicy) -> String {
+        switch policy {
+        case .all: "Redirects: all"
+        case .sameOrigin: "Redirects: same origin"
+        case .none: "Redirects: off"
+        }
+    }
+
+    static func help(for policy: RedirectPolicy) -> String {
+        switch policy {
+        case .all: "Every redirect is followed, to other origins too (Authorization, Proxy-Authorization and Cookie stay behind; other headers and, on 307/308, the body go along)"
+        case .sameOrigin: "Redirects within the endpoint’s scheme, host and port are followed; one anywhere else is the answer"
+        case .none: "The first 3xx is the answer"
+        }
+    }
+
+    /// "via 2 redirects", or `nil` without any.
+    static func redirectsLine(_ response: ClientResponse) -> String? {
+        switch response.redirectCount {
+        case 0: nil
+        case 1: "via 1 redirect"
+        case let count: "via \(count) redirects"
+        }
+    }
+
     /// "POST ssp.example/openrtb2/auction".
     static func requestLine(_ request: ClientRequest) -> String {
         let place = URLText.hostAndPath(request.trimmedURL)

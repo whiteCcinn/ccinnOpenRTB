@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Redirect following in the Client:** each request has a **Redirects** setting — **Follow all** (like `curl -L`: across origins, at most 10 hops, loops detected; `Authorization`, `Proxy-Authorization` and `Cookie` stay behind on a hop to another origin, and a downgrade to http is flagged), **Within the origin** (the default, as in 1.1.0) or **Don't follow**. Settings ▸ Network ▸ Client sets it for new requests; requests saved by 1.1.0 keep their behaviour.
+- **The redirect chain:** a **Redirects** tab lists every request of the chain — method, URL, status, `Location`, time, body, what changed on the way and why the chain ended. A loop or too many hops is now an answer to inspect instead of an error. A redirect left unfollowed offers **Follow All Redirects and Send**.
+
 ## [1.1.0] - 2026-11-19
 
 ### Added

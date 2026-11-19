@@ -195,6 +195,7 @@ private struct ClientRequestEditor: View {
                 .labelsHidden()
                 .fixedSize()
                 Spacer(minLength: 0)
+                ClientRedirectPicker(client: client)
                 if tab == .body {
                     if let formatError { Text(formatError).font(.caption).foregroundStyle(.orange).lineLimit(1) }
                     Button("Format", systemImage: "text.alignleft") { format() }
@@ -226,6 +227,27 @@ private struct ClientRequestEditor: View {
                 formatError = "Not well-formed JSON"
             }
         }
+    }
+}
+
+/// The request's redirect setting: follow all, within the origin, or none.
+private struct ClientRedirectPicker: View {
+    @Bindable var client: ClientModel
+
+    var body: some View {
+        Menu {
+            Picker("Redirects", selection: $client.request.redirects) {
+                ForEach(RedirectPolicy.allCases) { policy in
+                    Text(ClientPresentation.title(for: policy)).tag(policy)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label(ClientPresentation.shortTitle(for: client.request.redirects), systemImage: "arrow.triangle.turn.up.right.diamond")
+        }
+        .fixedSize()
+        .help(ClientPresentation.help(for: client.request.redirects))
+        .accessibilityLabel("Redirects")
     }
 }
 
@@ -337,13 +359,16 @@ private struct ClientResponseView: View {
 }
 
 private struct ClientExchangeView: View {
-    enum Tab: String { case body, headers }
+    enum Tab: String { case body, headers, redirects }
 
     let client: ClientModel
     let session: AdSession
     let exchange: ClientExchange
     @State private var tab: Tab = .body
     @State private var shownBody = ""
+
+    /// A chain worth showing: redirects followed, or one that ended on a redirect.
+    private var showsChain: Bool { exchange.response.chain.count > 1 || exchange.response.redirectStop != nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -354,6 +379,7 @@ private struct ClientExchangeView: View {
                 Picker("Response", selection: $tab) {
                     Text("Body").tag(Tab.body)
                     Text("Headers (\(exchange.response.headers.count))").tag(Tab.headers)
+                    if showsChain { Text("Redirects (\(exchange.response.redirectCount))").tag(Tab.redirects) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -375,8 +401,11 @@ private struct ClientExchangeView: View {
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            case .redirects:
+                ClientRedirectChainView(response: exchange.response)
             }
         }
+        .onChange(of: showsChain) { if !showsChain, tab == .redirects { tab = .body } }
         .task(id: exchange.response.body) {
             // Pretty-printed off the main actor; shown as received when it is not JSON.
             let raw = exchange.response.body
@@ -398,6 +427,7 @@ private struct ClientStatusBar: View {
             Badge(text: ClientPresentation.statusText(response.status), color: tone.color)
             Text(Format.duration(milliseconds: response.durationMilliseconds)).monospacedDigit()
             Text(Format.bytes(response.bodyBytes)).monospacedDigit()
+            if let redirects = ClientPresentation.redirectsLine(response) { Text(redirects) }
             Text(ClientPresentation.origin(of: exchange, client.exchangeOrigin)).lineLimit(1).truncationMode(.middle)
             if let device = exchange.deviceID.flatMap(DeviceCatalog.device(id:)) {
                 Label(device.name, systemImage: "iphone").lineLimit(1)
@@ -420,6 +450,62 @@ private struct ClientStatusBar: View {
     }
 }
 
+/// Every request of the chain, in order: method, URL, status, where it pointed, time, body, what changed on the way, and
+/// why the chain ended.
+struct ClientRedirectChainView: View {
+    let response: ClientResponse
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(response.chain.enumerated()), id: \.offset) { index, hop in
+                    ClientRedirectHopRow(index: index, hop: hop, isAnswer: hop.wasSent && index == response.chain.lastIndex(where: \.wasSent))
+                }
+                if let stop = response.redirectStop {
+                    Label(stop, systemImage: "hand.raised").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct ClientRedirectHopRow: View {
+    let index: Int
+    let hop: ClientRedirectHop
+    let isAnswer: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text("\(index + 1)").monospacedDigit().foregroundStyle(.secondary).frame(width: 18, alignment: .trailing)
+                Badge(text: hop.method)
+                if let status = hop.status {
+                    Badge(text: ClientPresentation.statusText(status), color: ClientPresentation.statusTone(status).color)
+                } else {
+                    Badge(text: hop.wasSent ? "failed" : "not sent", color: .orange)
+                }
+                if let milliseconds = hop.durationMilliseconds, hop.wasSent {
+                    Text(Format.duration(milliseconds: milliseconds)).monospacedDigit().foregroundStyle(.secondary)
+                }
+                if let bytes = hop.bodyBytes { Text("body \(Format.bytes(bytes))").foregroundStyle(.secondary) }
+                if isAnswer { Badge(text: "answer", color: .green) }
+            }
+            Text(hop.url).font(Theme.monospacedSmall).textSelection(.enabled).lineLimit(3).padding(.leading, 24)
+            if let location = hop.location {
+                Label(location, systemImage: "arrow.turn.down.right").font(Theme.monospacedSmall).foregroundStyle(.secondary)
+                    .textSelection(.enabled).lineLimit(3).padding(.leading, 24)
+            }
+            ForEach(Array([hop.note, hop.failure].compactMap { $0 }.enumerated()), id: \.offset) { _, line in
+                Text(line).font(.caption).foregroundStyle(line.contains("unencrypted") || line == hop.failure ? .orange : .secondary)
+                    .padding(.leading, 24)
+            }
+        }
+        .font(.caption)
+    }
+}
+
 /// What the simulator made of it (format and placement from the request and response), or why it was left alone.
 private struct ClientSimulatorLine: View {
     let client: ClientModel
@@ -431,6 +517,11 @@ private struct ClientSimulatorLine: View {
             if let note = client.simulatorNote {
                 Image(systemName: "info.circle")
                 Text(note)
+                if exchange.response.isRedirectNotFollowed, client.request.redirects != .all, !client.isSending {
+                    Button("Follow All Redirects and Send") { client.followAllRedirectsAndSend() }
+                        .controlSize(.small)
+                        .help("Set Redirects to Follow all for this request and send it again, to see the whole chain")
+                }
             } else if session.responseText == exchange.response.body {
                 Image(systemName: "iphone.gen3")
                 Text(ClientPresentation.simulatorSummary(session))

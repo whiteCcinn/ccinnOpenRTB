@@ -67,15 +67,20 @@ final class ClientModel {
     @ObservationIgnored let library: SavedRequestLibrary
     @ObservationIgnored private let target: any ClientSimulatorTarget
     @ObservationIgnored private let now: @MainActor () -> Date
+    /// The redirect setting of a new request (Settings ▸ Network).
+    @ObservationIgnored private let defaultRedirects: @MainActor () -> RedirectPolicy
     @ObservationIgnored private var sendTask: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     /// Incremented when the tab shows another request (Open, New Request).
     @ObservationIgnored private var draftGeneration = 0
 
-    init(target: any ClientSimulatorTarget, library: SavedRequestLibrary = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
+    init(target: any ClientSimulatorTarget, library: SavedRequestLibrary = .shared, now: @escaping @MainActor () -> Date = { Date() },
+         defaultRedirects: @escaping @MainActor () -> RedirectPolicy = { NetworkPreferences.clientRedirects(in: .standard) }) {
         self.target = target
         self.library = library
         self.now = now
+        self.defaultRedirects = defaultRedirects
+        request = ClientRequest(redirects: defaultRedirects())
     }
 
     // MARK: Derived
@@ -141,6 +146,13 @@ final class ClientModel {
         return task
     }
 
+    /// The answer was a redirect left unfollowed: follow every redirect of this request from now on, and send it again.
+    @discardableResult
+    func followAllRedirectsAndSend() -> Task<Void, Never>? {
+        request.redirects = .all
+        return send()
+    }
+
     /// Stops the request in flight; a response that still arrives is dropped.
     func cancel() {
         guard phase == .sending else { return }
@@ -162,11 +174,11 @@ final class ClientModel {
         await show(exchange, on: device, rendering: .unlessRealMode)
     }
 
-    static func leftAloneNote(for response: ClientResponse) -> String {
+    nonisolated static func leftAloneNote(for response: ClientResponse) -> String {
         if response.isSuccess { return "No bid: the response has no body. The simulator was left as it was." }
-        if (300..<400).contains(response.status), let location = HTTPHeaders.value("Location", in: response.headers) {
-            return "HTTP \(response.status): redirected to \(location.prefix(200)), on another origin: not followed, so nothing you typed went there. "
-                + "Send to that URL if you trust it."
+        if response.isRedirectNotFollowed, let stop = response.redirectStop {
+            return "HTTP \(response.status): \(stop.prefix(300)). Nothing you typed went further. To inspect the whole chain, use "
+                + "Follow All Redirects and Send, or choose Redirects ▸ Follow all."
         }
         return "HTTP \(response.status): the simulator was left as it was."
     }
@@ -229,7 +241,7 @@ final class ClientModel {
     func newRequest() {
         stopSending()
         draftGeneration &+= 1
-        request = ClientRequest()
+        request = ClientRequest(redirects: defaultRedirects())
         name = ""
         savedID = nil
         exchange = nil

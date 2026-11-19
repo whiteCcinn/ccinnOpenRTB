@@ -433,3 +433,144 @@ final class MethodRoutingTransport: HTTPTransport {
         return answer(request)
     }
 }
+
+/// The Client's redirect setting (bid-client 1.2): follow all, within the origin (the default), or none — and the chain
+/// of every request sent, so a redirect can be inspected hop by hop.
+@MainActor
+@Suite("Network monitor: composed redirects")
+struct ComposedRedirectPolicyTests {
+    private func send(_ monitor: NetworkMonitor, _ policy: RedirectPolicy, url: String = endpoint,
+                      headers: [String: String] = ["Content-Type": "application/json"]) async throws -> ComposedResponse {
+        var request = composed(url, headers: headers)
+        request.redirects = policy
+        return try await monitor.send(request, userAgent: deviceUA)
+    }
+
+    @Test func withinTheOriginIsTheDefault() {
+        #expect(ComposedRequest(url: endpoint).redirects == .sameOrigin)
+        #expect(RedirectPolicy.allCases == [.all, .sameOrigin, .none])
+    }
+
+    @Test func aDirectAnswerIsAChainOfOne() async throws {
+        let transport = FakeTransport()
+        transport.respond(endpoint, body: bidResponseJSON)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .all)
+
+        #expect(response.chain.count == 1)
+        #expect(response.chain.first?.method == "POST")
+        #expect(response.chain.first?.status == 200)
+        #expect(response.chain.first?.wasSent == true)
+        #expect(response.chain.first?.bodyBytes == bidRequestJSON.utf8.count)
+        #expect(response.redirectStop == nil)
+    }
+
+    @Test func dontFollowAnswersWithTheFirstRedirect() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "/v2/auction", status: 302)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .none)
+
+        #expect(response.status == 302)
+        #expect(transport.requests.count == 1)
+        #expect(response.chain.map(\.status) == [302])
+        #expect(response.chain.first?.location == "/v2/auction")
+        #expect(response.redirectStop?.contains("not followed") == true)
+    }
+
+    /// Follow all: like `curl -L`, across origins; the standard credentials stay behind and the hop says so, other headers
+    /// and (on 307 / 308) the body go along.
+    @Test func followAllCrossesOriginsWithoutTheStandardCredentials() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "https://other.example/auction", status: 307)
+        transport.respond("https://other.example/auction", body: bidResponseJSON)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .all, headers: ["Content-Type": "application/json", "Authorization": "Bearer t", "Cookie": "s=1",
+                                                                "X-Api-Key": "k"])
+
+        #expect(response.status == 200)
+        #expect(response.url.absoluteString == "https://other.example/auction")
+        let hop = try #require(transport.requests.last)
+        #expect(transport.requests.count == 2)
+        #expect(hop.method == "POST")
+        #expect(hop.body == Data(bidRequestJSON.utf8))
+        #expect(headerValues("Authorization", in: hop.headers).isEmpty)
+        #expect(headerValues("Cookie", in: hop.headers).isEmpty)
+        #expect(hop.headers["X-Api-Key"] == "k")
+        #expect(response.chain.map(\.url) == [endpoint, "https://other.example/auction"])
+        #expect(response.chain.map(\.status) == [307, 200])
+        #expect(response.chain.first?.location == "https://other.example/auction")
+        let note = try #require(response.chain.last?.note)
+        #expect(note.contains("Authorization") && note.contains("Cookie"))
+        #expect(!note.contains("X-Api-Key"))
+        #expect(response.chain.last?.bodyBytes == bidRequestJSON.utf8.count)
+        #expect(response.redirectStop == nil)
+    }
+
+    /// A downgrade to http is followed when asked to, and flagged: what follows is sent unencrypted.
+    @Test func followAllFlagsADowngradeAndAMethodChange() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "http://ssp.example/openrtb2/auction", status: 301)
+        transport.respond("http://ssp.example/openrtb2/auction", body: "{}")
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .all)
+
+        #expect(transport.requests.map(\.method) == ["POST", "GET"])
+        let note = try #require(response.chain.last?.note)
+        #expect(note.contains("unencrypted"))
+        #expect(note.contains("GET"))
+        #expect(response.chain.last?.bodyBytes == nil)
+    }
+
+    /// A loop is a result to inspect, not just an error: the last 3xx, the chain, and why it stopped.
+    @Test func aLoopEndsTheChainWithItsReason() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "https://ssp.example/b", status: 307)
+        transport.redirect("https://ssp.example/b", to: endpoint, status: 307)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .all)
+
+        #expect(response.status == 307)
+        #expect(transport.requests.count == 2)
+        #expect(response.redirectStop?.lowercased().contains("loop") == true)
+        #expect(response.chain.map(\.wasSent) == [true, true, false])
+        #expect(response.chain.last?.url == endpoint)
+        #expect(response.chain.last?.failure != nil)
+    }
+
+    @Test func tooManyRedirectsEndTheChainWithItsReason() async throws {
+        let transport = FakeTransport()
+        let base = "https://ssp.example/r"
+        transport.redirect(endpoint, to: base + "1", status: 307)
+        for index in 1...NetworkMonitor.maxRedirects + 1 { transport.redirect(base + "\(index)", to: base + "\(index + 1)", status: 307) }
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .all)
+
+        #expect(transport.requests.count == NetworkMonitor.maxRedirects + 1)
+        #expect(response.status == 307)
+        #expect(response.redirectStop?.contains("Too many redirects") == true)
+        #expect(response.chain.count == NetworkMonitor.maxRedirects + 2)
+        #expect(response.chain.filter(\.wasSent).count == NetworkMonitor.maxRedirects + 1)
+    }
+
+    /// Within the origin (the default): followed while it stays, the 3xx out of it is the answer, with the reason.
+    @Test func withinTheOriginStopsAtTheBorder() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "/v2", status: 307)
+        transport.redirect("https://ssp.example/v2", to: "https://other.example/v3", status: 307)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, .sameOrigin)
+
+        #expect(transport.requests.count == 2)
+        #expect(response.status == 307)
+        #expect(response.chain.map(\.status) == [307, 307])
+        #expect(response.redirectStop?.contains("another origin") == true)
+    }
+}

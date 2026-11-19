@@ -98,4 +98,43 @@ struct ClientPaneTests {
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("client-tab.png"))
         #expect(fixture.session.placement == .rewarded)
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CCINN_CLIENT_SNAPSHOTS"] != nil))
+    func snapshotARedirectChain() async throws {
+        let fixture = Fixture()
+        defer { fixture.directory.cleanUp() }
+        fixture.client.request.redirects = .sameOrigin
+        fixture.transport.answer(endpoint, .init(status: 307, headers: ["Location": "https://edge.ssp-cdn.example/openrtb2/auction"]))
+        fixture.transport.answer("https://edge.ssp-cdn.example/openrtb2/auction",
+                                 .init(status: 302, headers: ["Location": "http://edge.ssp-cdn.example/v2/auction"]))
+        fixture.transport.answer("http://edge.ssp-cdn.example/v2/auction", .init(body: bidResponse))
+        fixture.client.request.headers.append(ClientHeader(name: "Authorization", value: "Bearer staging-token"))
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["CCINN_CLIENT_SNAPSHOTS"] ?? NSTemporaryDirectory(), isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let pane = WindowHarness(ClientPane(client: fixture.client, session: fixture.session).background(Color(nsColor: .windowBackgroundColor)),
+                                 size: CGSize(width: 600, height: 700))
+        pane.window.appearance = NSAppearance(named: .aqua)
+        defer { pane.close() }
+        await fixture.client.send()?.value
+        try await Task.sleep(for: .milliseconds(600))
+        try write(pane.hosting, to: directory.appendingPathComponent("client-redirect-not-followed.png"))
+
+        await fixture.client.followAllRedirectsAndSend()?.value
+        let response = try #require(fixture.client.exchange?.response)
+        #expect(response.redirectCount == 2)
+        let chain = WindowHarness(ClientRedirectChainView(response: response).background(Color(nsColor: .windowBackgroundColor)),
+                                  size: CGSize(width: 600, height: 420))
+        chain.window.appearance = NSAppearance(named: .aqua)
+        defer { chain.close() }
+        try await Task.sleep(for: .milliseconds(400))
+        try write(chain.hosting, to: directory.appendingPathComponent("client-redirect-chain.png"))
+    }
+
+    private func write(_ view: NSView, to file: URL) throws {
+        view.layoutSubtreeIfNeeded()
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: file)
+    }
 }

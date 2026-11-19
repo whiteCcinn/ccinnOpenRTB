@@ -199,6 +199,14 @@ public enum NetworkPreferences {
         defaults.bool(forKey: openClickThroughsKey)
     }
 
+    /// The redirect setting of new Client requests (Settings ▸ Network); within the origin unless chosen otherwise.
+    public static let clientRedirectsKey = "client.redirects"
+    public static let defaultClientRedirects = RedirectPolicy.sameOrigin
+
+    public static func clientRedirects(in defaults: UserDefaults) -> RedirectPolicy {
+        defaults.string(forKey: clientRedirectsKey).flatMap(RedirectPolicy.init(rawValue:)) ?? defaultClientRedirects
+    }
+
     /// Whether a click-through leaves the simulator for the default browser: Real mode, the setting on (default off), a
     /// device that can navigate (never CTV), and an http(s) URL.
     public static func shouldOpenInBrowser(_ url: String, mode: TrackingMode, settingEnabled: Bool, device: DeviceProfile?) -> Bool {

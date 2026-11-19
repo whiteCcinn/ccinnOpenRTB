@@ -265,12 +265,23 @@ public final class NetworkMonitor {
             record.delivery = .network
             let stored = appendComposed(record, body: body)
             let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: Self.maxContentBytes,
-                                failOnTruncation: true, acceptsAnyStatus: true, followsCrossOriginRedirects: false)
+                                failOnTruncation: true, acceptsAnyStatus: true, redirects: request.redirects)
             let task = startLoad(stored, permit: permit, spec: spec)
             let loaded = try await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }.get()
             return ComposedResponse(status: loaded.status, headers: loaded.headers, body: loaded.body, url: loaded.url ?? requestURL, entryID: stored.id,
                                     responseEntryID: loaded.entryID, duration: max(0, clock.now().timeIntervalSince(startedAt)),
-                                    timings: entry(id: loaded.entryID)?.timings)
+                                    timings: entry(id: loaded.entryID)?.timings, chain: chain(of: stored.id), redirectStop: loaded.redirectStop)
+        }
+    }
+
+    /// The request `rootID` and its redirect hops, in order, as recorded.
+    private func chain(of rootID: UUID) -> [ComposedHop] {
+        guard let root = log.entry(rootID) else { return [] }
+        return ([root] + log.children(of: rootID).filter(\.isRedirectHop)).map { entry in
+            let failure: String? = if case let .failed(message) = entry.state { message } else { nil }
+            return ComposedHop(entryID: entry.id, method: entry.method, url: entry.url, status: entry.status,
+                               location: entry.responseHeader("Location"), bodyBytes: entry.requestBodyBytes, duration: entry.duration,
+                               note: entry.note, wasSent: entry.delivery == .network && entry.status != nil, failure: failure)
         }
     }
 
@@ -579,11 +590,17 @@ public final class NetworkMonitor {
                 let next = URL(string: location, relativeTo: requestURL)?.absoluteURL ?? URLText.requestURL(location)
                 let nextURL = next?.absoluteString ?? location
                 let nextScheme = URLText.scheme(nextURL)
-                if !spec.followsCrossOriginRedirects, let next, !RedirectRule.sameOrigin(requestURL, next) {
-                    // The 3xx is the answer: the user sees where it points and decides whether to send there.
-                    update(currentID) { $0.note = Self.joined($0.note, "Redirect to another origin not followed: \(String(location.prefix(300)))") }
+                let policyStop: String? = switch spec.redirects {
+                case .none: "Redirect not followed (Redirects: don't follow): \(String(location.prefix(300)))"
+                case .sameOrigin where next.map({ !RedirectRule.sameOrigin(requestURL, $0) }) ?? false:
+                    "Redirect to another origin not followed: \(String(location.prefix(300)))"
+                case .all, .sameOrigin: nil
+                }
+                if let policyStop {
+                    // The 3xx is the answer: the user sees where it points and decides whether to follow.
+                    update(currentID) { $0.note = Self.joined($0.note, policyStop) }
                     return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
-                                                   entryID: currentID, truncated: response.truncated))
+                                                   entryID: currentID, truncated: response.truncated, redirectStop: policyStop))
                 }
                 let nextRequest = next.map { RedirectRule.next(after: hopRequest, status: response.status, from: requestURL, to: $0) } ?? hopRequest
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
@@ -609,10 +626,14 @@ public final class NetworkMonitor {
                     hop.finishedAt = hop.startedAt
                     hop.note = "Not sent"
                     append(hop)
-                    return .failure(stop)
+                    // A load that takes any answer (a composed request) ends on its last 3xx, with why: inspectable.
+                    guard spec.acceptsAnyStatus else { return .failure(stop) }
+                    return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
+                                                   entryID: currentID, truncated: response.truncated, redirectStop: stop.errorDescription))
                 }
                 hops += 1
-                hop.note = "Redirect hop \(hops)"
+                let changes = next.map { RedirectRule.changes(from: hopRequest, to: nextRequest, status: response.status, from: requestURL, to: $0) } ?? []
+                hop.note = (["Redirect hop \(hops)"] + changes).joined(separator: " · ")
                 hop.requestHeaders = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: nextRequest.headers)
                 currentID = append(hop).id
                 if let body = nextRequest.body { requestBodies.store(body, for: currentID) }
@@ -876,8 +897,8 @@ struct LoadSpec: Sendable {
     var failOnTruncation: Bool
     /// Every final status is a result (a composed request); otherwise a status outside 2xx fails the load.
     var acceptsAnyStatus = false
-    /// `false`: a redirect to another origin ends the load with the 3xx as its result (a composed request).
-    var followsCrossOriginRedirects = true
+    /// Which redirects the load follows; one it does not follow ends the load with the 3xx as its result.
+    var redirects: RedirectPolicy = .all
 }
 
 /// What a load produced: the response of its final hop.
@@ -891,6 +912,8 @@ struct LoadedResponse: Sendable {
     var entryID: UUID
     /// The body was cut at the request's `maxBodyBytes`.
     var truncated = false
+    /// Why the load ended on a redirect instead of following it.
+    var redirectStop: String?
 }
 
 /// One load in progress.

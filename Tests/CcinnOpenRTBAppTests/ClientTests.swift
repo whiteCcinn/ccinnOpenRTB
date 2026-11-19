@@ -1008,3 +1008,99 @@ struct SavedRequestMigrationTests {
         #expect(library.lastNotice == "Exported 1 request.")
     }
 }
+
+// MARK: - Redirects
+
+@Suite("Client: redirects")
+struct ClientRedirectTests {
+    /// Requests saved by 1.1.0 have no redirect setting: they keep 1.1.0's behaviour (within the origin).
+    @Test func aRequestSavedBy110FollowsWithinTheOrigin() throws {
+        let json = #"{"method":"POST","url":"https://ssp.example/a","headers":[],"body":"{}"}"#
+        let decoded = try JSONDecoder().decode(ClientRequest.self, from: Data(json.utf8))
+        #expect(decoded.redirects == .sameOrigin)
+        var all = decoded
+        all.redirects = .all
+        #expect(try JSONDecoder().decode(ClientRequest.self, from: JSONEncoder().encode(all)).redirects == .all)
+        #expect(try all.composed().redirects == .all)
+    }
+
+    @Test func theChainIsKeptWithTheResponse() throws {
+        let first = UUID()
+        let second = UUID()
+        let composed = ComposedResponse(status: 200, headers: [:], body: Data("{}".utf8), url: try #require(URL(string: "https://b.example/x")),
+                                        entryID: first, responseEntryID: second, duration: 0.2, timings: nil,
+                                        chain: [ComposedHop(entryID: first, method: "POST", url: endpoint, status: 307, location: "https://b.example/x",
+                                                            bodyBytes: 10, duration: 0.05, note: nil, wasSent: true, failure: nil),
+                                                ComposedHop(entryID: second, method: "POST", url: "https://b.example/x", status: 200, location: nil,
+                                                            bodyBytes: 10, duration: 0.15, note: "Not carried to another origin: Authorization",
+                                                            wasSent: true, failure: nil)])
+        let response = ClientResponse(composed, receivedAt: Date(timeIntervalSince1970: 0))
+        #expect(response.chain.map(\.status) == [307, 200])
+        #expect(response.chain.first?.location == "https://b.example/x")
+        #expect(response.chain.last?.note == "Not carried to another origin: Authorization")
+        #expect(abs((response.chain.first?.durationMilliseconds ?? 0) - 50) < 0.001)
+        #expect(response.redirectCount == 1)
+        #expect(try JSONDecoder().decode(ClientResponse.self, from: JSONEncoder().encode(response)) == response)
+    }
+
+    /// Responses saved by 1.1.0 have no chain.
+    @Test func aResponseSavedBy110HasNoChain() throws {
+        let json = #"{"status":200,"headers":{},"body":"{}","bodyBytes":2,"durationMilliseconds":5,"receivedAt":0,"url":"https://a.example/"}"#
+        let decoded = try JSONDecoder().decode(ClientResponse.self, from: Data(json.utf8))
+        #expect(decoded.chain.isEmpty)
+        #expect(decoded.redirectStop == nil)
+        #expect(decoded.redirectCount == 0)
+    }
+
+    @Test func aRedirectNotFollowedSaysWhyAndHowToFollowIt() {
+        let response = ClientResponse(status: 307, headers: ["Location": "https://other.example/a"], body: "", bodyBytes: 0, durationMilliseconds: 1,
+                                      receivedAt: Date(), url: endpoint, redirectStop: "Redirect to another origin not followed: https://other.example/a")
+        let note = ClientModel.leftAloneNote(for: response)
+        #expect(note.contains("another origin"))
+        #expect(note.contains("Follow All Redirects"))
+        #expect(response.isRedirectNotFollowed)
+    }
+}
+
+@MainActor
+@Suite("Client: redirects with a model", .serialized)
+struct ClientRedirectModelTests {
+    @Test func newRequestsTakeTheDefaultFromSettings() {
+        let target = RecordingSimulatorTarget(monitor: NetworkMonitor(transport: ScriptedTransport(), publishInterval: .zero))
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let model = ClientModel(target: target, library: SavedRequestLibrary(store: SavedRequestStore(directory: directory.url)),
+                                defaultRedirects: { .all })
+        #expect(model.request.redirects == .all)
+        model.request.redirects = .none
+        model.newRequest()
+        #expect(model.request.redirects == .all)
+    }
+
+    /// One click from a redirect that was not followed to the whole chain.
+    @Test func followAllRedirectsAndSendFollowsTheChain() async throws {
+        let transport = ScriptedTransport()
+        transport.answer(endpoint, .init(status: 307, headers: ["Location": "https://other.example/auction"]))
+        transport.answer("https://other.example/auction", .init(body: videoResponse))
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let target = RecordingSimulatorTarget(monitor: monitor)
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let model = ClientModel(target: target, library: SavedRequestLibrary(store: SavedRequestStore(directory: directory.url)),
+                                defaultRedirects: { .sameOrigin })
+        model.request = request()
+
+        await model.send()?.value
+        #expect(model.exchange?.response.status == 307)
+        #expect(model.exchange?.response.isRedirectNotFollowed == true)
+        #expect(target.loads.isEmpty)
+
+        await model.followAllRedirectsAndSend()?.value
+
+        #expect(model.request.redirects == .all)
+        #expect(model.exchange?.response.status == 200)
+        #expect(model.exchange?.response.redirectCount == 1)
+        #expect(model.exchange?.response.chain.map(\.url) == [endpoint, "https://other.example/auction"])
+        #expect(target.loads.count == 1)
+    }
+}

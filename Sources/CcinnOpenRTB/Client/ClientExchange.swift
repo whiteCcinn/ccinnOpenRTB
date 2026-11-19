@@ -1,6 +1,33 @@
 import CcinnOpenRTBKit
 import Foundation
 
+/// One request of a response's redirect chain, as the Client shows and saves it.
+struct ClientRedirectHop: Codable, Hashable, Sendable {
+    var method: String
+    var url: String
+    var status: Int?
+    var location: String?
+    var bodyBytes: Int?
+    var durationMilliseconds: Double?
+    /// What changed on the way (method, body, headers left behind, a downgrade to http).
+    var note: String?
+    var wasSent: Bool
+    /// Why it failed or was not sent.
+    var failure: String?
+
+    init(_ hop: ComposedHop) {
+        method = hop.method
+        url = hop.url
+        status = hop.status
+        location = hop.location
+        bodyBytes = hop.bodyBytes
+        durationMilliseconds = hop.duration.map { max(0, $0 * 1000) }
+        note = hop.note
+        wasSent = hop.wasSent
+        failure = hop.failure
+    }
+}
+
 /// What an endpoint answered, as the Client shows and saves it.
 struct ClientResponse: Codable, Hashable, Sendable {
     var status: Int
@@ -12,8 +39,13 @@ struct ClientResponse: Codable, Hashable, Sendable {
     var receivedAt: Date
     /// The URL that answered (after redirects).
     var url: String
+    /// Every request of the chain: the request, each redirect hop, a hop not sent. Empty for responses saved by 1.1.0.
+    var chain: [ClientRedirectHop]
+    /// Why the chain ended on a redirect (not followed, a loop, too many hops).
+    var redirectStop: String?
 
-    init(status: Int, headers: [String: String], body: String, bodyBytes: Int, durationMilliseconds: Double, receivedAt: Date, url: String) {
+    init(status: Int, headers: [String: String], body: String, bodyBytes: Int, durationMilliseconds: Double, receivedAt: Date, url: String,
+         chain: [ClientRedirectHop] = [], redirectStop: String? = nil) {
         self.status = status
         self.headers = headers
         self.body = body
@@ -21,6 +53,8 @@ struct ClientResponse: Codable, Hashable, Sendable {
         self.durationMilliseconds = durationMilliseconds
         self.receivedAt = receivedAt
         self.url = url
+        self.chain = chain
+        self.redirectStop = redirectStop
     }
 
     init(_ response: ComposedResponse, receivedAt: Date) {
@@ -28,8 +62,31 @@ struct ClientResponse: Codable, Hashable, Sendable {
         self.init(status: response.status, headers: response.headers,
                   body: TextDecoding.string(from: response.body, charset: HTTPHeaders.charset(fromContentType: contentType)),
                   bodyBytes: response.body.count, durationMilliseconds: max(0, response.duration * 1000), receivedAt: receivedAt,
-                  url: response.url.absoluteString)
+                  url: response.url.absoluteString, chain: response.chain.map(ClientRedirectHop.init), redirectStop: response.redirectStop)
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case status, headers, body, bodyBytes, durationMilliseconds, receivedAt, url, chain, redirectStop
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(Int.self, forKey: .status)
+        headers = try container.decode([String: String].self, forKey: .headers)
+        body = try container.decode(String.self, forKey: .body)
+        bodyBytes = try container.decode(Int.self, forKey: .bodyBytes)
+        durationMilliseconds = try container.decode(Double.self, forKey: .durationMilliseconds)
+        receivedAt = try container.decode(Date.self, forKey: .receivedAt)
+        url = try container.decode(String.self, forKey: .url)
+        chain = try container.decodeIfPresent([ClientRedirectHop].self, forKey: .chain) ?? []
+        redirectStop = try container.decodeIfPresent(String.self, forKey: .redirectStop)
+    }
+
+    /// Redirects that were followed (the hops sent after the request itself).
+    var redirectCount: Int { max(0, chain.filter(\.wasSent).count - 1) }
+
+    /// The answer is a redirect the chain did not follow (by the setting, or because of a loop or too many hops).
+    var isRedirectNotFollowed: Bool { (300..<400).contains(status) && redirectStop != nil }
 
     var mimeType: String? { HTTPHeaders.mimeType(fromContentType: HTTPHeaders.value("Content-Type", in: headers)) }
 

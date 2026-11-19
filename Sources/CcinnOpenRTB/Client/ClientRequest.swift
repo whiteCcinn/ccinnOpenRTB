@@ -39,16 +39,20 @@ struct ClientRequest: Codable, Hashable, Sendable {
     var url: String
     var headers: [ClientHeader]
     var body: String
+    /// Which redirects Send follows (Settings ▸ Network sets it for new requests).
+    var redirects: RedirectPolicy
 
-    init(method: ClientMethod = .post, url: String = "", headers: [ClientHeader] = ClientRequest.defaultHeaders(), body: String = "") {
+    init(method: ClientMethod = .post, url: String = "", headers: [ClientHeader] = ClientRequest.defaultHeaders(), body: String = "",
+         redirects: RedirectPolicy = NetworkPreferences.defaultClientRedirects) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
+        self.redirects = redirects
     }
 
     private enum CodingKeys: String, CodingKey {
-        case method, url, headers, body
+        case method, url, headers, body, redirects
     }
 
     /// Header ids are made unique: a hand-edited file may repeat one, and the editor tells rows apart by id.
@@ -57,6 +61,8 @@ struct ClientRequest: Codable, Hashable, Sendable {
         method = try container.decode(ClientMethod.self, forKey: .method)
         url = try container.decode(String.self, forKey: .url)
         body = try container.decode(String.self, forKey: .body)
+        // Requests saved by 1.1.0 have no setting: they keep its behaviour.
+        redirects = try container.decodeIfPresent(RedirectPolicy.self, forKey: .redirects) ?? .sameOrigin
         var seen: Set<UUID> = []
         headers = try container.decode([ClientHeader].self, forKey: .headers).map { header in
             var header = header
@@ -134,7 +140,8 @@ struct ClientRequest: Codable, Hashable, Sendable {
         guard problems.isEmpty else { throw Invalid(problems: problems) }
         var headers: [String: String] = [:]
         for header in activeHeaders { headers[header.trimmedName] = header.trimmedValue }
-        return ComposedRequest(url: trimmedURL, method: method.rawValue, headers: headers, body: method.sendsBody ? Data(body.utf8) : nil)
+        return ComposedRequest(url: trimmedURL, method: method.rawValue, headers: headers, body: method.sendsBody ? Data(body.utf8) : nil,
+                               redirects: redirects)
     }
 
     /// A non-blocking note when a POST body is not JSON (it is still sent as typed).
