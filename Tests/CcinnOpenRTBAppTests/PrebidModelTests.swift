@@ -86,7 +86,8 @@ struct PrebidModelTests {
         harness.model.setup.adUnits[0].bids = [PrebidBidderParams(bidder: "fake", params: "{}")]
 
         harness.model.runAuction()
-        let ended = await Wait.until(timeout: .seconds(20)) { harness.model.phase == .done }
+        // The user sync fires after bidsBack, as Prebid's do: wait for both.
+        let ended = await Wait.until(timeout: .seconds(20)) { harness.model.phase == .done && !harness.model.syncs.isEmpty }
         #expect(ended, "\(harness.model.phase) \(harness.model.timeline.map(\.type))")
 
         #expect(harness.model.bids.map(\.cpm) == [1.75])
