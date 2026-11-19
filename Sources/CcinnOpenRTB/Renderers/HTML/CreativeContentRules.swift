@@ -42,6 +42,21 @@ enum CreativeContentRules {
     private static var compiled: [String: WKContentRuleList] = [:]
     private static var inFlight: [String: Task<WKContentRuleList, any Error>] = [:]
 
+    static let prebidPageIdentifier = "ccinn.prebid.page.v1"
+
+    /// The Prebid page: every load is blocked but the page's own scheme (the page, Prebid.js, its chunks). Its network
+    /// APIs are shimmed to go through the monitor; anything the shim does not cover fails closed here.
+    static let prebidPageSource = """
+    [
+      {"trigger": {"url-filter": ".*"}, "action": {"type": "block"}},
+      {"trigger": {"url-filter": "^ccinn-prebid:"}, "action": {"type": "ignore-previous-rules"}}
+    ]
+    """
+
+    static func prebidPage() async throws -> WKContentRuleList {
+        try await list(identifier: prebidPageIdentifier, source: prebidPageSource)
+    }
+
     static func blockNetwork() async throws -> WKContentRuleList {
         try await list(identifier: blockNetworkIdentifier, source: blockNetworkSource)
     }
