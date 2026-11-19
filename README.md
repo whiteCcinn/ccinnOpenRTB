@@ -60,6 +60,7 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 | **`data:` URLs and built-in sample media** (`ccinn-sample://`) | Decoded or generated on the Mac | Decoded or generated on the Mac | Decoded or generated on the Mac |
 | **Click-throughs** | Recorded as navigation, never opened | Recorded as navigation, never opened | Recorded. Opened only when **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** is on (off by default), in the default web browser — the app that opens web links, never an app that claims the link. |
 | **A bid request you send from the [Client](#the-client-tab) tab** | Recorded as `offline`, **not sent** | Sent to the URL you entered, exactly as you typed it | Sent to the URL you entered, exactly as you typed it |
+| **A cookie-sync run from the [Sync](#the-sync-tab) tab** | Recorded as `offline`, **not sent** | Sent with the window's in-memory cookie jar, every redirect followed | Sent with the window's in-memory cookie jar, every redirect followed |
 
 - Switching to Real asks for confirmation. The sheet lists the tracker hosts of the selected bid, says which requests cannot be listed in advance (script trackers, a creative's own scripts), lists the content hosts the render already contacted, and warns when win, billing or loss notices of the same auction were already sent in this session: sending again may double-count at the DSP. Cancelling keeps the current mode.
 - The confirmation lasts for the current session only, and describes exactly one bid, device and placement: if any of them changes while it is shown, it asks again.
@@ -79,6 +80,7 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 ## Features
 
 - **Send a bid request, Postman-style.** The [Client](#the-client-tab) tab sends the request you type to an endpoint, shows the response, and renders it on the device with the format and placement the request and response imply. Save requests with their responses and open them again later.
+- **Debug cookie mapping.** The [Sync](#the-sync-tab) tab runs a user-sync chain as the device's browser would — WebKit blocks third-party cookies on iPhone, Chrome needs `SameSite=None; Secure` — with every hop's cookies, the ids passed along and the placeholders left unsubstituted.
 - **Paste what an exchange returns.** An OpenRTB 2.x or 3.0 bid response, a bare `adm` (HTML, Native JSON or VAST XML) or a VAST tag URL. The input type and version are detected automatically. Parsing is lenient: wrong types become validation issues and unknown fields are kept. A no-bid response shows "No bid" with the `nbr` reason named.
 - **The exchange's part, too.** Like an exchange (OpenRTB 2.6 §4.4), the simulator substitutes its `${AUCTION_*}` / `${OPENRTB_*}` macros in the bid's inline `adm` — HTML, Native JSON or VAST XML — before the device sees it; VAST `[MACROS]` stay for the player and are filled when each tracker fires. Markup the DSP returns after the win (`nurl` response, `display.curl`) is used as delivered.
 - **Pick the bid.** Every bid across all seats is listed with its format. Optionally paste the bid request too: it resolves Native asset types, the impression size and placement, and request-side macros. The bid's impression names its ad unit: `imp.rwdd` (or `imp.ext.is_rewarded_inventory`, `imp.ext.prebid.is_rewarded_inventory`; AdCOM `placement.reward`) makes it rewarded, `imp.instl` or `video.plcmt` 3 (AdCOM `display.instl`) interstitial.
@@ -114,6 +116,23 @@ A request composer in the right panel of every window, for sending a bid request
   On every hop, 307 and 308 repeat the method and body; 303 (and 301 or 302 after a POST) continue as a GET without the body.
 - **The redirect chain.** The response's **Redirects** tab lists every request of the chain in order: method, URL, status, the `Location` it pointed to, time, the body it carried, what changed on the way (method, body, headers left behind, a downgrade to http) and why the chain ended (not followed, a loop, more than 10 hops). A loop, too many hops or a target that is not http(s) is an answer you can inspect, not an error. The request is a **Bid request** entry in the Network window, each hop a child entry with the same notes.
 
+## The Sync tab
+
+Cookie mapping (user sync) as the device's browser would run it: an SSP's sync endpoint redirects to a partner's pixel, the partner redirects back to the SSP's `setuid` URL with its user id, and each side keeps a cookie. When a match rate drops, nothing errors — this tab shows why.
+
+- **Run** (⌘↩) a start URL — the SSP's sync endpoint or a partner's pixel — on a **page** (the publisher URL: its site decides which cookies are third party, its origin is the `Referer`). The request goes out as an image pixel would, every redirect is followed, and the window's **cookie jar** is read before and filled after every hop.
+- **The browser's cookie policy** follows the simulated device, or pick one:
+  - **Third-party cookies blocked** — WebKit: Safari and every in-app web view on iPhone and iPad (the iPhone 18 Pro default). The same chain that works in Chrome stores nothing here, and the tab says so.
+  - **Third-party cookies allowed** — Chrome and Android web views: `SameSite=None; Secure` required, a cookie without `SameSite` is Lax (not sent or stored cross-site), `Partitioned` cookies (CHIPS) kept per top-level site.
+  - **Third-party cookies partitioned** — Firefox Total Cookie Protection: kept per top-level site; cookies set first party are not visible.
+- **Consent macros** in the start URL are filled from the values you give: `${GDPR}`, `${GDPR_CONSENT_<id>}`, `${GDPR_PD}`, `${ADDTL_CONSENT}`, `${US_PRIVACY}`, `${GPP_STRING_<id>}`, `${GPP_SID}` (IAB TCF "URL-based services" and GPP URL macros, URL-encoded).
+- **Every hop** shows the cookies sent, the ones withheld and why (`SameSite=Lax` on a cross-site request, third-party blocked, `Secure` over http, kept for another site), and what became of each `Set-Cookie`: stored with its attributes, or rejected with the reason (`SameSite=None` without `Secure`, Lax by default from a cross-site response, a public-suffix or mismatched `Domain`, `__Secure-` / `__Host-` rules, `Secure` from http, too large).
+- **Verdicts**: the ids passed along (`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`), placeholders a partner left unsubstituted in its own URL (`$UID`, `${UID}`, `[UID]`, `{uid}`, `{{UID}}` — a URL passed as a parameter is the next party's template and is not flagged), cookies blocked by the browser, and where the chain stopped.
+- **Run Again** reuses the jar, so a second run shows whether the mapping is stable; **Cookie Jar** lists the cookies by domain; **Clear Cookies** starts over. The jar lives in the window's memory only: it is never the Mac's browser cookies and is never written to disk.
+- Sync requests are **User sync** entries in the Network window, each hop with its cookies. They are sent in Simulated and Real mode (you pressed Run), recorded and not sent when Offline.
+
+Not modelled: a real browser's other heuristics (ITP's classification, storage-access prompts), and scripts in iframe syncs.
+
 ## The Network window
 
 Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; it shows the session of the focused main window.
@@ -143,6 +162,7 @@ Open it with **Window ▸ Network** (**⌥⌘N**). There is one Network window; 
 | `content` | What the app fetches to render the ad: VAST wrappers and tags, images, media, Native `assetsurl`, `display.curl` markup |
 | `creative` | Whatever the HTML creative loads, or tries to load |
 | `bidRequest` | A bid request you sent from the Client tab, with its method, headers and body |
+| `userSync` | A cookie-sync request from the Sync tab, with the cookies sent and set on each hop |
 
 In HAR exports the mode is `_ccinn.delivery`: `simulated`, `network` (Sent), `blocked`, `offline`, `local`, `renderer` or `browser`; `_ccinn.mode` is the session's tracking mode.
 
