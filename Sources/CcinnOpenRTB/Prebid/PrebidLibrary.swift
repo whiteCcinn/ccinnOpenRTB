@@ -39,11 +39,14 @@ final class PrebidLibrary {
         case invalidPath(String)
         /// A script that is not a file of the page's Prebid.js.
         case notPrebid(String)
+        /// The registry answered something that lists no version.
+        case unreadableRegistry
 
         var errorDescription: String? {
             switch self {
             case let .invalidPath(path): "Not a Prebid.js file: \(path.prefix(200))"
             case let .notPrebid(url): "Not a script of this Prebid.js: \(url.prefix(200))"
+            case .unreadableRegistry: "The npm registry did not list the Prebid.js versions."
             }
         }
     }
@@ -91,11 +94,21 @@ final class PrebidLibrary {
         return data
     }
 
-    /// Release dates of every version (the npm registry), for the version picker and its default.
+    /// Release dates of every version (the npm registry), for the version picker and its default. The last good answer
+    /// is kept, so the list is there Offline, or when the registry answers something else.
     func releaseDates() async throws -> [String: Date] {
-        let (data, _) = try await monitor().fetchContent(registry, category: .content, trigger: "Prebid.js versions", source: "prebid › npm registry",
-                                                         parentID: nil, userAgent: userAgent())
-        return PrebidVersions.releaseDates(fromRegistry: data) ?? [:]
+        let kept = cacheDirectory.appendingPathComponent("registry.json")
+        do {
+            let (data, _) = try await monitor().fetchContent(registry, category: .content, trigger: "Prebid.js versions",
+                                                             source: "prebid › npm registry", parentID: nil, userAgent: userAgent())
+            guard let dates = PrebidVersions.releaseDates(fromRegistry: data), !dates.isEmpty else { throw Failure.unreadableRegistry }
+            try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try? data.write(to: kept, options: .atomic)
+            return dates
+        } catch {
+            if let data = try? Data(contentsOf: kept), let dates = PrebidVersions.releaseDates(fromRegistry: data), !dates.isEmpty { return dates }
+            throw error
+        }
     }
 
     /// The bidders `version` offers (with aliases), from its aggregate module metadata.

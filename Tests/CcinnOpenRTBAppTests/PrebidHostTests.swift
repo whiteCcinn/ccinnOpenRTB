@@ -205,6 +205,27 @@ struct PrebidHostTests {
         #expect(transport.requests.isEmpty)
     }
 
+    /// The version list survives Offline (and a registry that answers nonsense): the last good answer is kept.
+    @Test func theVersionsAreKeptForOffline() async throws {
+        let transport = ScriptedTransport()
+        transport.answer("https://registry.test/prebid.js", .init(body: #"{"time":{"1.0.0":"2026-10-01T00:00:00.000Z"}}"#))
+        let monitor = NetworkMonitor(transport: transport, publishInterval: .zero)
+        let cache = TemporaryDirectory()
+        defer { cache.cleanUp() }
+        let library = PrebidLibrary(cacheDirectory: cache.url, upstreamBase: "https://cdn.test/npm/prebid.js@", registry: "https://registry.test/prebid.js",
+                                    monitor: { monitor }, userAgent: { "UA" })
+        #expect(try await library.releaseDates().keys.sorted() == ["1.0.0"])
+
+        transport.answer("https://registry.test/prebid.js", .init(status: 200, body: "<html>maintenance</html>"))
+        #expect(try await library.releaseDates().keys.sorted() == ["1.0.0"], "nonsense does not replace the list")
+        monitor.offline = true
+        #expect(try await library.releaseDates().keys.sorted() == ["1.0.0"])
+
+        let empty = PrebidLibrary(cacheDirectory: cache.url.appendingPathComponent("other"), upstreamBase: "https://cdn.test/npm/prebid.js@",
+                                  registry: "https://registry.test/prebid.js", monitor: { monitor }, userAgent: { "UA" })
+        await #expect(throws: (any Error).self) { _ = try await empty.releaseDates() }
+    }
+
     /// A version once loaded runs Offline: the cache serves it, nothing is fetched.
     @Test func aCachedVersionNeedsNoNetwork() async throws {
         let transport = ScriptedTransport()
