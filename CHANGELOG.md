@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-19
+
 ### Added
 
 - **Prebid tab — official Prebid.js:** pick any Prebid.js release from npm (by default the newest at least two weeks old), add bidders from that release's adapter catalogue (aliases and GVL ids included) with their params as JSON, ad units (banner, outstream video, native) and static consent (TCF, US Privacy, GPP), and run the auction. The page loads the official per-version loader with exactly those adapters, from jsDelivr through the window's network gate into a cache (a release once loaded also runs Offline); every chunk keeps its `integrity`, so WebKit checks Prebid's own hashes. The page is at the publisher URL you enter — Prebid's referer detection and `location` read it — and emulates the device's screen, viewport, pixel ratio and platform; bidder requests carry the browser's `Origin`, `Referer` and `Sec-Fetch-*` and the device's User-Agent, and no cookies. Results: the bids (**Render** shows one on the device as that bidder's OpenRTB 2.6 bid), a timeline of Prebid's events, the user syncs the adapters asked for (**Use in Sync Tab**), and Prebid's warnings and errors. Every bidder request is a **Bid request** entry in the Network window; any other script is refused, and a content rule list blocks every other load.
@@ -83,7 +85,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.0.0...v1.1.0

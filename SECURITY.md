@@ -6,7 +6,8 @@ Security fixes are released for the latest minor version of CcinnOpenRTB.
 
 | Version | Supported |
 |---|---|
-| 1.0.x | ✅ |
+| 1.4.x | ✅ |
+| < 1.4 | ❌ |
 
 ## Reporting a vulnerability
 
