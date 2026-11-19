@@ -40,7 +40,8 @@ enum ClientPresentation {
     static func curl(for request: ClientRequest, userAgent: String, acceptLanguage: String) throws(ClientRequest.Invalid) -> String {
         let composed = try request.composed()
         let headers = HTTPHeaders.merged(NetworkMonitor.requestHeaders(userAgent: userAgent, language: acceptLanguage), overriddenBy: composed.headers)
-        return CurlCommand.make(url: composed.url, method: composed.wireMethod, headers: headers, body: composed.wireBody)
+        return CurlCommand.make(url: composed.url, method: composed.wireMethod, headers: headers, body: composed.wireBody,
+                                followsRedirects: composed.redirects == .all)
     }
 
     /// Saved requests whose name, method or URL contain every word of `query` (case-insensitive).

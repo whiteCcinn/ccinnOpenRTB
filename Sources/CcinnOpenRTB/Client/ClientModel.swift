@@ -63,6 +63,11 @@ final class ClientModel {
     /// What happened to the simulator after the last response or Render.
     private(set) var simulatorNote: String?
     private(set) var isSaving = false
+    /// The last send was Follow All Redirects and Send: the response view opens on the chain.
+    private(set) var prefersRedirectsTab = false
+    /// The request that got `exchange` (sent, or opened with it): following its redirects is offered only while the
+    /// draft is still that request.
+    @ObservationIgnored private var exchangeDraft: ClientRequest?
 
     @ObservationIgnored let library: SavedRequestLibrary
     @ObservationIgnored private let target: any ClientSimulatorTarget
@@ -107,17 +112,25 @@ final class ClientModel {
     /// `nil` when the request cannot be sent (the reason is in `phase`).
     @discardableResult
     func send() -> Task<Void, Never>? {
+        send(redirects: nil)
+    }
+
+    /// `redirects`: a setting for this send only (Follow All Redirects and Send).
+    private func send(redirects override: RedirectPolicy?) -> Task<Void, Never>? {
         guard phase != .sending else { return nil }
-        let composed: ComposedRequest
+        var composed: ComposedRequest
         do {
             composed = try request.composed()
         } catch {
             phase = .failed(error.message)
             return nil
         }
+        if let override { composed.redirects = override }
+        prefersRedirectsTab = false
         generation &+= 1
         let token = generation
         let draft = request
+        exchangeDraft = nil
         let sentBody = request.method.sendsBody ? request.body : ""
         let device = target.device
         let monitor = target.monitor
@@ -136,7 +149,7 @@ final class ClientModel {
                 guard let self, token == self.generation else { return }
                 await self.received(ClientExchange(requestBody: sentBody, response: ClientResponse(response, receivedAt: self.now()),
                                                    deviceID: device.id),
-                                    device: device)
+                                    draft: draft, device: device)
             } catch {
                 guard let self, token == self.generation else { return }
                 self.phase = .failed(Self.message(for: error))
@@ -146,11 +159,28 @@ final class ClientModel {
         return task
     }
 
-    /// The answer was a redirect left unfollowed: follow every redirect of this request from now on, and send it again.
+    /// The answer is a redirect the request's setting left unfollowed, and the draft is still the request that got it:
+    /// following every redirect can show the rest of the chain.
+    var canFollowAllRedirects: Bool {
+        guard phase != .sending, request.redirects != .all, let exchange, exchange.response.canFollowFurther else { return false }
+        return exchangeDraft == request
+    }
+
+    /// The host the unfollowed redirect points to ("other.example").
+    var followTarget: String? {
+        guard let response = exchange?.response, let location = HTTPHeaders.value("Location", in: response.headers) else { return nil }
+        let target = URL(string: location, relativeTo: URL(string: response.url))?.absoluteURL
+        return target?.host
+    }
+
+    /// Sends the request that got the unfollowed redirect again, following every redirect — for this send only (the
+    /// request's own setting stays as it is). `nil` when following is not on offer (`canFollowAllRedirects`).
     @discardableResult
     func followAllRedirectsAndSend() -> Task<Void, Never>? {
-        request.redirects = .all
-        return send()
+        guard canFollowAllRedirects else { return nil }
+        let task = send(redirects: .all)
+        if task != nil { prefersRedirectsTab = true }
+        return task
     }
 
     /// Stops the request in flight; a response that still arrives is dropped.
@@ -162,8 +192,9 @@ final class ClientModel {
         phase = .failed("Cancelled")
     }
 
-    private func received(_ exchange: ClientExchange, device: DeviceProfile) async {
+    private func received(_ exchange: ClientExchange, draft: ClientRequest, device: DeviceProfile) async {
         self.exchange = exchange
+        exchangeDraft = draft
         exchangeOrigin = .sent
         phase = .received
         sendTask = nil
@@ -176,9 +207,10 @@ final class ClientModel {
 
     nonisolated static func leftAloneNote(for response: ClientResponse) -> String {
         if response.isSuccess { return "No bid: the response has no body. The simulator was left as it was." }
-        if response.isRedirectNotFollowed, let stop = response.redirectStop {
-            return "HTTP \(response.status): \(stop.prefix(300)). Nothing you typed went further. To inspect the whole chain, use "
-                + "Follow All Redirects and Send, or choose Redirects ▸ Follow all."
+        if let stop = response.redirectStop, (300..<400).contains(response.status) {
+            let reason = "HTTP \(response.status): " + stop.prefix(300).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            guard response.stopCanBeFollowed else { return reason + ". The chain cannot go further." }
+            return reason + ". Nothing you typed went further. Follow it to see the rest of the chain (this send only)."
         }
         return "HTTP \(response.status): the simulator was left as it was."
     }
@@ -232,6 +264,8 @@ final class ClientModel {
         name = saved.name
         savedID = saved.id
         exchange = saved.exchange
+        exchangeDraft = saved.exchange == nil ? nil : saved.request
+        prefersRedirectsTab = false
         exchangeOrigin = saved.exchange == nil ? nil : .saved
         phase = saved.exchange == nil ? .idle : .received
         sendWarning = nil
@@ -245,6 +279,8 @@ final class ClientModel {
         name = ""
         savedID = nil
         exchange = nil
+        exchangeDraft = nil
+        prefersRedirectsTab = false
         exchangeOrigin = nil
         phase = .idle
         sendWarning = nil

@@ -43,9 +43,11 @@ struct ClientResponse: Codable, Hashable, Sendable {
     var chain: [ClientRedirectHop]
     /// Why the chain ended on a redirect (not followed, a loop, too many hops).
     var redirectStop: String?
+    /// Following every redirect would take the chain further (it stopped because of the request's setting, not a dead end).
+    var stopCanBeFollowed: Bool
 
     init(status: Int, headers: [String: String], body: String, bodyBytes: Int, durationMilliseconds: Double, receivedAt: Date, url: String,
-         chain: [ClientRedirectHop] = [], redirectStop: String? = nil) {
+         chain: [ClientRedirectHop] = [], redirectStop: String? = nil, stopCanBeFollowed: Bool = false) {
         self.status = status
         self.headers = headers
         self.body = body
@@ -55,6 +57,7 @@ struct ClientResponse: Codable, Hashable, Sendable {
         self.url = url
         self.chain = chain
         self.redirectStop = redirectStop
+        self.stopCanBeFollowed = stopCanBeFollowed
     }
 
     init(_ response: ComposedResponse, receivedAt: Date) {
@@ -62,11 +65,12 @@ struct ClientResponse: Codable, Hashable, Sendable {
         self.init(status: response.status, headers: response.headers,
                   body: TextDecoding.string(from: response.body, charset: HTTPHeaders.charset(fromContentType: contentType)),
                   bodyBytes: response.body.count, durationMilliseconds: max(0, response.duration * 1000), receivedAt: receivedAt,
-                  url: response.url.absoluteString, chain: response.chain.map(ClientRedirectHop.init), redirectStop: response.redirectStop)
+                  url: response.url.absoluteString, chain: response.chain.map(ClientRedirectHop.init), redirectStop: response.redirectStop?.description,
+                  stopCanBeFollowed: response.redirectStop?.canBeFollowed ?? false)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case status, headers, body, bodyBytes, durationMilliseconds, receivedAt, url, chain, redirectStop
+        case status, headers, body, bodyBytes, durationMilliseconds, receivedAt, url, chain, redirectStop, stopCanBeFollowed
     }
 
     init(from decoder: any Decoder) throws {
@@ -78,15 +82,17 @@ struct ClientResponse: Codable, Hashable, Sendable {
         durationMilliseconds = try container.decode(Double.self, forKey: .durationMilliseconds)
         receivedAt = try container.decode(Date.self, forKey: .receivedAt)
         url = try container.decode(String.self, forKey: .url)
-        chain = try container.decodeIfPresent([ClientRedirectHop].self, forKey: .chain) ?? []
-        redirectStop = try container.decodeIfPresent(String.self, forKey: .redirectStop)
+        // Lenient: a damaged chain costs the chain, not the saved request and its response.
+        chain = (try? container.decodeIfPresent([ClientRedirectHop].self, forKey: .chain)) ?? []
+        redirectStop = try? container.decodeIfPresent(String.self, forKey: .redirectStop)
+        stopCanBeFollowed = (try? container.decodeIfPresent(Bool.self, forKey: .stopCanBeFollowed)) ?? false
     }
 
     /// Redirects that were followed (the hops sent after the request itself).
     var redirectCount: Int { max(0, chain.filter(\.wasSent).count - 1) }
 
-    /// The answer is a redirect the chain did not follow (by the setting, or because of a loop or too many hops).
-    var isRedirectNotFollowed: Bool { (300..<400).contains(status) && redirectStop != nil }
+    /// The answer is a redirect left unfollowed by the request's setting: following every redirect would go further.
+    var canFollowFurther: Bool { (300..<400).contains(status) && redirectStop != nil && stopCanBeFollowed }
 
     var mimeType: String? { HTTPHeaders.mimeType(fromContentType: HTTPHeaders.value("Content-Type", in: headers)) }
 

@@ -364,8 +364,16 @@ private struct ClientExchangeView: View {
     let client: ClientModel
     let session: AdSession
     let exchange: ClientExchange
-    @State private var tab: Tab = .body
+    @State private var tab: Tab
     @State private var shownBody = ""
+
+    init(client: ClientModel, session: AdSession, exchange: ClientExchange) {
+        self.client = client
+        self.session = session
+        self.exchange = exchange
+        let followed = client.prefersRedirectsTab && (exchange.response.chain.count > 1 || exchange.response.redirectStop != nil)
+        _tab = State(initialValue: followed ? .redirects : .body)
+    }
 
     /// A chain worth showing: redirects followed, or one that ended on a redirect.
     private var showsChain: Bool { exchange.response.chain.count > 1 || exchange.response.redirectStop != nil }
@@ -459,7 +467,8 @@ struct ClientRedirectChainView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(response.chain.enumerated()), id: \.offset) { index, hop in
-                    ClientRedirectHopRow(index: index, hop: hop, isAnswer: hop.wasSent && index == response.chain.lastIndex(where: \.wasSent))
+                    ClientRedirectHopRow(index: index, hop: hop, isAnswer: hop.wasSent && index == response.chain.lastIndex(where: \.wasSent),
+                                         stop: response.redirectStop)
                 }
                 if let stop = response.redirectStop {
                     Label(stop, systemImage: "hand.raised").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
@@ -475,6 +484,14 @@ private struct ClientRedirectHopRow: View {
     let index: Int
     let hop: ClientRedirectHop
     let isAnswer: Bool
+    /// Shown once, under the chain: left out of the hop's own notes.
+    let stop: String?
+
+    private var lines: [String] {
+        let notes = (hop.note ?? "").components(separatedBy: " · ").filter { !$0.isEmpty && $0 != stop }
+        let failure = hop.failure.flatMap { $0 == stop || stop.map($0.hasPrefix) == true ? nil : $0 }
+        return notes + [failure].compactMap { $0 }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -484,12 +501,12 @@ private struct ClientRedirectHopRow: View {
                 if let status = hop.status {
                     Badge(text: ClientPresentation.statusText(status), color: ClientPresentation.statusTone(status).color)
                 } else {
-                    Badge(text: hop.wasSent ? "failed" : "not sent", color: .orange)
+                    Badge(text: "not sent", color: .orange)
                 }
                 if let milliseconds = hop.durationMilliseconds, hop.wasSent {
                     Text(Format.duration(milliseconds: milliseconds)).monospacedDigit().foregroundStyle(.secondary)
                 }
-                if let bytes = hop.bodyBytes { Text("body \(Format.bytes(bytes))").foregroundStyle(.secondary) }
+                if hop.wasSent, let bytes = hop.bodyBytes { Text("body \(Format.bytes(bytes))").foregroundStyle(.secondary) }
                 if isAnswer { Badge(text: "answer", color: .green) }
             }
             Text(hop.url).font(Theme.monospacedSmall).textSelection(.enabled).lineLimit(3).padding(.leading, 24)
@@ -497,7 +514,7 @@ private struct ClientRedirectHopRow: View {
                 Label(location, systemImage: "arrow.turn.down.right").font(Theme.monospacedSmall).foregroundStyle(.secondary)
                     .textSelection(.enabled).lineLimit(3).padding(.leading, 24)
             }
-            ForEach(Array([hop.note, hop.failure].compactMap { $0 }.enumerated()), id: \.offset) { _, line in
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Text(line).font(.caption).foregroundStyle(line.contains("unencrypted") || line == hop.failure ? .orange : .secondary)
                     .padding(.leading, 24)
             }
@@ -517,10 +534,11 @@ private struct ClientSimulatorLine: View {
             if let note = client.simulatorNote {
                 Image(systemName: "info.circle")
                 Text(note)
-                if exchange.response.isRedirectNotFollowed, client.request.redirects != .all, !client.isSending {
-                    Button("Follow All Redirects and Send") { client.followAllRedirectsAndSend() }
+                if client.canFollowAllRedirects {
+                    Button(client.followTarget.map { "Follow to \($0) and Send" } ?? "Follow All Redirects and Send") { client.followAllRedirectsAndSend() }
                         .controlSize(.small)
-                        .help("Set Redirects to Follow all for this request and send it again, to see the whole chain")
+                        .help("Send this request again, following every redirect for this send only: its body and headers (but Authorization, "
+                            + "Proxy-Authorization and Cookie) go to \(client.followTarget ?? "the other origin") too. The request’s Redirects setting stays as it is.")
                 }
             } else if session.responseText == exchange.response.body {
                 Image(systemName: "iphone.gen3")

@@ -477,7 +477,8 @@ struct ComposedRedirectPolicyTests {
         #expect(transport.requests.count == 1)
         #expect(response.chain.map(\.status) == [302])
         #expect(response.chain.first?.location == "/v2/auction")
-        #expect(response.redirectStop?.contains("not followed") == true)
+        #expect(response.redirectStop == .notFollowed(.none, location: "/v2/auction"))
+        #expect(response.redirectStop?.canBeFollowed == true)
     }
 
     /// Follow all: like `curl -L`, across origins; the standard credentials stay behind and the hop says so, other headers
@@ -537,7 +538,8 @@ struct ComposedRedirectPolicyTests {
 
         #expect(response.status == 307)
         #expect(transport.requests.count == 2)
-        #expect(response.redirectStop?.lowercased().contains("loop") == true)
+        #expect(response.redirectStop == .loop(endpoint))
+        #expect(response.redirectStop?.canBeFollowed == false)
         #expect(response.chain.map(\.wasSent) == [true, true, false])
         #expect(response.chain.last?.url == endpoint)
         #expect(response.chain.last?.failure != nil)
@@ -554,7 +556,7 @@ struct ComposedRedirectPolicyTests {
 
         #expect(transport.requests.count == NetworkMonitor.maxRedirects + 1)
         #expect(response.status == 307)
-        #expect(response.redirectStop?.contains("Too many redirects") == true)
+        #expect(response.redirectStop == .tooManyRedirects(limit: NetworkMonitor.maxRedirects))
         #expect(response.chain.count == NetworkMonitor.maxRedirects + 2)
         #expect(response.chain.filter(\.wasSent).count == NetworkMonitor.maxRedirects + 1)
     }
@@ -571,6 +573,93 @@ struct ComposedRedirectPolicyTests {
         #expect(transport.requests.count == 2)
         #expect(response.status == 307)
         #expect(response.chain.map(\.status) == [307, 307])
-        #expect(response.redirectStop?.contains("another origin") == true)
+        #expect(response.redirectStop == .notFollowed(.sameOrigin, location: "https://other.example/v3"))
+    }
+
+    /// A target that is not http(s) is a dead end whatever the setting — never "another origin" that Follow all could fix.
+    @Test(arguments: [RedirectPolicy.sameOrigin, .all])
+    func aNonHTTPTargetIsAStructuralStop(policy: RedirectPolicy) async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "itms-apps://apps.apple.com/app/id1", status: 302)
+        let monitor = makeMonitor(transport: transport)
+
+        let response = try await send(monitor, policy)
+
+        #expect(response.redirectStop == .unsupportedScheme("itms-apps://apps.apple.com/app/id1"))
+        #expect(response.redirectStop?.canBeFollowed == false)
+        #expect(transport.requests.count == 1)
+    }
+
+    /// Credentials left behind stay behind, even when the chain comes back to the first origin (any header-name case).
+    @Test func credentialsDoNotComeBackWhenTheChainReturns() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "https://other.example/hop", status: 307)
+        transport.redirect("https://other.example/hop", to: "https://ssp.example/final", status: 307)
+        transport.respond("https://ssp.example/final", body: "{}")
+        let monitor = makeMonitor(transport: transport)
+
+        _ = try await send(monitor, .all, headers: ["content-type": "application/json", "authorization": "Bearer t", "cookie": "s=1"])
+
+        #expect(transport.requests.count == 3)
+        #expect(transport.requests.dropFirst().allSatisfy { headerValues("Authorization", in: $0.headers).isEmpty && headerValues("Cookie", in: $0.headers).isEmpty })
+    }
+
+    /// A body cut at the limit is never an answer, on a redirect that ends the chain either.
+    @Test func aTruncatedRedirectBodyFails() async throws {
+        let transport = FakeTransport()
+        transport.respond(endpoint, status: 302, headers: ["Location": "https://other.example/"], body: String(repeating: "x", count: 64))
+        let monitor = makeMonitor(transport: transport)
+        monitor.composedBodyLimit = 16
+
+        await #expect(throws: NetworkMonitorError.tooLarge(limit: 16)) { try await send(monitor, .sameOrigin) }
+    }
+
+    /// Going Offline in the middle of a followed chain stops it before the next hop.
+    @Test func goingOfflineMidChainStopsTheNextHop() async throws {
+        let transport = FakeTransport()
+        transport.redirect(endpoint, to: "https://other.example/hop", status: 307)
+        transport.respond("https://other.example/hop", body: "{}", delay: .seconds(5))
+        let monitor = makeMonitor(transport: transport)
+
+        let sending = Task { try await send(monitor, .all) }
+        for _ in 0..<2_000 where transport.requests.count < 2 { try await Task.sleep(for: .milliseconds(5)) }
+        monitor.offline = true
+
+        await #expect(throws: NetworkMonitorError.cancelled(NetworkMonitor.offlineCancellation)) { try await sending.value }
+    }
+}
+
+
+/// The redirect rework must leave every other load as it was.
+@MainActor
+@Suite("Network monitor: redirects of other loads")
+struct OtherLoadRedirectTests {
+    @Test func contentLoopsAndLongChainsStillThrow() async throws {
+        let transport = FakeTransport()
+        transport.redirect("https://cdn.example/a", to: "https://cdn.example/b")
+        transport.redirect("https://cdn.example/b", to: "https://cdn.example/a")
+        let monitor = makeMonitor(transport: transport)
+        await #expect(throws: NetworkMonitorError.redirectLoop("https://cdn.example/a")) {
+            _ = try await monitor.fetchContent("https://cdn.example/a", trigger: "t", source: "s", parentID: nil, userAgent: deviceUA)
+        }
+    }
+
+    /// Hop notes about method, body, credentials and downgrades are for composed requests; a tracker's hop keeps its own.
+    @Test func trackerHopsKeepTheirNotes() async throws {
+        let transport = FakeTransport()
+        transport.redirect("https://dsp.example/win", to: "http://cdn.example/px", status: 302)
+        transport.respond("http://cdn.example/px", body: "")
+        let monitor = makeMonitor(transport: transport)
+        monitor.mode = .real
+
+        monitor.dispatch(tracker(.win, "https://dsp.example/win"), userAgent: deviceUA)
+        await monitor.waitUntilIdle()
+
+        #expect(monitor.liveEntries.last?.note == "Redirect hop 1")
+    }
+
+    @Test func curlFollowsRedirectsWhenAsked() {
+        #expect(CurlCommand.make(url: endpoint, followsRedirects: true).contains("--location --max-redirs 10"))
+        #expect(!CurlCommand.make(url: endpoint).contains("--location"))
     }
 }

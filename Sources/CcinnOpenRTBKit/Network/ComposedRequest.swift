@@ -51,6 +51,36 @@ public struct ComposedRequest: Sendable, Hashable {
     }
 }
 
+/// Why a composed request's chain ended on a redirect.
+public enum RedirectStop: Sendable, Hashable, CustomStringConvertible {
+    /// The request's setting did not follow it: `.none`, or `.sameOrigin` with a target on another origin. Following all
+    /// redirects would continue the chain.
+    case notFollowed(RedirectPolicy, location: String)
+    /// The next request was already made (same method and URL).
+    case loop(String)
+    case tooManyRedirects(limit: Int)
+    case invalidLocation(String)
+    /// The target is not http(s) (an app link, `data:` …).
+    case unsupportedScheme(String)
+
+    /// Whether following every redirect would take the chain further.
+    public var canBeFollowed: Bool {
+        if case .notFollowed = self { return true }
+        return false
+    }
+
+    public var description: String {
+        switch self {
+        case let .notFollowed(.sameOrigin, location): "Redirect to another origin not followed: \(location.prefix(300))"
+        case let .notFollowed(_, location): "Redirect not followed (Redirects: don’t follow): \(location.prefix(300))"
+        case let .loop(url): "Redirect loop: \(url.prefix(300)) was already requested"
+        case let .tooManyRedirects(limit): "Too many redirects (limit \(limit))"
+        case let .invalidLocation(location): "Invalid Location: \(location.prefix(300))"
+        case let .unsupportedScheme(url): "Redirect not followed: \(url.prefix(300)) is not an http(s) URL"
+        }
+    }
+}
+
 /// One request of a composed request's chain: the request itself, then each redirect hop, as recorded.
 public struct ComposedHop: Sendable, Hashable {
     public var entryID: UUID
@@ -101,11 +131,11 @@ public struct ComposedResponse: Sendable, Hashable {
     public var timings: HTTPTimings?
     /// Every request of the chain in order: the request itself, each redirect hop, and a hop that was not sent.
     public var chain: [ComposedHop]
-    /// Why the chain ended on a redirect (not followed by the policy, a loop, too many hops); `nil` when it was answered.
-    public var redirectStop: String?
+    /// Why the chain ended on a redirect (not followed by the setting, a loop, too many hops); `nil` when it was answered.
+    public var redirectStop: RedirectStop?
 
     public init(status: Int, headers: [String: String], body: Data, url: URL, entryID: UUID, responseEntryID: UUID, duration: TimeInterval,
-                timings: HTTPTimings?, chain: [ComposedHop] = [], redirectStop: String? = nil) {
+                timings: HTTPTimings?, chain: [ComposedHop] = [], redirectStop: RedirectStop? = nil) {
         self.status = status
         self.headers = headers
         self.body = body

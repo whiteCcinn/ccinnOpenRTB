@@ -85,6 +85,8 @@ public final class NetworkMonitor {
     @ObservationIgnored private var mediaRouterStorage: MediaRouter?
     /// The size of each byte-range request for progressive media (tests make it small).
     @ObservationIgnored var mediaChunkBytes = NetworkMonitor.defaultMediaChunkBytes
+    /// The largest answer a composed request takes (tests make it small).
+    @ObservationIgnored var composedBodyLimit = NetworkMonitor.maxContentBytes
     @ObservationIgnored private let publishInterval: Duration
     @ObservationIgnored private var publishScheduled = false
     @ObservationIgnored private var dirty = false
@@ -225,10 +227,10 @@ public final class NetworkMonitor {
     /// Sends a request the user composed (the Client tab), recorded as a `.bidRequest` root entry with its method, headers
     /// and body. It is no tracker: sent in Simulated and Real mode, recorded and not sent when Offline (`offline`), and
     /// only Offline, `clear()` or the caller's cancellation stop it. Only `http(s)` URLs with a host are sent. The user's
-    /// headers replace the monitor's own whatever their case; GET and HEAD carry no body. Redirects within the origin are
-    /// followed by hand (`RedirectRule`); one to another origin (host, scheme or port) is the result, not followed, so
-    /// nothing the user typed (custom credentials, the request's personal data) goes anywhere they did not enter and https
-    /// is never downgraded. Any final status is a result; a transport failure, a timeout, a body over `maxContentBytes` or a
+    /// headers replace the monitor's own whatever their case; GET and HEAD carry no body. Redirects are followed by hand
+    /// as `request.redirects` says (`RedirectRule` for each hop: credentials never cross origins, a downgrade to http is
+    /// noted); a redirect not followed, a loop, too many hops or a target that is not http(s) ends the chain with the 3xx
+    /// as the answer and `redirectStop` saying why. Any final status is a result; a transport failure, a timeout, a body over `maxContentBytes` or a
     /// cancellation throws a `NetworkMonitorError`.
     public func send(_ request: ComposedRequest, userAgent: String) async throws -> ComposedResponse {
         let method = request.wireMethod
@@ -264,8 +266,8 @@ public final class NetworkMonitor {
         case let .send(permit):
             record.delivery = .network
             let stored = appendComposed(record, body: body)
-            let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: Self.maxContentBytes,
-                                failOnTruncation: true, acceptsAnyStatus: true, redirects: request.redirects)
+            let spec = LoadSpec(userAgent: userAgent, headers: request.headers, method: method, body: body, maxBodyBytes: composedBodyLimit,
+                                failOnTruncation: true, acceptsAnyStatus: true, redirects: request.redirects, annotatesRedirects: true)
             let task = startLoad(stored, permit: permit, spec: spec)
             let loaded = try await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }.get()
             return ComposedResponse(status: loaded.status, headers: loaded.headers, body: loaded.body, url: loaded.url ?? requestURL, entryID: stored.id,
@@ -590,49 +592,64 @@ public final class NetworkMonitor {
                 let next = URL(string: location, relativeTo: requestURL)?.absoluteURL ?? URLText.requestURL(location)
                 let nextURL = next?.absoluteString ?? location
                 let nextScheme = URLText.scheme(nextURL)
-                let policyStop: String? = switch spec.redirects {
-                case .none: "Redirect not followed (Redirects: don't follow): \(String(location.prefix(300)))"
-                case .sameOrigin where next.map({ !RedirectRule.sameOrigin(requestURL, $0) }) ?? false:
-                    "Redirect to another origin not followed: \(String(location.prefix(300)))"
-                case .all, .sameOrigin: nil
-                }
-                if let policyStop {
-                    // The 3xx is the answer: the user sees where it points and decides whether to follow.
-                    update(currentID) { $0.note = Self.joined($0.note, policyStop) }
-                    return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
-                                                   entryID: currentID, truncated: response.truncated, redirectStop: policyStop))
-                }
                 let nextRequest = next.map { RedirectRule.next(after: hopRequest, status: response.status, from: requestURL, to: $0) } ?? hopRequest
+                // Dead ends whatever the setting, then the setting, then loops and the hop limit.
+                let deadEnd: RedirectStop? = if next == nil {
+                    .invalidLocation(location)
+                } else if nextScheme != "http", nextScheme != "https" {
+                    .unsupportedScheme(nextURL)
+                } else {
+                    nil
+                }
+                let notFollowed: RedirectStop? = if deadEnd == nil, let next {
+                    switch spec.redirects {
+                    case .none: .notFollowed(.none, location: location)
+                    case .sameOrigin where !RedirectRule.sameOrigin(requestURL, next): .notFollowed(.sameOrigin, location: location)
+                    case .all, .sameOrigin: nil
+                    }
+                } else {
+                    nil
+                }
+                if let notFollowed {
+                    // The 3xx is the answer: the user sees where it points and decides whether to follow.
+                    if response.truncated, spec.failOnTruncation { return truncated(currentID, limit: maxBodyBytes) }
+                    update(currentID) { $0.note = Self.joined($0.note, notFollowed.description) }
+                    return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
+                                                   entryID: currentID, truncated: response.truncated, redirectStop: notFollowed))
+                }
                 var hop = NetworkEntry(parentID: root.id, sequence: 0, startedAt: clock.now(), category: root.category, trigger: root.trigger,
                                        source: root.source + " › redirect \(hops + 1)", template: location, url: nextURL,
                                        method: nextRequest.method, state: .pending, isScript: root.isScript,
                                        requestHeaders: requestHeaders(userAgent: userAgent), redirectLocation: location, delivery: .network,
                                        sessionMode: mode, requestBodyBytes: nextRequest.body?.count)
-                let stop: NetworkMonitorError? = if next == nil {
-                    .invalidURL(location)
+                let stop: RedirectStop? = if let deadEnd {
+                    deadEnd
                 } else if hops >= Self.maxRedirects {
                     .tooManyRedirects(limit: Self.maxRedirects)
                 } else if visited.contains(Self.visitKey(method: nextRequest.method, url: nextURL)) {
-                    .redirectLoop(nextURL)
-                } else if nextScheme != "http", nextScheme != "https" {
-                    .redirectNotFollowed(nextURL)
+                    .loop(nextURL)
                 } else {
                     nil
                 }
                 if let stop {
-                    hop.state = .failed(stop.errorDescription ?? "Not followed")
+                    let error = Self.monitorError(stop)
+                    hop.state = .failed(error.errorDescription ?? "Not followed")
                     hop.delivery = .simulated
                     hop.requestHeaders = [:]
+                    hop.requestBodyBytes = nil
                     hop.finishedAt = hop.startedAt
                     hop.note = "Not sent"
                     append(hop)
                     // A load that takes any answer (a composed request) ends on its last 3xx, with why: inspectable.
-                    guard spec.acceptsAnyStatus else { return .failure(stop) }
+                    guard spec.acceptsAnyStatus else { return .failure(error) }
+                    if response.truncated, spec.failOnTruncation { return truncated(currentID, limit: maxBodyBytes) }
                     return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
-                                                   entryID: currentID, truncated: response.truncated, redirectStop: stop.errorDescription))
+                                                   entryID: currentID, truncated: response.truncated, redirectStop: stop))
                 }
                 hops += 1
-                let changes = next.map { RedirectRule.changes(from: hopRequest, to: nextRequest, status: response.status, from: requestURL, to: $0) } ?? []
+                let changes = spec.annotatesRedirects
+                    ? next.map { RedirectRule.changes(from: hopRequest, to: nextRequest, status: response.status, from: requestURL, to: $0) } ?? []
+                    : []
                 hop.note = (["Redirect hop \(hops)"] + changes).joined(separator: " · ")
                 hop.requestHeaders = HTTPHeaders.merged(requestHeaders(userAgent: userAgent), overriddenBy: nextRequest.headers)
                 currentID = append(hop).id
@@ -643,16 +660,30 @@ public final class NetworkMonitor {
                 continue
             }
 
-            if response.truncated, spec.failOnTruncation {
-                let error = NetworkMonitorError.tooLarge(limit: maxBodyBytes)
-                update(currentID) { $0.state = .failed(error.errorDescription ?? "Too large") }
-                return .failure(error)
-            }
+            if response.truncated, spec.failOnTruncation { return truncated(currentID, limit: maxBodyBytes) }
             guard spec.acceptsAnyStatus || (200..<300).contains(response.status) else {
                 return .failure(.httpStatus(response.status, entryID: currentID))
             }
             return .success(LoadedResponse(body: response.body, status: response.status, headers: response.headers, url: requestURL,
                                            entryID: currentID, truncated: response.truncated))
+        }
+    }
+
+    /// The answer was longer than the load takes: its entry fails as too large.
+    private func truncated(_ id: UUID, limit: Int) -> Result<LoadedResponse, NetworkMonitorError> {
+        let error = NetworkMonitorError.tooLarge(limit: limit)
+        update(id) { $0.state = .failed(error.errorDescription ?? "Too large") }
+        return .failure(error)
+    }
+
+    /// The error a load that does not take a 3xx as its answer fails with.
+    nonisolated static func monitorError(_ stop: RedirectStop) -> NetworkMonitorError {
+        switch stop {
+        case let .invalidLocation(location): .invalidURL(location)
+        case let .unsupportedScheme(url): .redirectNotFollowed(url)
+        case let .tooManyRedirects(limit): .tooManyRedirects(limit: limit)
+        case let .loop(url): .redirectLoop(url)
+        case let .notFollowed(_, location): .redirectNotFollowed(location)
         }
     }
 
@@ -899,6 +930,8 @@ struct LoadSpec: Sendable {
     var acceptsAnyStatus = false
     /// Which redirects the load follows; one it does not follow ends the load with the 3xx as its result.
     var redirects: RedirectPolicy = .all
+    /// Hop notes say what changed on the way (method, body, credentials, a downgrade): composed requests only.
+    var annotatesRedirects = false
 }
 
 /// What a load produced: the response of its final hop.
@@ -913,7 +946,7 @@ struct LoadedResponse: Sendable {
     /// The body was cut at the request's `maxBodyBytes`.
     var truncated = false
     /// Why the load ended on a redirect instead of following it.
-    var redirectStop: String?
+    var redirectStop: RedirectStop?
 }
 
 /// One load in progress.

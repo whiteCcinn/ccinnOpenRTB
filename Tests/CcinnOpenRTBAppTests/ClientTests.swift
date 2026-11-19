@@ -1053,12 +1053,56 @@ struct ClientRedirectTests {
     }
 
     @Test func aRedirectNotFollowedSaysWhyAndHowToFollowIt() {
+        let stop = RedirectStop.notFollowed(.sameOrigin, location: "https://other.example/a")
         let response = ClientResponse(status: 307, headers: ["Location": "https://other.example/a"], body: "", bodyBytes: 0, durationMilliseconds: 1,
-                                      receivedAt: Date(), url: endpoint, redirectStop: "Redirect to another origin not followed: https://other.example/a")
+                                      receivedAt: Date(), url: endpoint, redirectStop: stop.description, stopCanBeFollowed: stop.canBeFollowed)
         let note = ClientModel.leftAloneNote(for: response)
         #expect(note.contains("another origin"))
-        #expect(note.contains("Follow All Redirects"))
-        #expect(response.isRedirectNotFollowed)
+        #expect(note.contains("Follow"))
+        #expect(!note.contains(".."))
+        #expect(response.canFollowFurther)
+    }
+
+    /// A loop (or too many hops, a target that is not http) cannot be fixed by following more: no such advice.
+    @Test func aDeadEndOffersNoFollowing() {
+        let stop = RedirectStop.loop(endpoint)
+        let response = ClientResponse(status: 307, headers: [:], body: "", bodyBytes: 0, durationMilliseconds: 1, receivedAt: Date(), url: endpoint,
+                                      redirectStop: stop.description, stopCanBeFollowed: stop.canBeFollowed)
+        let note = ClientModel.leftAloneNote(for: response)
+        #expect(note.contains("loop"))
+        #expect(!note.contains("Follow"))
+        #expect(!note.contains(".."))
+        #expect(!response.canFollowFurther)
+    }
+
+    /// A newer build's setting, or a hand-edited file: the saved request still opens, with the safe default.
+    @Test func unknownValuesFallBackInsteadOfLosingTheRequest() throws {
+        let request = #"{"method":"POST","url":"https://ssp.example/a","headers":[],"body":"{}","redirects":"teleport"}"#
+        #expect(try JSONDecoder().decode(ClientRequest.self, from: Data(request.utf8)).redirects == .sameOrigin)
+        let response = #"{"status":200,"headers":{},"body":"{}","bodyBytes":2,"durationMilliseconds":5,"receivedAt":0,"url":"https://a.example/","chain":[{"bad":1}]}"#
+        #expect(try JSONDecoder().decode(ClientResponse.self, from: Data(response.utf8)).chain.isEmpty)
+        let defaults = try #require(UserDefaults(suiteName: "ccinn.test.\(UUID().uuidString)"))
+        defaults.set("teleport", forKey: NetworkPreferences.clientRedirectsKey)
+        #expect(NetworkPreferences.clientRedirects(in: defaults) == .sameOrigin)
+    }
+
+    /// The stop and whether it can be followed survive the saved-request file format.
+    @Test func theStopSurvivesTheSavedFile() throws {
+        let stop = RedirectStop.notFollowed(.sameOrigin, location: "https://other.example/a")
+        let response = ClientResponse(status: 307, headers: [:], body: "", bodyBytes: 0, durationMilliseconds: 1, receivedAt: Date(timeIntervalSince1970: 1),
+                                      url: endpoint, redirectStop: stop.description, stopCanBeFollowed: true)
+        let saved = SavedRequest(id: UUID(), name: "x", createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 1), request: request(),
+                                 exchange: ClientExchange(requestBody: "", response: response, deviceID: nil))
+        let decoded = try SavedRequestCoding.decoder().decode(SavedRequest.self, from: SavedRequestCoding.encoder().encode(saved))
+        #expect(decoded.exchange?.response.redirectStop == stop.description)
+        #expect(decoded.exchange?.response.canFollowFurther == true)
+    }
+
+    @Test func copyAsCurlFollowsWhenTheRequestDoes() throws {
+        var all = request()
+        all.redirects = .all
+        #expect(try ClientPresentation.curl(for: all, userAgent: "UA", acceptLanguage: "en").contains("--location"))
+        #expect(try !ClientPresentation.curl(for: request(), userAgent: "UA", acceptLanguage: "en").contains("--location"))
     }
 }
 
@@ -1092,15 +1136,40 @@ struct ClientRedirectModelTests {
 
         await model.send()?.value
         #expect(model.exchange?.response.status == 307)
-        #expect(model.exchange?.response.isRedirectNotFollowed == true)
+        #expect(model.exchange?.response.canFollowFurther == true)
+        #expect(model.canFollowAllRedirects)
+        #expect(model.followTarget == "other.example")
         #expect(target.loads.isEmpty)
 
         await model.followAllRedirectsAndSend()?.value
 
-        #expect(model.request.redirects == .all)
+        // Followed for that send only: the request's own setting is unchanged.
+        #expect(model.request.redirects == .sameOrigin)
+        #expect(model.prefersRedirectsTab)
         #expect(model.exchange?.response.status == 200)
         #expect(model.exchange?.response.redirectCount == 1)
         #expect(model.exchange?.response.chain.map(\.url) == [endpoint, "https://other.example/auction"])
         #expect(target.loads.count == 1)
+        #expect(!model.canFollowAllRedirects)
+    }
+
+    /// The button follows the request that got the answer: once the draft is edited, it is gone.
+    @Test func editingTheDraftWithdrawsFollowing() async throws {
+        let transport = ScriptedTransport()
+        transport.answer(endpoint, .init(status: 307, headers: ["Location": "https://other.example/auction"]))
+        let target = RecordingSimulatorTarget(monitor: NetworkMonitor(transport: transport, publishInterval: .zero))
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let model = ClientModel(target: target, library: SavedRequestLibrary(store: SavedRequestStore(directory: directory.url)),
+                                defaultRedirects: { .sameOrigin })
+        model.request = request()
+        await model.send()?.value
+        #expect(model.canFollowAllRedirects)
+
+        model.request.headers.append(ClientHeader(name: "X-Internal-Token", value: "t"))
+
+        #expect(!model.canFollowAllRedirects)
+        #expect(model.followAllRedirectsAndSend() == nil)
+        #expect(transport.requests.count == 1)
     }
 }

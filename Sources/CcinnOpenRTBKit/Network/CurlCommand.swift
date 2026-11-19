@@ -13,8 +13,11 @@ import Foundation
 ///   file. Single quoted with its newlines and tabs; other control characters become JSON `\u00XX` escapes
 ///   (`bodyArgument`).
 public enum CurlCommand {
-    public static func make(url: String, method: String = "GET", headers: [String: String] = [:], body: Data? = nil) -> String {
+    /// `followsRedirects`: `--location --max-redirs 10`, as a request that follows every redirect (the monitor's limit).
+    public static func make(url: String, method: String = "GET", headers: [String: String] = [:], body: Data? = nil,
+                            followsRedirects: Bool = false) -> String {
         var parts = ["curl", "--globoff"]
+        if followsRedirects { parts += ["--location", "--max-redirs", "10"] }
         let verb = method.uppercased()
         let impliedVerb = body == nil ? "GET" : "POST"
         if verb != impliedVerb, !verb.isEmpty { parts += ["-X", quote(verb)] }

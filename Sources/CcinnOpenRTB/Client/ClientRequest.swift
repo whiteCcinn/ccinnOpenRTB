@@ -62,7 +62,8 @@ struct ClientRequest: Codable, Hashable, Sendable {
         url = try container.decode(String.self, forKey: .url)
         body = try container.decode(String.self, forKey: .body)
         // Requests saved by 1.1.0 have no setting: they keep its behaviour.
-        redirects = try container.decodeIfPresent(RedirectPolicy.self, forKey: .redirects) ?? .sameOrigin
+        // Unknown (a newer build, a hand-edited file): the restrictive default, never a lost request.
+        redirects = (try? container.decodeIfPresent(RedirectPolicy.self, forKey: .redirects)) ?? .sameOrigin
         var seen: Set<UUID> = []
         headers = try container.decode([ClientHeader].self, forKey: .headers).map { header in
             var header = header
