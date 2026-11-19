@@ -121,13 +121,18 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 按设备浏览器的方式运行 Cookie 映射（用户同步）：SSP 的同步端点重定向到合作方的像素，合作方带着自己的用户 id 重定向回 SSP 的 `setuid` URL，双方各自保存一个 Cookie。匹配率下降时并不会报错——这个标签页告诉你原因。
 
 - 在一个**页面**（发布方 URL：它的站点决定哪些 Cookie 属于第三方，它的源作为 `Referer`）上 **Run**（⌘↩）一个起始 URL——SSP 的同步端点或合作方的像素。请求以图片像素的方式发出，跟随每一次重定向，并在每一跳之前读取、之后写入该窗口的 **Cookie 罐**。
-- **浏览器的 Cookie 策略**跟随所模拟的设备，也可以手动选择：
-  - **Third-party cookies blocked**——WebKit：Safari 以及 iPhone 和 iPad 上的所有应用内 Web 视图（iPhone 18 Pro 的默认值）。在 Chrome 中能成功的同一条链路在这里什么也存不下，标签页会说明这一点。
-  - **Third-party cookies allowed**——Chrome 与 Android Web 视图：需要 `SameSite=None; Secure`，没有 `SameSite` 的 Cookie 视为 Lax（跨站时既不发送也不保存），`Partitioned` Cookie（CHIPS）按顶级站点分区保存。
-  - **Third-party cookies partitioned**——Firefox 全面 Cookie 保护：按顶级站点分区保存；第一方设置的 Cookie 不可见。
+- **浏览器**跟随所模拟的设备（iPhone 与 iPad 上为 Safari，Android 上为 Chrome，CTV 上为电视应用），也可以手动选择；它同时决定第三方 Cookie 策略*以及*合作方看到的 User-Agent：
+  - **Safari** 与 **iOS app web view**——WebKit 拦截第三方 Cookie：在 Chrome 中能成功的同一条链路在这里什么也存不下，标签页会说明这一点。
+  - **Chrome on Android**——需要 `SameSite=None; Secure`，没有 `SameSite` 的 Cookie 视为 Lax（跨站时既不保存也不发送），`Partitioned` Cookie（CHIPS）按顶级站点分区保存。
+  - **Android app WebView**——除非应用开启 `acceptThirdPartyCookies`，否则第三方 Cookie 处于关闭状态。
+  - **Firefox**——全面 Cookie 保护：按顶级站点分区保存；第一方设置的 Cookie 不可见。
+  - **TV app**——没有与网页共享的浏览器 Cookie 罐。
+
+  一个 Cookie 罐只属于一个浏览器：切换浏览器会从空罐开始。
 - 起始 URL 中的**同意宏**会用你提供的值填充：`${GDPR}`、`${GDPR_CONSENT_<id>}`、`${GDPR_PD}`、`${ADDTL_CONSENT}`、`${US_PRIVACY}`、`${GPP_STRING_<id>}`、`${GPP_SID}`（IAB TCF“基于 URL 的服务”宏与 GPP URL 宏，经 URL 编码）。
 - **每一跳**都会显示发送了哪些 Cookie、哪些没有发送及原因（跨站请求上的 `SameSite=Lax`、第三方被拦截、http 上的 `Secure`、属于其他站点），以及每个 `Set-Cookie` 的结果：连同属性一起保存，或被拒绝并给出原因（没有 `Secure` 的 `SameSite=None`、跨站响应中默认的 Lax、公共后缀或不匹配的 `Domain`、`__Secure-` / `__Host-` 规则、来自 http 的 `Secure`、过大）。
-- **结论**：链路中传递的 id（`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`）、合作方在自己的 URL 中未替换的占位符（`$UID`、`${UID}`、`[UID]`、`{uid}`、`{{UID}}`——作为参数传递的 URL 是下一方的模板，不会被标记）、被浏览器拦截的 Cookie，以及链路在哪里停止。
+- **结论**：链路中传递的 id（`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`）、“无 id”应答（`uid=0`、`undefined` ……：该用户没有 Cookie，或已选择退出）、合作方在自己的 URL 中未替换的占位符（`$UID`、`${UID}`、`[UID]`、`{uid}`、`{{.UID}}`——未替换的 id 占位符会导致匹配丢失；作为参数传递的 URL，例如 `redir=…` 或 AppNexus 式的 `getuid?<url>`，是下一方的模板，不会被标记）、被浏览器拦截的 Cookie、链路在哪里停止，以及——对于失败的运行——失败之前发生了什么。
+- Cookie 罐遵循浏览器的存储模型：同名的仅主机 Cookie 与带 `Domain` 的 Cookie 是两个 Cookie（都会发送），http 响应不能替换 `Secure` Cookie，过期时间最长 400 天，每个域名最多 180 个 Cookie，含控制字符的 `Set-Cookie` 会被忽略。`Referer` 为页面的源，降级到 http 时不发送。
 - **Run Again** 会复用 Cookie 罐，第二次运行即可看出映射是否稳定；**Cookie Jar** 按域名列出 Cookie；**Clear Cookies** 从头开始。Cookie 罐只存在于该窗口的内存中：绝不是 Mac 浏览器的 Cookie，也绝不写入磁盘。
 - 同步请求在 Network 窗口中是 **User sync** 记录，每一跳都带有其 Cookie。它们在模拟模式与真实模式下都会发出（你按下了 Run），离线模式下只记录、不发出。
 

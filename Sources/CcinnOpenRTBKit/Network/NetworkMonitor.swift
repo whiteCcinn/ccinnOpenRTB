@@ -277,8 +277,8 @@ public final class NetworkMonitor {
         }
     }
 
-    /// The request `rootID` and its redirect hops, in order, as recorded.
-    private func chain(of rootID: UUID) -> [ComposedHop] {
+    /// The request `rootID` and its redirect hops, in order, as recorded (also for a request that failed on the way).
+    public func chain(of rootID: UUID) -> [ComposedHop] {
         guard let root = log.entry(rootID) else { return [] }
         return ([root] + log.children(of: rootID).filter(\.isRedirectHop)).map { entry in
             let failure: String? = if case let .failed(message) = entry.state { message } else { nil }

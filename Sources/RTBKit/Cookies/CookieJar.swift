@@ -64,7 +64,9 @@ public struct StoredCookie: Sendable, Hashable, Codable, Identifiable {
         self.created = created
     }
 
-    public var id: String { [partitionSite?.description ?? "", domain, path, name].joined(separator: "|") }
+    /// rfc6265bis §5.7: name, domain, host-only flag and path (and the partition): a host-only and a Domain cookie of
+    /// one name are two cookies.
+    public var id: String { [partitionSite?.description ?? "", domain, hostOnly ? "host" : "domain", path, name].joined(separator: "|") }
 
     func isExpired(at now: Date) -> Bool { expires.map { $0 <= now } ?? false }
 }
@@ -84,14 +86,18 @@ public enum CookieRejection: Sendable, Hashable {
     case thirdPartyBlocked
     /// Lax or Strict (written, or Lax by default) from a cross-site subresource response.
     case sameSiteCrossSite(SameSite)
+    /// A cookie from http may not replace a Secure cookie of the same name (rfc6265bis §5.7).
+    case overlaysSecureCookie
 }
 
 /// What happened to one `Set-Cookie` line.
 public enum CookieDecision: Sendable, Hashable {
     case stored(StoredCookie)
     case replaced(StoredCookie)
-    /// Expired on arrival: a cookie of this name, domain and path is removed.
+    /// Expired on arrival: the cookie of this name, domain, host-only flag and path is removed.
     case deleted(name: String)
+    /// Expired on arrival, with no such cookie to remove.
+    case expiredOnArrival(name: String)
     case rejected(name: String, reason: CookieRejection)
 }
 
@@ -122,7 +128,11 @@ public struct CookieSelection: Sendable, Hashable {
 /// `Partitioned`) under a `CookiePolicy`. A value type: pure, deterministic, tested without a network.
 public struct CookieJar: Sendable, Hashable {
     public static let maxCookies = 3_000
+    /// Chrome's limit (rfc6265bis §5.7 eviction): one partner cannot crowd out the others.
+    public static let maxCookiesPerDomain = 180
     public static let maxNameValueBytes = 4_096
+    /// rfc6265bis §5.6.1: an expiry further than 400 days is cut to 400 days.
+    public static let maxLifetime: TimeInterval = 400 * 86_400
 
     public private(set) var cookies: [StoredCookie] = []
 
@@ -136,7 +146,8 @@ public struct CookieJar: Sendable, Hashable {
 
     /// Applies the `Set-Cookie` lines of a response from `url`, made from `context`'s page.
     public mutating func receive(_ setCookieLines: [String], from url: URL, context: CookieContext, now: Date) -> [CookieDecision] {
-        setCookieLines.map { receive($0, from: url, context: context, now: now) }
+        cookies.removeAll { $0.isExpired(at: now) }
+        return setCookieLines.map { receive($0, from: url, context: context, now: now) }
     }
 
     private mutating func receive(_ line: String, from url: URL, context: CookieContext, now: Date) -> CookieDecision {
@@ -163,32 +174,34 @@ public struct CookieJar: Sendable, Hashable {
             }
         }
 
+        let path = parsed.path ?? Self.defaultPath(of: url)
+        if !parsed.secure, !isSecureOrigin, cookies.contains(where: { stored in
+            stored.secure && stored.name == name && (Self.domainMatches(host: stored.domain, domain: domain) || Self.domainMatches(host: domain, domain: stored.domain))
+                && Self.pathMatches(path, stored.path)
+        }) {
+            return .rejected(name: name, reason: .overlaysSecureCookie)
+        }
+
         let crossSite = requestSite != context.topLevelSite
         var partitionSite: CookieSite?
         if crossSite {
-            switch context.policy {
-            case .blockThirdParty:
-                return .rejected(name: name, reason: .thirdPartyBlocked)
-            case .partitioned:
-                partitionSite = context.topLevelSite
-            case .allowThirdParty:
-                if parsed.partitioned {
-                    partitionSite = context.topLevelSite
-                } else {
-                    let effective = parsed.sameSite == .unspecified ? SameSite.lax : parsed.sameSite
-                    if effective != .none { return .rejected(name: name, reason: .sameSiteCrossSite(effective)) }
-                }
-            }
+            if context.policy == .blockThirdParty { return .rejected(name: name, reason: .thirdPartyBlocked) }
+            // rfc6265bis §5.7: Lax / Strict from a cross-site response is ignored, partitioned or not; only Chrome reads a
+            // missing SameSite as Lax.
+            let effective = parsed.sameSite == .unspecified && context.policy == .allowThirdParty ? SameSite.lax : parsed.sameSite
+            if effective == .lax || effective == .strict { return .rejected(name: name, reason: .sameSiteCrossSite(effective)) }
+            if context.policy == .partitioned || parsed.partitioned { partitionSite = context.topLevelSite }
         } else if parsed.partitioned {
             partitionSite = context.topLevelSite
         }
 
-        var cookie = StoredCookie(name: name, value: parsed.value, domain: domain, hostOnly: hostOnly, path: parsed.path ?? Self.defaultPath(of: url),
+        var cookie = StoredCookie(name: name, value: parsed.value, domain: domain, hostOnly: hostOnly, path: path,
                                   expires: parsed.expires(at: now), secure: parsed.secure, httpOnly: parsed.httpOnly, sameSite: parsed.sameSite,
                                   partitionSite: partitionSite, created: now)
         let existing = cookies.firstIndex { $0.id == cookie.id }
         if cookie.isExpired(at: now) {
-            if let existing { cookies.remove(at: existing) }
+            guard let existing else { return .expiredOnArrival(name: name) }
+            cookies.remove(at: existing)
             return .deleted(name: name)
         }
         if let existing {
@@ -197,6 +210,9 @@ public struct CookieJar: Sendable, Hashable {
             return .replaced(cookie)
         }
         cookies.append(cookie)
+        // The domain's oldest go first, then the jar's.
+        let sameDomain = cookies.indices.filter { cookies[$0].domain == domain }
+        if sameDomain.count > Self.maxCookiesPerDomain { cookies.remove(at: sameDomain[0]) }
         if cookies.count > Self.maxCookies { cookies.removeFirst(cookies.count - Self.maxCookies) }
         return .stored(cookie)
     }
@@ -209,7 +225,7 @@ public struct CookieJar: Sendable, Hashable {
             return CookieSelection(header: nil, sent: [], withheld: [])
         }
         let isSecure = url.scheme?.lowercased() == "https" || host == "localhost" || host == "127.0.0.1"
-        let path = url.path.isEmpty ? "/" : url.path
+        let path = Self.rawPath(of: url)
         let crossSite = requestSite != context.topLevelSite
         var sent: [StoredCookie] = []
         var withheld: [WithheldCookie] = []
@@ -261,9 +277,15 @@ public struct CookieJar: Sendable, Hashable {
         return cookiePath.hasSuffix("/") || requestPath.dropFirst(cookiePath.count).hasPrefix("/")
     }
 
-    /// The directory of the request path (RFC 6265 §5.1.4 default-path).
+    /// The request's uri-path as written (percent-encoded, trailing slash kept); "/" when empty.
+    static func rawPath(of url: URL) -> String {
+        let path = url.path(percentEncoded: true)
+        return path.isEmpty ? "/" : path
+    }
+
+    /// The directory of the request path (RFC 6265 §5.1.4 default-path), from the raw path: `/sync/` gives `/sync`.
     static func defaultPath(of url: URL) -> String {
-        let path = url.path
+        let path = rawPath(of: url)
         guard path.hasPrefix("/"), let slash = path.lastIndex(of: "/"), slash != path.startIndex else { return "/" }
         return String(path[..<slash])
     }
@@ -283,6 +305,8 @@ struct ParsedSetCookie {
     var partitioned = false
 
     init?(_ line: String) {
+        // rfc6265bis §5.6 step 1: a control character (but tab) ignores the whole line.
+        guard !line.unicodeScalars.contains(where: { ($0.value < 0x20 && $0.value != 0x09) || $0.value == 0x7F }) else { return nil }
         let parts = line.split(separator: ";", omittingEmptySubsequences: false)
         guard let pair = parts.first, let equals = pair.firstIndex(of: "=") else { return nil }
         name = pair[..<equals].trimmingCharacters(in: .whitespaces)
@@ -299,7 +323,11 @@ struct ParsedSetCookie {
             case "path":
                 path = argument.hasPrefix("/") ? argument : nil
             case "max-age":
-                if let seconds = Int(argument) { maxAge = seconds }
+                // RFC 6265 §5.2.2: an optional "-" and digits; anything else ("+10") is ignored. Overflow is "very long".
+                let digits = argument.hasPrefix("-") ? argument.dropFirst() : Substring(argument)
+                if !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }) {
+                    maxAge = Int(argument) ?? (argument.hasPrefix("-") ? Int.min : Int.max)
+                }
             case "expires":
                 if let date = CookieDate.parse(argument) { expiresDate = date }
             case "secure":
@@ -316,10 +344,11 @@ struct ParsedSetCookie {
         }
     }
 
-    /// `Max-Age` wins over `Expires`; a non-positive `Max-Age` expires it at once.
+    /// `Max-Age` wins over `Expires`; a non-positive `Max-Age` expires it at once; at most 400 days ahead.
     func expires(at now: Date) -> Date? {
-        if let maxAge { return maxAge <= 0 ? .distantPast : now.addingTimeInterval(TimeInterval(maxAge)) }
-        return expiresDate
+        let latest = now.addingTimeInterval(CookieJar.maxLifetime)
+        if let maxAge { return maxAge <= 0 ? .distantPast : min(now.addingTimeInterval(TimeInterval(min(maxAge, Int(CookieJar.maxLifetime)))), latest) }
+        return expiresDate.map { min($0, latest) }
     }
 }
 

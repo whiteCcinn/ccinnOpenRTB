@@ -777,3 +777,17 @@ struct CookieWireTests {
         #expect(server.requests.last?.header("Cookie") == "a=1; b=2")
     }
 }
+
+@Suite("Redirect rule: Referer")
+struct RedirectRefererTests {
+    /// strict-origin-when-cross-origin: no Referer on a downgrade to http.
+    @Test func aDowngradeDropsTheReferer() throws {
+        let hop = RedirectRule.Hop(method: "GET", body: nil, headers: ["Referer": "https://news.example/", "Accept": "image/*"])
+        let next = RedirectRule.next(after: hop, status: 302, from: try #require(URL(string: "https://ssp.example/a")),
+                                     to: try #require(URL(string: "http://ssp.example/b")))
+        #expect(next.headers == ["Accept": "image/*"])
+        let same = RedirectRule.next(after: hop, status: 302, from: try #require(URL(string: "https://ssp.example/a")),
+                                     to: try #require(URL(string: "https://dsp.example/b")))
+        #expect(same.headers["Referer"] == "https://news.example/")
+    }
+}

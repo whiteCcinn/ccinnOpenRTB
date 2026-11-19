@@ -12,14 +12,6 @@ enum SyncPresentation {
         }
     }
 
-    static func browsers(for policy: CookiePolicy) -> String {
-        switch policy {
-        case .allowThirdParty: "Chrome and Chromium browsers, Android web views: SameSite=None; Secure required, a missing SameSite is Lax"
-        case .blockThirdParty: "WebKit: Safari, and every in-app web view on iPhone and iPad"
-        case .partitioned: "Firefox (Total Cookie Protection): kept per top-level site"
-        }
-    }
-
     static func explain(_ rejection: CookieRejection) -> String {
         switch rejection {
         case .malformed: "malformed Set-Cookie (no name=value)"
@@ -31,6 +23,7 @@ enum SyncPresentation {
         case let .publicSuffix(domain): "Domain=\(domain) is a public suffix"
         case let .domainMismatch(domain): "Domain=\(domain) does not cover the host"
         case .thirdPartyBlocked: "third-party cookies are blocked in this browser"
+        case .overlaysSecureCookie: "an http response may not replace a Secure cookie"
         case let .sameSiteCrossSite(sameSite):
             sameSite == .lax ? "SameSite=Lax (or no SameSite: Lax by default) from a cross-site response" : "SameSite=\(name(of: sameSite)) from a cross-site response"
         }
@@ -78,33 +71,40 @@ enum SyncPresentation {
     }
 
     /// What the run means, most important first.
-    static func verdicts(for run: SyncRun, policy: CookiePolicy) -> [String] {
+    static func verdicts(for run: SyncRun) -> [String] {
         var verdicts: [String] = []
-        let host: (Int) -> String = { index in
-            run.response.chain.indices.contains(index) ? URLText.hostAndPath(run.response.chain[index].url).prefix(60) + "" : "?"
+        let place: (Int) -> String = { index in
+            run.chain.indices.contains(index) ? String(URLText.hostAndPath(run.chain[index].url).prefix(60)) : "?"
+        }
+        if let failure = run.failure {
+            verdicts.append("The run failed: \(failure.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Below is what happened before it failed.")
         }
         for leftover in run.leftovers {
-            verdicts.append("\(leftover.placeholder) was not substituted in hop \(leftover.hopIndex + 1) (\(host(leftover.hopIndex))): the match is lost.")
+            let consequence = leftover.losesTheMatch ? "the match is lost" : "the partner received the placeholder instead of a value"
+            verdicts.append("\(leftover.placeholder) was not substituted in hop \(leftover.hopIndex + 1) (\(place(leftover.hopIndex))): \(consequence).")
+        }
+        for sentinel in run.sentinels {
+            let partner = sentinel.partner.map { "\($0) answered " } ?? ""
+            verdicts.append("\(partner)\(sentinel.parameter)=\(sentinel.value) in hop \(sentinel.hopIndex + 1): no id (no cookie for this user, or an opt-out).")
         }
         for mapping in run.mappings {
             let partner = mapping.partner.map { "\($0) → " } ?? ""
-            verdicts.append("Mapped: \(partner)\(mapping.parameter)=\(mapping.id), passed to \(host(mapping.hopIndex)) (hop \(mapping.hopIndex + 1)).")
+            verdicts.append("Mapped: \(partner)\(mapping.parameter)=\(mapping.id), passed to \(place(mapping.hopIndex)) (hop \(mapping.hopIndex + 1)).")
         }
         let blocked = run.decisions.filter { if case .rejected(_, .thirdPartyBlocked) = $0 { true } else { false } }.count
         if blocked > 0 {
-            verdicts.append("This browser blocks third-party cookies (\(browsers(for: .blockThirdParty))): \(blocked) cookie\(blocked == 1 ? " was" : "s were") "
-                + "not stored, so the partners will not recognise this user next time.")
+            verdicts.append("\(run.browser.title) blocks third-party cookies: \(blocked) cookie\(blocked == 1 ? " was" : "s were") not stored, "
+                + "so the partners will not recognise this user next time.")
         }
         let otherRejections = run.decisions.compactMap { decision -> String? in
             if case let .rejected(name, reason) = decision, reason != .thirdPartyBlocked { return "\(name.isEmpty ? "a cookie" : name): \(explain(reason))" }
             return nil
         }
         if !otherRejections.isEmpty { verdicts.append("Rejected — " + otherRejections.joined(separator: "; ") + ".") }
-        if let stop = run.response.redirectStop { verdicts.append("The chain stopped: \(stop)") }
-        if !(200..<400).contains(run.response.status) { verdicts.append("The chain ended with HTTP \(run.response.status).") }
-        if run.mappings.isEmpty, run.leftovers.isEmpty { verdicts.append("No user id was passed along the chain.") }
+        if let stop = run.redirectStop { verdicts.append("The chain stopped: \(stop).") }
+        if let status = run.status, !(200..<400).contains(status) { verdicts.append("The chain ended with HTTP \(status).") }
+        if run.failure == nil, run.mappings.isEmpty, run.sentinels.isEmpty, run.leftovers.isEmpty { verdicts.append("No user id was passed along the chain.") }
         if !run.unknownMacros.isEmpty { verdicts.append("Left as is in the start URL: " + run.unknownMacros.joined(separator: ", ") + ".") }
-        _ = policy
         return verdicts
     }
 }

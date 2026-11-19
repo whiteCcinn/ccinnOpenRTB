@@ -295,3 +295,132 @@ struct SyncURLTests {
         #expect(SyncURL.ownPlaceholders(in: "https://ssp.example/setuid?uid=$UID") == ["$UID"])
     }
 }
+
+/// Review findings: rfc6265bis storage-model details a debugging tool must not hide.
+@Suite("Cookies: storage model details")
+struct CookieStorageModelTests {
+    private func receive(_ jar: inout CookieJar, _ lines: [String], from origin: String, _ ctx: CookieContext, at time: Date = now) -> [CookieDecision] {
+        jar.receive(lines, from: url(origin), context: ctx, now: time)
+    }
+
+    /// Identity is name, domain, host-only flag and path: a host-only and a Domain cookie of one name coexist, and both
+    /// are sent — the duplicate-cookie migration bug browsers really show.
+    @Test func hostOnlyAndDomainCookiesOfOneNameCoexist() {
+        var jar = CookieJar()
+        let ssp = context("https://ssp.example", .allowThirdParty)
+        _ = receive(&jar, ["uid=old; Path=/"], from: "https://ssp.example/", ssp)
+        _ = receive(&jar, ["uid=new; Domain=ssp.example; Path=/"], from: "https://ssp.example/", ssp, at: now.addingTimeInterval(1))
+        #expect(jar.cookies.count == 2)
+        #expect(jar.cookies(for: url("https://ssp.example/"), context: ssp, now: now.addingTimeInterval(2)).header == "uid=old; uid=new")
+        // Deleting the Domain cookie leaves the host-only one.
+        _ = receive(&jar, ["uid=; Domain=ssp.example; Path=/; Max-Age=0"], from: "https://ssp.example/", ssp, at: now.addingTimeInterval(3))
+        #expect(jar.cookies.map(\.value) == ["old"])
+    }
+
+    /// A non-secure origin may not overlay a Secure cookie (rfc6265bis §5.7).
+    @Test func httpCannotOverlayASecureCookie() {
+        var jar = CookieJar()
+        _ = receive(&jar, ["s=1; Secure; Path=/"], from: "https://ssp.example/", context("https://ssp.example", .allowThirdParty))
+        let decisions = receive(&jar, ["s=2; Path=/"], from: "http://ssp.example/", context("http://ssp.example", .allowThirdParty))
+        #expect(decisions == [.rejected(name: "s", reason: .overlaysSecureCookie)])
+        #expect(jar.cookies.map(\.value) == ["1"])
+    }
+
+    /// Lax / Strict from a cross-site response is ignored whatever partitioning says; only Chrome reads a missing SameSite
+    /// as Lax.
+    @Test func sameSiteIsEnforcedAtStorageForPartitionedCookiesToo() {
+        var chrome = CookieJar()
+        #expect(receive(&chrome, ["id=1; Secure; Partitioned"], from: "https://sync.dsp.example/", context(.allowThirdParty))
+            == [.rejected(name: "id", reason: .sameSiteCrossSite(.lax))])
+        var firefox = CookieJar()
+        #expect(receive(&firefox, ["id=1; Secure; SameSite=Lax"], from: "https://sync.dsp.example/", context(.partitioned))
+            == [.rejected(name: "id", reason: .sameSiteCrossSite(.lax))])
+        guard case .stored = receive(&firefox, ["id=2; Secure"], from: "https://sync.dsp.example/", context(.partitioned)).first else {
+            Issue.record("Firefox reads a missing SameSite as None")
+            return
+        }
+    }
+
+    /// The raw path, trailing slash kept (RFC 6265 §5.1.4).
+    @Test func pathsKeepTheirTrailingSlash() {
+        var jar = CookieJar()
+        let ctx = context(.allowThirdParty)
+        guard case let .stored(cookie)? = receive(&jar, ["a=1; Secure; SameSite=None"], from: "https://px.dsp.example/sync/", ctx).first else {
+            Issue.record("not stored")
+            return
+        }
+        #expect(cookie.path == "/sync")
+        _ = receive(&jar, ["b=2; Path=/sync/; Secure; SameSite=None"], from: "https://px.dsp.example/sync/", ctx)
+        #expect(jar.cookies(for: url("https://px.dsp.example/sync/"), context: ctx, now: now).sent.map(\.name).sorted() == ["a", "b"])
+    }
+
+    /// rfc6265bis §5.6: a Set-Cookie with a control character is ignored.
+    @Test func controlCharactersAreRejected() {
+        var jar = CookieJar()
+        #expect(receive(&jar, ["uid=a\u{1}b; Secure; SameSite=None"], from: "https://sync.dsp.example/", context(.allowThirdParty))
+            == [.rejected(name: "", reason: .malformed)])
+    }
+
+    /// Expiry: at most 400 days (rfc6265bis §5.6.1); `Max-Age=+10` is not a number; an expired arrival with nothing to
+    /// delete is reported as such; expired cookies leave the jar.
+    @Test func expiryRules() throws {
+        var jar = CookieJar()
+        let ctx = context(.allowThirdParty)
+        guard case let .stored(long)? = receive(&jar, ["l=1; Max-Age=315360000; Secure; SameSite=None"], from: "https://sync.dsp.example/", ctx).first,
+              case let .stored(plus)? = receive(&jar, ["p=1; Max-Age=+10; Secure; SameSite=None"], from: "https://sync.dsp.example/", ctx).first else {
+            Issue.record("not stored")
+            return
+        }
+        #expect(long.expires == now.addingTimeInterval(400 * 86_400))
+        #expect(plus.expires == nil)
+        #expect(receive(&jar, ["x=; Max-Age=0; Secure; SameSite=None"], from: "https://sync.dsp.example/", ctx) == [.expiredOnArrival(name: "x")])
+        _ = receive(&jar, ["t=1; Max-Age=10; Secure; SameSite=None"], from: "https://sync.dsp.example/", ctx)
+        _ = receive(&jar, ["u=1; Secure; SameSite=None"], from: "https://sync.dsp.example/", ctx, at: now.addingTimeInterval(60))
+        #expect(!jar.cookies.contains { $0.name == "t" })
+    }
+
+    /// One partner cannot crowd out the others: at most 180 cookies per domain.
+    @Test func cookiesAreLimitedPerDomain() {
+        var jar = CookieJar()
+        let ctx = context(.allowThirdParty)
+        _ = receive(&jar, ["keep=1; Secure; SameSite=None"], from: "https://other.example/", ctx)
+        _ = receive(&jar, (0..<200).map { "c\($0)=1; Secure; SameSite=None" }, from: "https://sync.dsp.example/", ctx)
+        #expect(jar.cookies.filter { $0.domain == "sync.dsp.example" }.count == CookieJar.maxCookiesPerDomain)
+        #expect(jar.cookies.contains { $0.name == "keep" })
+        #expect(!jar.cookies.contains { $0.name == "c0" }, "the domain's oldest go first")
+    }
+
+    /// A comma is not a cookie-octet (RFC 6265 §4.1.1): in a joined header it separates cookies.
+    @Test func aCommaInAValueSeparatesCookies() {
+        #expect(SetCookieLines.split("c=a,b=1; Path=/") == ["c=a", "b=1; Path=/"])
+    }
+}
+
+@Suite("Cookie sync URLs: review")
+struct SyncURLReviewTests {
+    /// AppNexus `getuid?<url>` (Prebid Server's `getuid?{{.RedirectURL}}`): the nested URL is the query itself.
+    @Test func aNestedURLAsTheWholeQueryIsATemplate() {
+        #expect(SyncURL.ownPlaceholders(in: "https://ib.adnxs.com/getuid?https%3A%2F%2Fssp.example%2Fsetuid%3Fbidder%3Dadnxs%26uid%3D%24UID").isEmpty)
+        #expect(SyncURL.ownPlaceholders(in: "https://px.example/s?redir=https%253A%252F%252Fssp.example%252Fsetuid%253Fuid%253D%2524UID").isEmpty)
+    }
+
+    @Test func goTemplatePlaceholdersAreFound() {
+        #expect(SyncURL.leftoverPlaceholders(in: "https://ssp.example/sync?gdpr={{.GDPR}}&r={{.RedirectURL}}") == ["{{.GDPR}}", "{{.RedirectURL}}"])
+    }
+
+    /// Only an id left unsubstituted loses the match; a consent placeholder is a different problem.
+    @Test func idPlaceholdersAreTellApart() {
+        #expect(SyncURL.isIDPlaceholder("$UID"))
+        #expect(SyncURL.isIDPlaceholder("${BUYER_ID}"))
+        #expect(SyncURL.isIDPlaceholder("{{.UID}}"))
+        #expect(!SyncURL.isIDPlaceholder("[GDPR]"))
+        #expect(!SyncURL.isIDPlaceholder("{{.RedirectURL}}"))
+    }
+
+    /// AppNexus answers `uid=0` without a cookie or after an opt-out: a sentinel, not an id.
+    @Test func sentinelIDsAreNotMappings() {
+        let found = SyncURL.mappingParameters(in: "https://ssp.example/setuid?bidder=adnxs&uid=0&x_uid=undefined&ttd_puid=abc")
+        #expect(found.ids.map(\.name) == ["ttd_puid"])
+        #expect(found.sentinels.map(\.value) == ["0", "undefined"])
+    }
+}

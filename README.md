@@ -121,13 +121,18 @@ A request composer in the right panel of every window, for sending a bid request
 Cookie mapping (user sync) as the device's browser would run it: an SSP's sync endpoint redirects to a partner's pixel, the partner redirects back to the SSP's `setuid` URL with its user id, and each side keeps a cookie. When a match rate drops, nothing errors — this tab shows why.
 
 - **Run** (⌘↩) a start URL — the SSP's sync endpoint or a partner's pixel — on a **page** (the publisher URL: its site decides which cookies are third party, its origin is the `Referer`). The request goes out as an image pixel would, every redirect is followed, and the window's **cookie jar** is read before and filled after every hop.
-- **The browser's cookie policy** follows the simulated device, or pick one:
-  - **Third-party cookies blocked** — WebKit: Safari and every in-app web view on iPhone and iPad (the iPhone 18 Pro default). The same chain that works in Chrome stores nothing here, and the tab says so.
-  - **Third-party cookies allowed** — Chrome and Android web views: `SameSite=None; Secure` required, a cookie without `SameSite` is Lax (not sent or stored cross-site), `Partitioned` cookies (CHIPS) kept per top-level site.
-  - **Third-party cookies partitioned** — Firefox Total Cookie Protection: kept per top-level site; cookies set first party are not visible.
+- **The browser** follows the simulated device (Safari on iPhone and iPad, Chrome on Android, a TV app on CTV), or pick one; it decides the third-party cookie policy *and* the User-Agent the partners see:
+  - **Safari** and **iOS app web view** — WebKit blocks third-party cookies: the same chain that works in Chrome stores nothing here, and the tab says so.
+  - **Chrome on Android** — `SameSite=None; Secure` required, a cookie without `SameSite` is Lax (not stored or sent cross-site), `Partitioned` cookies (CHIPS) kept per top-level site.
+  - **Android app WebView** — third-party cookies are off unless the app turns on `acceptThirdPartyCookies`.
+  - **Firefox** — Total Cookie Protection: kept per top-level site; cookies set first party are not visible.
+  - **TV app** — no browser cookie jar shared with the web.
+
+  A jar belongs to one browser: choosing another starts an empty one.
 - **Consent macros** in the start URL are filled from the values you give: `${GDPR}`, `${GDPR_CONSENT_<id>}`, `${GDPR_PD}`, `${ADDTL_CONSENT}`, `${US_PRIVACY}`, `${GPP_STRING_<id>}`, `${GPP_SID}` (IAB TCF "URL-based services" and GPP URL macros, URL-encoded).
 - **Every hop** shows the cookies sent, the ones withheld and why (`SameSite=Lax` on a cross-site request, third-party blocked, `Secure` over http, kept for another site), and what became of each `Set-Cookie`: stored with its attributes, or rejected with the reason (`SameSite=None` without `Secure`, Lax by default from a cross-site response, a public-suffix or mismatched `Domain`, `__Secure-` / `__Host-` rules, `Secure` from http, too large).
-- **Verdicts**: the ids passed along (`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`), placeholders a partner left unsubstituted in its own URL (`$UID`, `${UID}`, `[UID]`, `{uid}`, `{{UID}}` — a URL passed as a parameter is the next party's template and is not flagged), cookies blocked by the browser, and where the chain stopped.
+- **Verdicts**: the ids passed along (`Mapped: dsp → uid=abc123, passed to ssp.example/setuid`), "no id" answers (`uid=0`, `undefined` …: no cookie for this user, or an opt-out), placeholders a partner left unsubstituted in its own URL (`$UID`, `${UID}`, `[UID]`, `{uid}`, `{{.UID}}` — an id placeholder loses the match; a URL passed along, `redir=…` or AppNexus-style `getuid?<url>`, is the next party's template and is not flagged), cookies blocked by the browser, where the chain stopped, and — for a run that failed — what happened before it failed.
+- The jar follows the browsers' storage model: a host-only and a `Domain` cookie of one name are two cookies (both sent), an http response cannot replace a `Secure` cookie, expiry is capped at 400 days, at most 180 cookies per domain, and a `Set-Cookie` with a control character is ignored. The `Referer` is the page's origin, and is dropped on a downgrade to http.
 - **Run Again** reuses the jar, so a second run shows whether the mapping is stable; **Cookie Jar** lists the cookies by domain; **Clear Cookies** starts over. The jar lives in the window's memory only: it is never the Mac's browser cookies and is never written to disk.
 - Sync requests are **User sync** entries in the Network window, each hop with its cookies. They are sent in Simulated and Real mode (you pressed Run), recorded and not sent when Offline.
 

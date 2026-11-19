@@ -240,6 +240,10 @@ enum RedirectRule {
         if !sameOrigin(origin, target) {
             next.headers = HTTPHeaders.removing(credentialHeaders, from: next.headers)
         }
+        // strict-origin-when-cross-origin: no Referer on a downgrade to http.
+        if origin.scheme?.lowercased() == "https", target.scheme?.lowercased() == "http" {
+            next.headers = HTTPHeaders.removing(["Referer"], from: next.headers)
+        }
         return next
     }
 

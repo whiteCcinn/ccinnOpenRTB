@@ -12,6 +12,14 @@ struct SyncPane: View {
             SyncStartBar(sync: sync)
             SyncSettingsBar(sync: sync)
             SyncConsentSection(sync: sync)
+            if let note = sync.jarNote {
+                Label(note, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+            }
             if let problem = sync.problem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
@@ -67,14 +75,14 @@ private struct SyncSettingsBar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 140)
                 .help("The page the sync pixel is on: its site decides which cookies are third party, and its origin is the Referer")
-            Picker("Browser", selection: $sync.policy) {
-                ForEach(CookiePolicy.allCases) { policy in
-                    Text(SyncPresentation.title(for: policy)).tag(policy)
+            Picker("Browser", selection: $sync.browser) {
+                ForEach(SyncBrowser.allCases) { browser in
+                    Text(browser.title).tag(browser)
                 }
             }
             .fixedSize()
-            .help(SyncPresentation.browsers(for: sync.policy)
-                + (sync.policyOverride == nil ? " — the default for the \(sync.device.name)" : " — chosen by hand"))
+            .help(sync.browser.detail + (sync.browserOverride == nil ? " — the \(sync.device.name)’s browser" : " — chosen by hand")
+                + ". Its User-Agent goes with the requests.")
         }
         .font(.callout)
         .controlSize(.small)
@@ -194,17 +202,17 @@ private struct SyncRunView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(SyncPresentation.verdicts(for: run, policy: run.policy).enumerated()), id: \.offset) { _, verdict in
+                    ForEach(Array(SyncPresentation.verdicts(for: run).enumerated()), id: \.offset) { _, verdict in
                         Label(verdict, systemImage: Self.symbol(for: verdict))
                             .foregroundStyle(Self.color(for: verdict))
                             .textSelection(.enabled)
                     }
                 }
                 .font(.callout)
-                Text("\(SyncPresentation.title(for: run.policy)) · page \(run.topLevelSite.description) · \(run.ranAt.formatted(date: .omitted, time: .standard))")
+                Text("\(run.browser.title) (\(SyncPresentation.title(for: run.browser.policy).lowercased())) · page \(run.topLevelSite.description) · \(run.ranAt.formatted(date: .omitted, time: .standard))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                ForEach(Array(run.response.chain.enumerated()), id: \.offset) { index, hop in
+                ForEach(Array(run.chain.enumerated()), id: \.offset) { index, hop in
                     SyncHopRow(index: index, hop: hop, leftovers: run.leftovers.filter { $0.hopIndex == index }.map(\.placeholder), ranAt: run.ranAt)
                 }
             }
@@ -273,6 +281,8 @@ private struct SyncCookieLines: View {
                     line("arrow.down.circle.fill", .green, "Stored " + SyncPresentation.describe(cookie, now: ranAt))
                 case let .deleted(name):
                     line("trash.circle", .secondary, "Deleted \(name)")
+                case let .expiredOnArrival(name):
+                    line("clock.badge.xmark", .secondary, "\(name): expired on arrival, nothing to delete")
                 case let .rejected(name, reason):
                     line("xmark.circle.fill", .red, "Rejected \(name.isEmpty ? "a cookie" : name): \(SyncPresentation.explain(reason))")
                 }

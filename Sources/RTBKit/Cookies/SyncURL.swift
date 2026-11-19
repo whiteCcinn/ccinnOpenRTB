@@ -39,6 +39,8 @@ public enum SyncURL {
         public var ids: [Parameter]
         /// Who the id belongs to (`bidder`, `partner`, `dsp` …).
         public var partners: [Parameter]
+        /// Id parameters carrying a "no id" sentinel (`uid=0`, `undefined` …): the partner had no cookie or the user opted out.
+        public var sentinels: [Parameter]
     }
 
     /// Fills the IAB consent macros of `url` with `consent`, URL-encoded (a value not known is empty; `${GDPR}` is 1, 0 or
@@ -108,12 +110,24 @@ public enum SyncURL {
         let parts = split(url)
         var found = leftoverPlaceholders(in: parts.path)
         for item in parts.query {
-            found += leftoverPlaceholders(in: item.name)
-            let lowered = item.value.lowercased()
-            if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") || lowered.hasPrefix("//") { continue }
-            found += leftoverPlaceholders(in: item.value)
+            // `getuid?<url>` (no "="): the whole query is the nested URL.
+            if !looksLikeURL(item.name) { found += leftoverPlaceholders(in: item.name) }
+            if !looksLikeURL(item.value) { found += leftoverPlaceholders(in: item.value) }
         }
         return found
+    }
+
+    /// A URL, or one still percent-encoded once more (`https%3A%2F%2F…`).
+    static func looksLikeURL(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return ["http://", "https://", "//", "http%3a", "https%3a"].contains { lowered.hasPrefix($0) }
+    }
+
+    /// A placeholder for a user id (`$UID`, `${BUYER_ID}`, `{{.UID}}`) rather than for consent or a URL: left
+    /// unsubstituted, it loses the match.
+    public static func isIDPlaceholder(_ placeholder: String) -> Bool {
+        let name = placeholder.uppercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
+        return name.contains("UID") || name.contains("USER") || name.contains("BUYER") || name == "ID" || name.hasSuffix("_ID")
     }
 
     /// The path and the percent-decoded query pairs of `url`, read leniently: sync URLs carry characters `URLComponents`
@@ -139,8 +153,8 @@ public enum SyncURL {
     }
 
     private static let placeholderPattern: NSRegularExpression = {
-        // Ordered so the longer forms win: ${X} before $X, {{x}} before {x}.
-        let pattern = #"\$\{[A-Za-z0-9_]+\}|\{\{[A-Za-z0-9_]+\}\}|\$[A-Z][A-Z0-9_]*|\[[A-Z][A-Z0-9_]*\]|\{[A-Za-z0-9_]+\}"#
+        // Ordered so the longer forms win: ${X} before $X, {{x}} (and Go templates {{.X}}) before {x}.
+        let pattern = #"\$\{[A-Za-z0-9_]+\}|\{\{\s*\.?[A-Za-z0-9_.]+\s*\}\}|\$[A-Z][A-Z0-9_]*|\[[A-Z][A-Z0-9_]*\]|\{[A-Za-z0-9_]+\}"#
         do { return try NSRegularExpression(pattern: pattern) } catch { preconditionFailure("invalid placeholder pattern") }
     }()
 
@@ -148,22 +162,29 @@ public enum SyncURL {
     public static func mappingParameters(in url: String) -> Mapping {
         var ids: [Parameter] = []
         var partners: [Parameter] = []
+        var sentinels: [Parameter] = []
         for item in split(url).query {
             let value = item.value
             guard !value.isEmpty else { continue }
             let key = item.name.lowercased()
             if partnerKeys.contains(key) {
                 partners.append(Parameter(name: item.name, value: value))
-            } else if idKeys.contains(key) || key.hasSuffix("_uid") || key.hasSuffix("userid") {
+            } else if idKeys.contains(key) || key.hasSuffix("_uid") || key.hasSuffix("puid") || key.hasSuffix("userid") {
                 // An unsubstituted placeholder is no id: the partner did not fill it in.
                 guard leftoverPlaceholders(in: value).isEmpty else { continue }
-                ids.append(Parameter(name: item.name, value: value))
+                if sentinelValues.contains(value.lowercased()) {
+                    sentinels.append(Parameter(name: item.name, value: value))
+                } else {
+                    ids.append(Parameter(name: item.name, value: value))
+                }
             }
         }
-        return Mapping(ids: ids, partners: partners)
+        return Mapping(ids: ids, partners: partners, sentinels: sentinels)
     }
 
     static let idKeys: Set<String> = ["uid", "buyeruid", "buyer_uid", "user_id", "userid", "puid", "partneruid", "partner_uid", "external_uid",
                                       "dspuid", "dsp_uid", "google_gid", "google_hm", "xuid", "tuid", "id5id", "pubcid"]
+    /// What partners send instead of an id when they have none (AppNexus: `uid=0`).
+    static let sentinelValues: Set<String> = ["0", "-1", "null", "undefined", "nil", "none", "false", "unknown", "00000000-0000-0000-0000-000000000000"]
     static let partnerKeys: Set<String> = ["bidder", "bidder_code", "partner", "partner_id", "partnerid", "dsp", "network", "ssp", "source"]
 }

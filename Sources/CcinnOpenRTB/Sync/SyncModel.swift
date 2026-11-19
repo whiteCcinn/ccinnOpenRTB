@@ -12,8 +12,8 @@ protocol SyncTargetProviding: AnyObject {
 
 extension AdSession: SyncTargetProviding {}
 
-/// One cookie-sync run and what it shows: the chain with every hop's cookies, the ids passed along, and the placeholders
-/// a partner left unsubstituted.
+/// One cookie-sync run and what it shows: the chain with every hop's cookies, the ids passed along, the placeholders a
+/// partner left unsubstituted — and, for a run that failed, what happened before it failed.
 struct SyncRun: Sendable, Equatable {
     struct IDMapping: Sendable, Hashable {
         /// The partner named in the same URL (`bidder`, `partner` …), when there is one.
@@ -26,28 +26,54 @@ struct SyncRun: Sendable, Equatable {
     struct Leftover: Sendable, Hashable {
         var placeholder: String
         var hopIndex: Int
+
+        var losesTheMatch: Bool { SyncURL.isIDPlaceholder(placeholder) }
+    }
+
+    struct Sentinel: Sendable, Hashable {
+        var partner: String?
+        var parameter: String
+        var value: String
+        var hopIndex: Int
     }
 
     var startURL: String
     var replacedMacros: [String]
     var unknownMacros: [String]
-    var response: ComposedResponse
+    var chain: [ComposedHop]
+    /// The final answer's status; `nil` when the run failed.
+    var status: Int?
+    var redirectStop: RedirectStop?
+    /// Why the run failed (a transport error, a timeout, a body too large, Offline); the chain is what happened before.
+    var failure: String?
     var ranAt: Date
-    var policy: CookiePolicy
+    var browser: SyncBrowser
     var topLevelSite: CookieSite
 
+    /// The hops that went out: a hop not sent (a loop, too many hops) passed nothing to anyone.
+    private var sentHops: [(index: Int, hop: ComposedHop)] {
+        chain.enumerated().filter { $0.element.wasSent }.map { ($0.offset, $0.element) }
+    }
+
     var mappings: [IDMapping] {
-        response.chain.enumerated().flatMap { index, hop -> [IDMapping] in
+        sentHops.flatMap { index, hop -> [IDMapping] in
             let found = SyncURL.mappingParameters(in: hop.url)
             return found.ids.map { IDMapping(partner: found.partners.first?.value, id: $0.value, parameter: $0.name, hopIndex: index) }
         }
     }
 
-    var leftovers: [Leftover] {
-        response.chain.enumerated().flatMap { index, hop in SyncURL.ownPlaceholders(in: hop.url).map { Leftover(placeholder: $0, hopIndex: index) } }
+    var sentinels: [Sentinel] {
+        sentHops.flatMap { index, hop -> [Sentinel] in
+            let found = SyncURL.mappingParameters(in: hop.url)
+            return found.sentinels.map { Sentinel(partner: found.partners.first?.value, parameter: $0.name, value: $0.value, hopIndex: index) }
+        }
     }
 
-    var decisions: [CookieDecision] { response.chain.flatMap { $0.cookies?.decisions ?? [] } }
+    var leftovers: [Leftover] {
+        sentHops.flatMap { index, hop in SyncURL.ownPlaceholders(in: hop.url).map { Leftover(placeholder: $0, hopIndex: index) } }
+    }
+
+    var decisions: [CookieDecision] { chain.flatMap { $0.cookies?.decisions ?? [] } }
 }
 
 /// The Sync tab of one main window: a cookie-sync chain run from a start URL on a publisher page, as the device's browser
@@ -63,9 +89,11 @@ final class SyncModel {
     /// The page the sync runs on (its site decides what is third party; its origin is the Referer).
     var publisherURL = "https://news.example/"
     var consent = SyncConsent()
-    /// A policy chosen by hand; `nil` follows the device.
-    var policyOverride: CookiePolicy?
+    /// A browser chosen by hand; `nil` follows the device.
+    private(set) var browserOverride: SyncBrowser?
     private(set) var session: CookieSession
+    /// Why the jar was emptied without Clear Cookies (a new browser).
+    private(set) var jarNote: String?
     private(set) var lastRun: SyncRun?
     private(set) var runCount = 0
     private(set) var isRunning = false
@@ -80,18 +108,23 @@ final class SyncModel {
         self.target = target
         self.now = now
         let site = CookieSite(url: URL(string: "https://news.example/")!)!
-        session = CookieSession(context: CookieContext(topLevelSite: site, policy: Self.defaultPolicy(for: target.device)))
+        session = CookieSession(context: CookieContext(topLevelSite: site, policy: SyncBrowser.default(for: target.device).policy))
     }
 
-    /// The browser's third-party cookie policy for `device`: WebKit's (blocked) on Apple's operating systems, Chrome's
-    /// elsewhere.
-    static func defaultPolicy(for device: DeviceProfile) -> CookiePolicy {
-        ["iOS", "iPadOS", "tvOS"].contains(device.os) ? .blockThirdParty : .allowThirdParty
-    }
-
-    var policy: CookiePolicy {
-        get { policyOverride ?? Self.defaultPolicy(for: target.device) }
-        set { policyOverride = newValue == Self.defaultPolicy(for: target.device) ? nil : newValue }
+    /// The browser the sync runs in: the device's own unless chosen. A jar belongs to one browser, so choosing another
+    /// starts an empty one.
+    var browser: SyncBrowser {
+        get { browserOverride ?? SyncBrowser.default(for: target.device) }
+        set {
+            let previous = browser
+            browserOverride = newValue == SyncBrowser.default(for: target.device) ? nil : newValue
+            guard newValue != previous else { return }
+            if !session.jar.cookies.isEmpty {
+                session.clear()
+                jarNote = "Cookies cleared: a cookie jar belongs to one browser (\(previous.title) → \(newValue.title))."
+            }
+            session.context.policy = newValue.policy
+        }
     }
 
     var device: DeviceProfile { target.device }
@@ -113,8 +146,8 @@ final class SyncModel {
             problem = "The publisher page must be an http(s) URL: its site decides which cookies are third party."
             return nil
         }
-        let policy = policy
-        session.context = CookieContext(topLevelSite: site, policy: policy)
+        let browser = browser
+        session.context = CookieContext(topLevelSite: site, policy: browser.policy)
         // A pixel on the page: an image request, with the page's origin as Referer (strict-origin-when-cross-origin).
         let origin = "\(publisher.scheme ?? "https")://\(host)\(publisher.port.map { ":\($0)" } ?? "")/"
         let request = ComposedRequest(url: expanded.url, method: "GET",
@@ -123,19 +156,28 @@ final class SyncModel {
         generation &+= 1
         let token = generation
         let monitor = target.monitor
-        let userAgent = target.device.userAgent
+        let userAgent = browser.userAgent(for: target.device)
+        let since = monitor.liveEntries.last?.sequence ?? 0
         isRunning = true
         problem = nil
+        jarNote = nil
         let task = Task { [weak self] in
             do {
                 let response = try await monitor.send(request, userAgent: userAgent)
                 guard let self, token == self.generation else { return }
-                self.lastRun = SyncRun(startURL: expanded.url, replacedMacros: expanded.replaced, unknownMacros: expanded.unknown, response: response,
-                                       ranAt: self.now(), policy: policy, topLevelSite: site)
+                self.lastRun = SyncRun(startURL: expanded.url, replacedMacros: expanded.replaced, unknownMacros: expanded.unknown, chain: response.chain,
+                                       status: response.status, redirectStop: response.redirectStop, failure: nil, ranAt: self.now(),
+                                       browser: browser, topLevelSite: site)
                 self.runCount += 1
             } catch {
                 guard let self, token == self.generation else { return }
-                self.problem = ClientModel.message(for: error)
+                let message = ClientModel.message(for: error)
+                self.problem = message
+                // What happened before the failure, never the previous run's success.
+                let root = monitor.liveEntries.first { $0.sequence > since && $0.parentID == nil && $0.category == .userSync }
+                self.lastRun = SyncRun(startURL: expanded.url, replacedMacros: expanded.replaced, unknownMacros: expanded.unknown,
+                                       chain: root.map { monitor.chain(of: $0.id) } ?? [], status: nil, redirectStop: nil, failure: message,
+                                       ranAt: self.now(), browser: browser, topLevelSite: site)
             }
             if let self, token == self.generation { self.isRunning = false }
         }
@@ -151,5 +193,8 @@ final class SyncModel {
         problem = "Cancelled"
     }
 
-    func clearCookies() { session.clear() }
+    func clearCookies() {
+        session.clear()
+        jarNote = nil
+    }
 }
