@@ -98,6 +98,20 @@ public struct ComposedRequest: Sendable, Hashable {
         return verb.isEmpty ? "POST" : verb
     }
 
+    /// Why this request cannot go on the wire, or `nil`. HTTP/1.1 writes the method and header names verbatim: one that is
+    /// not a token (a space, CR or LF) would split into another request, a value with CR, LF or NUL into another header.
+    /// `CONNECT`, `TRACE` and `TRACK` are refused, as browsers refuse them (RFC 9110 §9.3.6, §9.3.8).
+    public var syntaxProblem: String? {
+        let verb = wireMethod
+        guard HTTPSyntax.isToken(verb) else { return "The method “\(verb.prefix(40))” is not an HTTP token." }
+        guard !HTTPSyntax.forbiddenMethods.contains(verb) else { return "The method \(verb) is not allowed." }
+        for (name, value) in headers {
+            guard HTTPSyntax.isToken(name) else { return "The header name “\(name.prefix(40))” is not an HTTP token." }
+            guard HTTPSyntax.isFieldValue(value) else { return "The value of \(name.prefix(40)) has a line break or a NUL." }
+        }
+        return nil
+    }
+
     /// The body on the wire: none for GET and HEAD, which have no defined body semantics (RFC 9110 §9.3.1).
     public var wireBody: Data? {
         RedirectRule.carriesBody(wireMethod) ? body : nil
@@ -282,5 +296,27 @@ enum RedirectRule {
         case "https": return 443
         default: return nil
         }
+    }
+}
+
+/// HTTP syntax the gate checks before anything is sent.
+public enum HTTPSyntax {
+    /// Methods no request may use (browsers refuse them too).
+    public static let forbiddenMethods: Set<String> = ["CONNECT", "TRACE", "TRACK"]
+
+    /// RFC 9110 §5.6.2 `token`: one or more of ALPHA, DIGIT and ``!#$%&'*+-.^_`|~``.
+    public static func isToken(_ text: String) -> Bool {
+        !text.isEmpty && text.unicodeScalars.allSatisfy { scalar in
+            switch scalar {
+            case "a"..."z", "A"..."Z", "0"..."9": true
+            case "!", "#", "$", "%", "&", "'", "*", "+", "-", ".", "^", "_", "`", "|", "~": true
+            default: false
+            }
+        }
+    }
+
+    /// A field value without CR, LF or NUL (checked on Unicode scalars: `"\r\n"` is one `Character`).
+    public static func isFieldValue(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { $0 == "\r" || $0 == "\n" || $0 == "\u{0}" }
     }
 }

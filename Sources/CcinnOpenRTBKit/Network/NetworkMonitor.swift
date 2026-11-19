@@ -252,6 +252,7 @@ public final class NetworkMonitor {
         let scheme = URLText.scheme(request.url)
         guard scheme == "http" || scheme == "https" else { throw refused(.unsupportedScheme(scheme ?? "")) }
         guard let requestURL = URLText.requestURL(request.url), requestURL.host?.isEmpty == false else { throw refused(.invalidURL(request.url)) }
+        if let problem = request.syntaxProblem { throw refused(.invalidRequest(problem)) }
         switch DispatchPolicy.action(for: request.purpose.category, isScript: false, mode: mode, offline: offline) {
         case let .record(state, delivery, note):
             record.state = state

@@ -94,6 +94,33 @@ struct ComposedRequestMonitorTests {
         #expect(response.responseEntryID == entry.id)
     }
 
+    /// The gate refuses what HTTP/1.1 would carry verbatim and split into another request (a method or a header name
+    /// that is not a token, a value with CR, LF or NUL), and methods a page may not use, whoever composed the request.
+    @Test(arguments: [
+        ("GET /smuggled HTTP/1.1\r\nHost: other.example\r\n\r\nPOST", [String: String]()),
+        ("POST", ["X\r\nContent-Length: 0\r\n\r\nGET /second HTTP/1.1": "1"]),
+        ("POST", ["X-Name\r\nCookie: injected=1\r\nX-Pad": "1"]),
+        ("POST", ["X-Value": "a\r\nCookie: injected=1"]),
+        ("POST", ["X-Nul": "a\u{0}b"]),
+        ("POST", ["": "empty name"]),
+        ("CONNECT", [String: String]()),
+        ("TRACE", [String: String]()),
+        ("track", [String: String]()),
+        ("GE T", [String: String]()),
+    ])
+    func malformedRequestsAreRefusedAtTheGate(method: String, headers: [String: String]) async throws {
+        let transport = FakeTransport()
+        transport.respond(endpoint, body: "{}")
+        let monitor = makeMonitor(transport: transport)
+
+        await #expect(throws: NetworkMonitorError.self) { _ = try await monitor.send(composed(method: method, headers: headers), userAgent: deviceUA) }
+
+        #expect(transport.requests.isEmpty)
+        let entry = try #require(monitor.liveEntries.first)
+        guard case let .failed(reason) = entry.state else { Issue.record("\(entry.state)"); return }
+        #expect(reason.contains("Not sent"))
+    }
+
     @Test func theUsersHeadersReplaceTheMonitorsWhateverTheirCase() async throws {
         let transport = FakeTransport()
         transport.respond(endpoint, body: "{}")

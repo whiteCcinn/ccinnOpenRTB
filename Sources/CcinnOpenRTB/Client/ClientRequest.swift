@@ -164,14 +164,8 @@ struct ClientRequest: Codable, Hashable, Sendable {
         return URLText.requestURL(url)?.host?.isEmpty == false
     }
 
-    /// RFC 9110 §5.6.2 `token`: one or more of ALPHA, DIGIT and ``!#$%&'*+-.^_`|~``.
+    /// RFC 9110 §5.6.2 `token` (the gate checks it too).
     static func isToken(_ name: String) -> Bool {
-        !name.isEmpty && name.unicodeScalars.allSatisfy { scalar in
-            switch scalar {
-            case "a"..."z", "A"..."Z", "0"..."9": true
-            case "!", "#", "$", "%", "&", "'", "*", "+", "-", ".", "^", "_", "`", "|", "~": true
-            default: false
-            }
-        }
+        HTTPSyntax.isToken(name)
     }
 }

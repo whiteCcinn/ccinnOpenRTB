@@ -11,6 +11,8 @@ public enum NetworkMonitorError: Error, Sendable, Equatable, LocalizedError {
     /// Stopped while in flight (a switch to Simulated mode for trackers, Offline for everything); the reason says why.
     case cancelled(String)
     case invalidURL(String)
+    /// A method or header the wire cannot carry safely (`ComposedRequest.syntaxProblem`).
+    case invalidRequest(String)
     case unsupportedScheme(String)
     case httpStatus(Int, entryID: UUID)
     case tooLarge(limit: Int)
@@ -30,6 +32,7 @@ public enum NetworkMonitorError: Error, Sendable, Equatable, LocalizedError {
         case .offline: "Offline: content requests are recorded, not sent. Only data: URLs and built-in samples load."
         case let .cancelled(reason): "Cancelled: \(reason)"
         case let .invalidURL(url): "Invalid URL: \(url.prefix(200))"
+        case let .invalidRequest(reason): "Not sent: \(reason)"
         case let .unsupportedScheme(scheme): "Unsupported URL scheme “\(scheme.prefix(40))”."
         case let .httpStatus(status, _): "The server answered with status \(status)."
         case let .tooLarge(limit): "The response is larger than \(ByteCountFormatter.string(fromByteCount: Int64(limit), countStyle: .binary))."
