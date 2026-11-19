@@ -127,3 +127,65 @@ public struct PrebidBid: Sendable, Hashable {
         }
     }
 }
+
+extension PrebidBid {
+    /// Prebid bids as one OpenRTB 2.6 response (a seat per bidder), so the simulator renders them on its own path —
+    /// parsing, format and placement, tracking, the Network window. `adm` is the markup the bid renders with (the
+    /// `${AUCTION_PRICE}` Prebid fills, filled); a `vastUrl` becomes a VAST wrapper pointing at it; `mtype` names the format.
+    public static func openRTBResponse(for bids: [PrebidBid], auctionID: String, currency: String? = nil) -> String {
+        var seats: [String: [JSONValue]] = [:]
+        var order: [String] = []
+        for (index, bid) in bids.enumerated() {
+            if seats[bid.bidderCode] == nil { order.append(bid.bidderCode) }
+            seats[bid.bidderCode, default: []].append(bid.openRTBBid(index: index))
+        }
+        let seatbid = order.map { seat in JSONValue.object(["seat": .string(seat), "bid": .array(seats[seat] ?? [])]) }
+        var response: [String: JSONValue] = ["id": .string(auctionID), "seatbid": .array(seatbid)]
+        if let currency = currency ?? bids.first?.currency { response["cur"] = .string(currency) }
+        return JSONValue.object(response).serialized()
+    }
+
+    private func openRTBBid(index: Int) -> JSONValue {
+        var bid: [String: JSONValue] = [
+            "id": .string(adID.isEmpty ? "pb\(index)" : adID),
+            "impid": .string(adUnitCode ?? "\(index)"),
+            "price": .double(cpm),
+            "mtype": .int(Self.markupType(of: format)),
+        ]
+        if let adm = admForOpenRTB { bid["adm"] = .string(adm) }
+        if let width, let height, width > 0, height > 0 {
+            bid["w"] = .int(Int64(width))
+            bid["h"] = .int(Int64(height))
+        }
+        if let creativeID { bid["crid"] = .string(creativeID) }
+        if let dealID { bid["dealid"] = .string(dealID) }
+        if !advertiserDomains.isEmpty { bid["adomain"] = .array(advertiserDomains.map(JSONValue.string)) }
+        if let billingURL { bid["burl"] = .string(billingURL) }
+        return .object(bid)
+    }
+
+    /// The markup as an OpenRTB `adm`: HTML with Prebid's macros filled, VAST XML (a tag URL wrapped), Native JSON.
+    private var admForOpenRTB: String? {
+        if vastXML == nil, let vastURL {
+            let safe = vastURL.replacingOccurrences(of: "]]>", with: "]]]]><![CDATA[>")
+            return #"<VAST version="4.2"><Ad id="prebid"><Wrapper><AdSystem>Prebid.js</AdSystem><VASTAdTagURI><![CDATA["# + safe
+                + #"]]></VASTAdTagURI></Wrapper></Ad></VAST>"#
+        }
+        switch candidate(index: 0).markup {
+        case let .html(html): return html
+        case let .vast(.xml(xml)): return xml
+        case let .native(json): return json
+        case .vast(.url), .image, .none: return nil
+        }
+    }
+
+    /// OpenRTB 2.6 `mtype`: 1 banner, 2 video, 3 audio, 4 native.
+    static func markupType(of format: AdFormat) -> Int64 {
+        switch format {
+        case .banner: 1
+        case .video: 2
+        case .audio: 3
+        case .native: 4
+        }
+    }
+}

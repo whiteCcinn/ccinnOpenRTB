@@ -139,3 +139,39 @@ struct PrebidBidTests {
         #expect(PrebidBid.parseList(#"[{"bidderCode":"x","adId":"a","cpm":1,"ad":"<div/>"},{"bad":1}]"#).count == 1)
     }
 }
+
+@Suite("Prebid: bids as an OpenRTB response")
+struct PrebidResponseTests {
+    /// The simulator's own path renders a Prebid bid: an OpenRTB 2.6 response with one seat per bidder.
+    @Test func bidsBecomeAnOpenRTB26Response() throws {
+        let banner = try #require(PrebidBid.parse(#"{"bidderCode":"appnexus","adId":"a1","adUnitCode":"div-1","cpm":2.5,"currency":"EUR","mediaType":"banner","width":300,"height":250,"ad":"<div>${AUCTION_PRICE}</div>","creativeId":"cr","dealId":"d","meta":{"advertiserDomains":["brand.example"]},"burl":"https://bill.example/b"}"#))
+        let video = try #require(PrebidBid.parse(#"{"bidderCode":"rubicon","adId":"v1","adUnitCode":"div-2","cpm":4,"mediaType":"video","vastUrl":"https://vast.example/tag"}"#))
+        let json = PrebidBid.openRTBResponse(for: [banner, video], auctionID: "auction-1")
+
+        let parsed = InputParser.parse(json)
+        #expect(parsed.kind == .bidResponse(.v2("2.6")))
+        #expect(parsed.responseID == "auction-1")
+        #expect(parsed.candidates.count == 2)
+        let first = try #require(parsed.candidates.first)
+        #expect(first.seat == "appnexus")
+        #expect(first.format == .banner)
+        #expect(first.markup == .html("<div>2.5</div>"))
+        #expect(first.price == 2.5)
+        #expect(first.currency == "EUR")
+        #expect(first.size == AdSize(width: 300, height: 250))
+        #expect(first.billingURL == "https://bill.example/b")
+        #expect(first.dealID == "d")
+        let second = try #require(parsed.candidates.last)
+        #expect(second.format == .video)
+        guard case let .vast(.xml(xml)) = second.markup else { Issue.record("not VAST XML: \(second.markup)"); return }
+        #expect(xml.contains("<VASTAdTagURI><![CDATA[https://vast.example/tag]]></VASTAdTagURI>"))
+        #expect(VASTParser.parse(xml).document?.ads.count == 1)
+    }
+
+    @Test func noBidsIsANoBidResponse() {
+        let parsed = InputParser.parse(PrebidBid.openRTBResponse(for: [], auctionID: "a"))
+        #expect(parsed.candidates.isEmpty)
+        guard case .bidResponse = parsed.kind else { Issue.record("not a bid response: \(parsed.kind)"); return }
+        #expect(parsed.noBidReason == nil, "no bids is no error")
+    }
+}
