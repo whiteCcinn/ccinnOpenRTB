@@ -58,7 +58,8 @@ struct PrebidModelTests {
             transport.answer("https://registry.test/prebid.js", .init(body: registry))
             transport.answer("https://cdn.test/npm/prebid.js@1.0.0/metadata/modules.json", .init(body: metadata))
             transport.answer("https://cdn.test/npm/prebid.js@1.0.0/dist/bundle.js", .init(headers: ["Content-Type": "application/javascript"], body: bundle))
-            transport.answer("https://bidder.test/bid", .init(body: #"{"cpm":1.75,"ad":"<div>${AUCTION_PRICE}</div>"}"#))
+            transport.answer("https://bidder.test/bid", .init(headers: ["Content-Type": "application/json", "Access-Control-Allow-Origin": "*"],
+                                                              body: #"{"cpm":1.75,"ad":"<div>${AUCTION_PRICE}</div>"}"#))
         }
     }
 

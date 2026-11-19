@@ -54,7 +54,7 @@ struct PrebidPageTests {
         consented.consent.gdprApplies = true
         consented.consent.tcString = "CPtc"
         consented.consent.usPrivacy = "1YNN"
-        let html = try PrebidPage.html(for: consented, catalog: catalog, distBase: distBase, device: device)
+        let html = try PrebidPage.html(for: consented, catalog: catalog, distBase: distBase, device: device, run: "run-1")
         let loader = "https://cdn.jsdelivr.net/npm/prebid.js@11.51.0/dist/bundle.js?modules=appnexusBidAdapter,consentManagementTcf,consentManagementUsp,rubiconBidAdapter&distUrlBase=https://cdn.jsdelivr.net/npm/prebid.js@11.51.0/dist/chunks/"
         #expect(PrebidPage.loaderURL(distBase: distBase, modules: try consented.modules(catalog: catalog)) == loader)
         #expect(html.contains("loader.src = " + PrebidPage.json(.string(loader))), "the loader is created by script, so the shim hands it over")
@@ -67,9 +67,22 @@ struct PrebidPageTests {
         #expect(html.contains("requestBids"))
         #expect(html.contains("bidResponse") && html.contains("noBid") && html.contains("bidTimeout") && html.contains("auctionEnd"))
         #expect(!html.contains("</script><b>"))
-        #expect(html.contains("<\\/script>"))
+        #expect(html.contains("\\u003c/script\\u003e\\u003cb\\u003e"), "typed text reaches the page as JSON escapes")
+        #expect(html.contains(#"content="\#(PrebidPage.contentSecurityPolicy)""#) && PrebidPage.contentSecurityPolicy.contains("worker-src 'none'"))
+        #expect(html.contains(#"var run = "run-1";"#))
         #expect(html.contains(#""screenWidth":402"#) && html.contains(#""platform":"iPhone""#), "the device is emulated")
         #expect(PrebidPage.pageURL(of: consented)?.absoluteString == "https://news.example/article")
+    }
+
+    /// The page URL as WebKit holds it: the headers and the navigation guard then agree with what the page sees.
+    @Test func thePageURLIsCanonical() {
+        var setup = setup()
+        for (typed, canonical) in [("https://news.example", "https://news.example/"), ("https://NEWS.example/a", "https://news.example/a"),
+                                   ("https://news.example:443/a", "https://news.example/a"), ("https://news.example/a/../b?x=1", "https://news.example/b?x=1"),
+                                   (" https://news.example:8443/a ", "https://news.example:8443/a")] {
+            setup.pageURL = typed
+            #expect(PrebidPage.pageURL(of: setup)?.absoluteString == canonical, "\(typed)")
+        }
     }
 
     @Test func onlyAnHTTPSPageIsAPage() {
@@ -80,8 +93,22 @@ struct PrebidPageTests {
         }
     }
 
+    /// `<!--<script>` in a typed value would put the HTML tokenizer into its double-escaped state and the page script
+    /// would never run: nothing typed can reach the tokenizer as markup.
+    @Test func typedMarkupCannotReachTheTokenizer() throws {
+        var setup = setup()
+        setup.adUnits[0].code = "<!--<script>"
+        setup.consent.gdprApplies = true
+        setup.consent.tcString = "a&b>c</script>"
+        let html = try PrebidPage.html(for: setup, catalog: catalog, distBase: distBase, device: device, run: "r")
+        let scripts = html.components(separatedBy: "<script>").dropFirst().map { $0.components(separatedBy: "</script>")[0] }
+        #expect(scripts.count == 1)
+        #expect(scripts.allSatisfy { !$0.contains("<!--") && !$0.contains("<script") && !$0.contains("</") })
+        #expect(try JSONValue.parse(PrebidPage.json(.string("<!--<script>&"))) == .string("<!--<script>&"), "the escapes read back")
+    }
+
     @Test func withoutConsentNoConsentModuleIsConfigured() throws {
-        let html = try PrebidPage.html(for: setup(), catalog: catalog, distBase: distBase, device: device)
+        let html = try PrebidPage.html(for: setup(), catalog: catalog, distBase: distBase, device: device, run: "run-1")
         #expect(!html.contains("consentManagement"))
     }
 
@@ -97,7 +124,7 @@ struct PrebidFetchHeadersTests {
 
     /// A bidder on another site: Origin, the page's origin as Referer, cross-site, CORS.
     @Test func aCrossSiteBidRequest() {
-        let headers = PrebidFetchHeaders.headers(for: URL(string: "https://ib.adnxs.com/ut/v3/prebid")!, method: "post", kind: "fetch", page: page,
+        let headers = PrebidFetchHeaders.headers(for: URL(string: "https://ib.adnxs.com/ut/v3/prebid")!, method: "post", mode: "cors", page: page,
                                                  pageHeaders: ["Content-Type": "text/plain", "Origin": "https://evil.example", "Cookie": "a=1", "referer": "x"])
         #expect(headers == ["Content-Type": "text/plain", "Origin": "https://news.example", "Referer": "https://news.example/",
                             "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"])
@@ -105,25 +132,40 @@ struct PrebidFetchHeadersTests {
 
     /// The same site (another subdomain) is same-site, and a same-origin GET carries the full page URL but no Origin.
     @Test func sameSiteAndSameOrigin() {
-        let sameSite = PrebidFetchHeaders.headers(for: URL(string: "https://ads.news.example/bid")!, method: "GET", kind: "xhr", page: page, pageHeaders: [:])
+        let sameSite = PrebidFetchHeaders.headers(for: URL(string: "https://ads.news.example/bid")!, method: "GET", mode: "cors", page: page, pageHeaders: [:])
         #expect(sameSite["Sec-Fetch-Site"] == "same-site")
         #expect(sameSite["Origin"] == "https://news.example")
-        let sameOrigin = PrebidFetchHeaders.headers(for: URL(string: "https://news.example/hb")!, method: "GET", kind: "fetch", page: page, pageHeaders: [:])
+        let sameOrigin = PrebidFetchHeaders.headers(for: URL(string: "https://news.example/hb")!, method: "GET", mode: "cors", page: page, pageHeaders: [:])
         #expect(sameOrigin["Sec-Fetch-Site"] == "same-origin")
         #expect(sameOrigin["Origin"] == nil)
         #expect(sameOrigin["Referer"] == "https://news.example/article?id=7", "no fragment")
-        let post = PrebidFetchHeaders.headers(for: URL(string: "https://news.example/hb")!, method: "POST", kind: "fetch", page: page, pageHeaders: [:])
+        let post = PrebidFetchHeaders.headers(for: URL(string: "https://news.example/hb")!, method: "POST", mode: "cors", page: page, pageHeaders: [:])
         #expect(post["Origin"] == "https://news.example")
     }
 
     /// strict-origin-when-cross-origin: nothing from https to http; a beacon is no-cors.
     @Test func downgradesAndBeacons() {
-        let insecure = PrebidFetchHeaders.headers(for: URL(string: "http://bidder.example/b")!, method: "POST", kind: "beacon", page: page, pageHeaders: [:])
+        let insecure = PrebidFetchHeaders.headers(for: URL(string: "http://bidder.example/b")!, method: "POST", mode: "no-cors", page: page, pageHeaders: [:])
         #expect(insecure["Referer"] == nil)
         #expect(insecure["Sec-Fetch-Mode"] == "no-cors")
         #expect(PrebidFetchHeaders.origin(of: URL(string: "https://news.example:8443/a")!) == "https://news.example:8443")
         #expect(PrebidFetchHeaders.origin(of: URL(string: "https://NEWS.example:443/a")!) == "https://news.example")
         #expect(PrebidFetchHeaders.origin(of: URL(string: "ccinn-prebid://news.example/")!) == nil)
+    }
+
+    /// A no-cors GET (a pixel) carries no Origin; forbidden names the page tried never pass; Chrome's hints go to https.
+    @Test func noCORSForbiddenNamesAndClientHints() {
+        let pixel = PrebidFetchHeaders.headers(for: URL(string: "https://px.example/p")!, method: "GET", mode: "no-cors", page: page,
+                                               pageHeaders: ["Sec-CH-UA": "forged", "Accept-Encoding": "identity", "Proxy-Authorization": "x", "X-Ok": "1"])
+        #expect(pixel["Origin"] == nil)
+        #expect(pixel["Sec-Fetch-Mode"] == "no-cors")
+        #expect(pixel["Sec-CH-UA"] == nil && pixel["Accept-Encoding"] == nil && pixel["Proxy-Authorization"] == nil)
+        #expect(pixel["X-Ok"] == "1")
+        let hints = ["Sec-CH-UA": #""Chromium";v="157""#, "Sec-CH-UA-Mobile": "?1", "Sec-CH-UA-Platform": #""Android""#]
+        #expect(PrebidFetchHeaders.headers(for: URL(string: "https://b.example/")!, method: "GET", mode: "cors", page: page, pageHeaders: [:],
+                                           clientHints: hints)["Sec-CH-UA-Mobile"] == "?1")
+        #expect(PrebidFetchHeaders.headers(for: URL(string: "http://127.0.0.1/")!, method: "GET", mode: "cors", page: page, pageHeaders: [:],
+                                           clientHints: hints)["Sec-CH-UA-Mobile"] == nil)
     }
 }
 
@@ -139,6 +181,23 @@ struct PrebidDeviceTests {
         #expect(device.platform == "iPhone")
         #expect(device.maxTouchPoints == 5)
         #expect(device.languages == ["en-US", "en"])
+    }
+
+    /// Chrome on Android: Google's vendor and its client hints (Prebid reads them into `device.sua`); Safari has none.
+    @Test func chromeHasClientHints() throws {
+        let pixel = try #require(DeviceCatalog.all.first { $0.os == "Android" && $0.family == .androidPhone })
+        let agent = SyncBrowser.chrome.userAgent(for: pixel)
+        let device = PrebidDevice(device: pixel, userAgent: agent)
+        let hints = try #require(device.chrome)
+        #expect(device.vendor == "Google Inc.")
+        #expect(hints.major == SyncBrowser.chromeMajor)
+        #expect(hints.brand == "Google Chrome" && hints.mobile && hints.platform == "Android" && hints.model == pixel.model)
+        #expect(hints.headers["Sec-CH-UA"]?.contains(#""Google Chrome";v="\#(SyncBrowser.chromeMajor)""#) == true)
+        #expect(hints.headers["Sec-CH-UA-Platform"] == #""Android""#)
+        let webView = PrebidDevice(device: pixel, userAgent: "Mozilla/5.0 (Linux; Android 17; Pixel 10 Build/X; wv) AppleWebKit/537.36 Chrome/157.0.0.0 Mobile Safari/537.36")
+        #expect(webView.chrome?.brand == "Android WebView")
+        let safari = PrebidDevice(device: DeviceCatalog.defaultDevice, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) Version/27.2 Safari/604.1")
+        #expect(safari.chrome == nil && safari.vendor == "Apple Computer, Inc.")
     }
 
     @Test func thePlatformFollowsTheUserAgent() {

@@ -21,7 +21,7 @@ struct PrebidPane: View {
                     .frame(minHeight: 140, idealHeight: 260, maxHeight: .infinity)
             }
         }
-        .task { if prebid.versions.isEmpty { await prebid.prepare() } }
+        .onAppear { prebid.start() }
     }
 }
 
@@ -73,7 +73,13 @@ private struct PrebidStatusLine: View {
         VStack(alignment: .leading, spacing: 2) {
             switch prebid.phase {
             case .preparing: Label("Loading Prebid.js \(prebid.setup.version)…", systemImage: "arrow.down.circle").foregroundStyle(.secondary)
-            case let .failed(message): Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            case let .failed(message):
+                HStack(spacing: 6) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    if prebid.versions.isEmpty || prebid.catalog.isEmpty {
+                        Button("Retry") { prebid.start() }.controlSize(.mini)
+                    }
+                }
             case .running: Label("Auction running…", systemImage: "hourglass").foregroundStyle(.secondary)
             case .done: Label("\(prebid.bids.count) bid(s) · Prebid.js \(prebid.loadedVersion ?? prebid.setup.version)", systemImage: "checkmark.circle")
                 .foregroundStyle(.secondary)

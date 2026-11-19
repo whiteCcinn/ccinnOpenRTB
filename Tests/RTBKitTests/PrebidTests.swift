@@ -35,6 +35,19 @@ struct PrebidVersionTests {
         #expect(PrebidVersions.stableVersions(times) == ["11.52.0", "11.51.0", "11.50.0", "11.10.0", "11.9.0"])
     }
 
+    /// `time` keeps the dates of unpublished versions (their files are gone: 404s); only `versions` lists what exists.
+    /// Nothing newer than `latest` is offered (a stable-looking number published under another tag).
+    @Test func onlyPublishedVersionsUpToLatestAreOffered() throws {
+        let document = Data(#"""
+        {"dist-tags":{"latest":"11.51.0","next":"12.0.0"},
+         "versions":{"11.51.0":{},"11.50.0":{},"12.0.0":{}},
+         "time":{"11.51.0":"2026-11-04T18:00:00.000Z","11.50.0":"2026-10-28T18:00:00.000Z","10.9.2":"2025-10-01T00:00:00.000Z",
+                 "12.0.0":"2026-11-10T00:00:00.000Z"}}
+        """#.utf8)
+        let times = try #require(PrebidVersions.releaseDates(fromRegistry: document))
+        #expect(PrebidVersions.stableVersions(times) == ["11.51.0", "11.50.0"])
+    }
+
     @Test func somethingElseIsNoRegistry() {
         #expect(PrebidVersions.releaseDates(fromRegistry: Data("[]".utf8)) == nil)
         #expect(PrebidVersions.releaseDates(fromRegistry: Data("nope".utf8)) == nil)

@@ -6,12 +6,18 @@ public enum PrebidVersions {
     public static let minimumAge: TimeInterval = 14 * 86_400
 
     /// The release dates in the npm registry document's `time` map (`created` and `modified` left out); `nil` when the
-    /// data is not a registry document.
+    /// data is not a registry document. `time` keeps unpublished versions, so when the document lists its `versions` only
+    /// those count; nothing newer than `dist-tags.latest` does (a stable-looking number published under another tag).
     public static func releaseDates(fromRegistry data: Data) -> [String: Date]? {
         guard case let .object(root)? = try? JSONValue.parse(data), case let .object(time)? = root["time"] else { return nil }
+        var published: Set<String>?
+        if case let .object(versions)? = root["versions"] { published = Set(versions.keys) }
+        var latest: [Int]?
+        if case let .object(tags)? = root["dist-tags"], case let .string(tag)? = tags["latest"] { latest = numbers(of: tag) }
         var dates: [String: Date] = [:]
         for (version, value) in time where version != "created" && version != "modified" {
-            guard case let .string(text) = value, let date = parseDate(text) else { continue }
+            guard published?.contains(version) ?? true, case let .string(text) = value, let date = parseDate(text) else { continue }
+            if let latest, let parts = numbers(of: version), latest.lexicographicallyPrecedes(parts) { continue }
             dates[version] = date
         }
         return dates

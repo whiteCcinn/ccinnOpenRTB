@@ -2,24 +2,34 @@ import Foundation
 import RTBKit
 
 /// The headers a browser adds to a request the Prebid page makes, which page scripts cannot set themselves: `Origin`,
-/// `Referer` (the default policy, `strict-origin-when-cross-origin`) and `Sec-Fetch-Site/Mode/Dest`. Bidders read them
-/// (domain checks, fraud filters); without them a request does not look like it came from a page. Pure.
+/// `Referer` (the default policy, `strict-origin-when-cross-origin`), `Sec-Fetch-Site/Mode/Dest` and, for Chrome, its
+/// User-Agent Client Hints. Bidders read them (domain checks, fraud filters, `device.sua`); without them a request does
+/// not look like it came from a page. Pure.
 enum PrebidFetchHeaders {
-    /// Headers a page cannot set (the Fetch standard's forbidden names this covers): the browser's win.
-    private static let browserOwned: Set<String> = ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "cookie", "host",
-                                                     "content-length", "connection"]
+    /// The Fetch standard's forbidden request header names: a page cannot set them (the browser's win).
+    private static let forbidden: Set<String> = ["accept-charset", "accept-encoding", "access-control-request-headers", "access-control-request-method",
+                                                 "connection", "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive",
+                                                 "origin", "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via"]
 
-    /// `pageHeaders` (what the page's script asked for) without the browser-owned names, plus the browser's own.
-    static func headers(for url: URL, method: String, kind: String, page: URL, pageHeaders: [String: String]) -> [String: String] {
-        var headers = pageHeaders.filter { !browserOwned.contains($0.key.lowercased()) && !$0.key.lowercased().hasPrefix("proxy-") }
+    static func isForbidden(_ name: String) -> Bool {
+        let name = name.lowercased()
+        return forbidden.contains(name) || name.hasPrefix("proxy-") || name.hasPrefix("sec-")
+    }
+
+    /// `pageHeaders` (what the page's script asked for) without the forbidden names, plus the browser's own. `mode` is the
+    /// request's (`cors`, `no-cors`, `same-origin`); `clientHints` go to https only, as Chrome sends them.
+    static func headers(for url: URL, method: String, mode: String, page: URL, pageHeaders: [String: String],
+                        clientHints: [String: String] = [:]) -> [String: String] {
+        var headers = pageHeaders.filter { !isForbidden($0.key) }
         let sameOrigin = origin(of: url) == origin(of: page)
         let method = method.uppercased()
-        // Every CORS request carries Origin; a same-origin one only when it is not a GET or HEAD.
-        if let origin = origin(of: page), !sameOrigin || (method != "GET" && method != "HEAD") { headers["Origin"] = origin }
+        // A cross-origin CORS request carries Origin, and so does every request that is not a GET or HEAD.
+        if let origin = origin(of: page), (!sameOrigin && mode == "cors") || (method != "GET" && method != "HEAD") { headers["Origin"] = origin }
         if let referer = referer(for: url, page: page) { headers["Referer"] = referer }
         headers["Sec-Fetch-Site"] = sameOrigin ? "same-origin" : (CookieSite(url: url) == CookieSite(url: page) && CookieSite(url: page) != nil ? "same-site" : "cross-site")
-        headers["Sec-Fetch-Mode"] = kind == "beacon" ? "no-cors" : "cors"
+        headers["Sec-Fetch-Mode"] = mode
         headers["Sec-Fetch-Dest"] = "empty"
+        if url.scheme?.lowercased() == "https" { headers.merge(clientHints) { _, hint in hint } }
         return headers
     }
 

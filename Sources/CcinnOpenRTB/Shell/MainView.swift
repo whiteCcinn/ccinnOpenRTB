@@ -36,14 +36,16 @@ struct MainView: View {
             InputPanel(session: session, client: client, sync: sync, prebid: prebid)
                 .frame(minWidth: 420, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
-        // The Prebid page stays in the window whichever tab shows (a page out of the window has its timers throttled), at
-        // the device's viewport size (what its layout measures), invisible.
+        // The Prebid page, once the tab was used, stays in the window whichever tab shows (a page out of the window has its
+        // timers throttled), at the device's viewport size (what its layout measures), invisible.
         .background {
-            PrebidWebView(host: prebid.host)
-                .frame(width: CGFloat(prebid.device.viewportWidth), height: CGFloat(prebid.device.viewportHeight))
-                .opacity(0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            if let host = prebid.hostIfCreated {
+                PrebidWebView(host: host)
+                    .frame(width: CGFloat(prebid.device.viewportWidth), height: CGFloat(prebid.device.viewportHeight))
+                    .opacity(0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .toolbar { MainToolbar(session: session) }
         // isPresented, not item: the confirmation's host list completes after the markup is inspected, and an item that

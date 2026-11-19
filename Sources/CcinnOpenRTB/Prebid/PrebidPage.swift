@@ -11,10 +11,16 @@ enum PrebidPage {
     /// The message handler the page reports to.
     static let eventsHandler = "prebidEvents"
 
-    /// The page's URL: the setup's https page.
+    /// The page's URL: the setup's https page, as WebKit will hold it (host lowercased, no default port, a path of at
+    /// least `/`, dot segments resolved), so the headers the app adds name the page the scripts see.
     static func pageURL(of setup: PrebidSetup) -> URL? {
-        guard let url = URL(string: setup.pageURL), url.scheme == "https", url.host?.isEmpty == false else { return nil }
-        return url
+        guard var components = URLComponents(string: setup.pageURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.scheme?.lowercased() == "https", let host = components.host, !host.isEmpty else { return nil }
+        components.scheme = "https"
+        components.host = host.lowercased()
+        if components.port == 443 { components.port = nil }
+        if components.path.isEmpty { components.path = "/" }
+        return components.url?.standardized
     }
 
     /// The official loader of the version at `distBase` (`…/prebid.js@11.51.0/dist/`), with the modules and its chunks'
@@ -23,8 +29,13 @@ enum PrebidPage {
         "\(distBase)bundle.js?modules=\(modules.joined(separator: ","))&distUrlBase=\(distBase)chunks/"
     }
 
-    static func html(for setup: PrebidSetup, catalog: [String: PrebidBidder], distBase: String,
-                     device: PrebidDevice) throws(PrebidSetup.Invalid) -> String {
+    /// What the page allows itself, before any script: no workers (they run where the shim cannot), no network API the
+    /// shim does not replace (`connect-src`), no plugins, no `<base>`, no form submission. Prebid's scripts are `blob:`.
+    static let contentSecurityPolicy = "worker-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+
+    /// The page of one run: `run` marks everything it reports and asks, so a page being replaced is told apart.
+    static func html(for setup: PrebidSetup, catalog: [String: PrebidBidder], distBase: String, device: PrebidDevice,
+                     run: String) throws(PrebidSetup.Invalid) -> String {
         let modules = try setup.modules(catalog: catalog)
         let loader = json(.string(loaderURL(distBase: distBase, modules: modules)))
         let config = json(.object(configObject(setup, catalog: catalog)))
@@ -32,11 +43,16 @@ enum PrebidPage {
         let divs = setup.adUnits.map { "<div id=\"\(attribute($0.code))\" class=\"slot\"></div>" }.joined(separator: "\n")
         return """
         <!doctype html>
-        <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <html><head><meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="\(contentSecurityPolicy)">
+        <meta http-equiv="x-dns-prefetch-control" content="off">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Prebid.js \(attribute(setup.version))</title>
         <style>body{font:12px -apple-system,sans-serif;margin:8px}.slot{border:1px dashed #999;min-height:20px;margin:4px 0}</style>
         <script>
         (function () {
+          var run = \(json(.string(run)));
+          Object.defineProperty(window, '__ccinnRun', { value: run });
           \(emulation(device))
           function safe() {
             var seen = new WeakSet();
@@ -48,7 +64,7 @@ enum PrebidPage {
             };
           }
           function post(type, payload) {
-            try { window.webkit.messageHandlers.\(eventsHandler).postMessage({ type: type, payload: JSON.stringify(payload, safe()) }); } catch (e) {}
+            try { window.webkit.messageHandlers.\(eventsHandler).postMessage({ type: type, run: run, payload: JSON.stringify(payload, safe()) }); } catch (e) {}
           }
           // console.warn('%cPrebid', 'css…', 'WARNING: …') reads "Prebid WARNING: …".
           function text(args) {
@@ -105,15 +121,23 @@ enum PrebidPage {
         """
     }
 
-    /// The device as the page's scripts read it: the screen, the viewport, the pixel ratio, the platform, touch and the
-    /// languages (the monitor's `Accept-Language`).
+    /// The device as the page's scripts read it: the screen, the viewport, the pixel ratio, the platform, touch, the
+    /// languages (the monitor's `Accept-Language`), the vendor and, for Chrome, `navigator.userAgentData`.
     private static func emulation(_ device: PrebidDevice) -> String {
-        let values = json(.object([
+        var values: [String: JSONValue] = [
             "screenWidth": .int(Int64(device.screenWidth)), "screenHeight": .int(Int64(device.screenHeight)),
             "viewportWidth": .int(Int64(device.viewportWidth)), "viewportHeight": .int(Int64(device.viewportHeight)),
             "pixelRatio": .double(device.pixelRatio), "platform": .string(device.platform),
             "maxTouchPoints": .int(Int64(device.maxTouchPoints)), "languages": .array(device.languages.map { .string($0) }),
-        ]))
+            "vendor": .string(device.vendor),
+        ]
+        if let chrome = device.chrome {
+            let brands = JSONValue.array(chrome.brands.map { .object(["brand": .string($0.brand), "version": .string($0.version)]) })
+            let full = JSONValue.array(chrome.brands.map { .object(["brand": .string($0.brand), "version": .string($0.brand == "Not_A Brand" ? "24.0.0.0" : "\($0.version).0.0.0")]) })
+            values["chrome"] = .object(["brands": brands, "fullVersionList": full, "mobile": .bool(chrome.mobile), "platform": .string(chrome.platform),
+                                        "platformVersion": .string(chrome.platformVersion), "model": .string(chrome.model),
+                                        "uaFullVersion": .string("\(chrome.major).0.0.0")])
+        }
         return """
         (function (d) {
             function define(target, name, value) { try { Object.defineProperty(target, name, { configurable: true, get: function () { return value; } }); } catch (e) {} }
@@ -125,7 +149,22 @@ enum PrebidPage {
             define(window, 'outerWidth', d.screenWidth); define(window, 'outerHeight', d.screenHeight);
             define(navigatorType, 'platform', d.platform); define(navigatorType, 'maxTouchPoints', d.maxTouchPoints);
             define(navigatorType, 'language', d.languages[0]); define(navigatorType, 'languages', Object.freeze(d.languages.slice()));
-          })(\(values));
+            define(navigatorType, 'vendor', d.vendor);
+            if (d.chrome) {
+              var c = d.chrome, low = { brands: c.brands, mobile: c.mobile, platform: c.platform };
+              define(navigatorType, 'userAgentData', Object.freeze({
+                brands: Object.freeze(c.brands.map(Object.freeze)), mobile: c.mobile, platform: c.platform,
+                toJSON: function () { return low; },
+                getHighEntropyValues: function (hints) {
+                  var all = { architecture: '', bitness: '', formFactors: [c.mobile ? 'Mobile' : 'Desktop'], fullVersionList: c.fullVersionList,
+                              model: c.model, platformVersion: c.platformVersion, uaFullVersion: c.uaFullVersion, wow64: false };
+                  var result = { brands: c.brands, mobile: c.mobile, platform: c.platform };
+                  (Array.isArray(hints) ? hints : []).forEach(function (hint) { if (Object.prototype.hasOwnProperty.call(all, hint)) result[hint] = all[hint]; });
+                  return Promise.resolve(result);
+                }
+              }));
+            }
+          })(\(json(.object(values))));
         """
     }
 
@@ -191,10 +230,13 @@ enum PrebidPage {
         return .object(["code": .string(unit.code.trimmingCharacters(in: .whitespaces)), "mediaTypes": mediaTypes, "bids": bids])
     }
 
-    /// JSON that is safe inside a `<script>`: `</` can never close it, and U+2028/2029 cannot end a line.
+    /// JSON that is inert inside a `<script>`: no `<` (neither `</script>` nor `<!--` can reach the HTML tokenizer), no
+    /// `>` or `&`, and U+2028/2029 cannot end a line. JSON strings read the escapes back as the same characters.
     static func json(_ value: JSONValue) -> String {
         value.serialized()
-            .replacingOccurrences(of: "</", with: "<\\/")
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: ">", with: "\\u003e")
+            .replacingOccurrences(of: "&", with: "\\u0026")
             .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
             .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }

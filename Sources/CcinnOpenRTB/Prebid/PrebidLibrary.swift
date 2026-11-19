@@ -59,12 +59,18 @@ final class PrebidLibrary {
     /// The script at `url`, which must be a `dist/` file of `version` (its query, such as the loader's `?modules=` or the
     /// manifest's `?callback=`, is the page's business).
     func script(at url: String, version: String) async throws -> Data {
-        guard Self.isValid(version: version), var components = URLComponents(string: url) else { throw Failure.notPrebid(url) }
+        guard let path = distPath(of: url, version: version) else { throw Failure.notPrebid(url) }
+        return try await file(version: version, path: path)
+    }
+
+    /// `dist/…` of the script at `url` when it is one of `version`'s (its query and fragment aside), else `nil`.
+    private func distPath(of url: String, version: String) -> String? {
+        guard Self.isValid(version: version), var components = URLComponents(string: url) else { return nil }
         components.query = nil
         components.fragment = nil
         let base = distBase(version: version)
-        guard let bare = components.string, bare.hasPrefix(base), bare.count > base.count else { throw Failure.notPrebid(url) }
-        return try await file(version: version, path: "dist/" + bare.dropFirst(base.count))
+        guard let bare = components.string, bare.hasPrefix(base), bare.count > base.count else { return nil }
+        return "dist/" + bare.dropFirst(base.count)
     }
 
     static func isValid(version: String) -> Bool {
@@ -86,12 +92,18 @@ final class PrebidLibrary {
     func file(version: String, path: String) async throws -> Data {
         guard Self.isValid(version: version), Self.isValid(path: path) else { throw Failure.invalidPath("\(version)/\(path)") }
         let cached = cacheDirectory.appendingPathComponent(version, isDirectory: true).appendingPathComponent(path)
-        if let data = try? Data(contentsOf: cached) { return data }
+        if let data = await Task.detached(priority: .userInitiated, operation: { try? Data(contentsOf: cached) }).value { return data }
         let (data, _) = try await monitor().fetchContent(upstreamBase + version + "/" + path, category: .content, trigger: "Prebid.js \(path)",
                                                          source: "prebid › library \(version)", parentID: nil, userAgent: userAgent())
         try? FileManager.default.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: cached, options: .atomic)
         return data
+    }
+
+    /// Drops the cached copy of the script at `url` (one that failed its integrity check), so the next run fetches it.
+    func evict(scriptAt url: String, version: String) {
+        guard let path = distPath(of: url, version: version), Self.isValid(path: path) else { return }
+        try? FileManager.default.removeItem(at: cacheDirectory.appendingPathComponent(version, isDirectory: true).appendingPathComponent(path))
     }
 
     /// Release dates of every version (the npm registry), for the version picker and its default. The last good answer
