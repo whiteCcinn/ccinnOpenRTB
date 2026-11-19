@@ -6,6 +6,7 @@ import SwiftUI
 struct InputPanel: View {
     enum Tab: String, CaseIterable, Identifiable {
         case client = "Client"
+        case sync = "Sync"
         case response = "Response"
         case request = "Request"
         case inspector = "Inspector"
@@ -17,6 +18,7 @@ struct InputPanel: View {
 
     @Bindable var session: AdSession
     let client: ClientModel
+    let sync: SyncModel
     @SceneStorage("inputPanel.tab") private var tab: Tab = .response
 
     var body: some View {
@@ -41,6 +43,7 @@ struct InputPanel: View {
             Group {
                 switch tab {
                 case .client: ClientPane(client: client, session: session)
+                case .sync: SyncPane(sync: sync)
                 case .response: ResponsePane(session: session)
                 case .request: RequestPane(session: session)
                 case .inspector: InspectorPane(session: session)

@@ -285,5 +285,13 @@ struct SyncURLTests {
         #expect(found.ids.map(\.name) == ["uid", "buyeruid", "user_id"])
         #expect(found.ids.map(\.value) == ["abc123", "b-9", "u7"])
         #expect(found.partners.map(\.value) == ["dsp"])
+        #expect(SyncURL.mappingParameters(in: "https://ssp.example/setuid?bidder=dsp&uid=$UID").ids.isEmpty, "a placeholder is no id")
+    }
+
+    /// A URL passed as a parameter is the next party's template: its placeholder is expected there, not a leftover.
+    @Test func placeholdersInsideANestedURLAreTheNextPartysTemplate() {
+        let pixel = "https://sync.dsp.example/pixel?redir=https%3A%2F%2Fssp.example%2Fsetuid%3Fuid%3D%24UID&gdpr=${GDPR}"
+        #expect(SyncURL.ownPlaceholders(in: pixel) == ["${GDPR}"])
+        #expect(SyncURL.ownPlaceholders(in: "https://ssp.example/setuid?uid=$UID") == ["$UID"])
     }
 }

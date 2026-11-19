@@ -10,6 +10,8 @@ struct MainView: View {
     @State private var session: AdSession
     /// The window's Client tab: it sends through this session's monitor and shows responses on its device.
     @State private var client: ClientModel
+    /// The window's Sync tab: cookie-sync runs with this window's in-memory cookie jar.
+    @State private var sync: SyncModel
     @Environment(\.openWindow) private var openWindow
     /// Offline is remembered per window (Real never is: every session starts Simulated unless it was Offline).
     @SceneStorage("ccinn.session.offline") private var remembersOffline = false
@@ -18,13 +20,14 @@ struct MainView: View {
         let session = AdSession()
         _session = State(initialValue: session)
         _client = State(initialValue: ClientModel(target: session))
+        _sync = State(initialValue: SyncModel(target: session))
     }
 
     var body: some View {
         HSplitView {
             SimulatorPane(session: session)
                 .frame(minWidth: 520, idealWidth: 880, maxWidth: .infinity, maxHeight: .infinity)
-            InputPanel(session: session, client: client)
+            InputPanel(session: session, client: client, sync: sync)
                 .frame(minWidth: 420, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { MainToolbar(session: session) }
