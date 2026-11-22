@@ -181,7 +181,7 @@ struct SyncModelTests {
 
     @Test func cancellingStopsTheRun() async throws {
         let transport = ScriptedTransport()
-        transport.answer(syncStartExpanded, .init(status: 200, delay: .seconds(5)))
+        transport.answer(syncStartExpanded, .init(status: 200, delay: .heldUntilCancelled))
         let (model, _) = model(transport)
         let running = model.run()
         for _ in 0..<2_000 where transport.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }

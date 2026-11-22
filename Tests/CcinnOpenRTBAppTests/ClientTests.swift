@@ -589,7 +589,7 @@ struct ClientModelTests {
     @Test func cancellingDropsTheLateResponse() async throws {
         let harness = Harness()
         defer { harness.directory.cleanUp() }
-        harness.transport.answer(endpoint, .init(body: videoResponse, delay: .seconds(5)))
+        harness.transport.answer(endpoint, .init(body: videoResponse, delay: .heldUntilCancelled))
 
         let sending = harness.model.send()
         for _ in 0..<2_000 where harness.transport.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }

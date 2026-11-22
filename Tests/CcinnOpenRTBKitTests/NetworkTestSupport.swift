@@ -4,6 +4,13 @@ import RTBKit
 import Testing
 @testable import CcinnOpenRTBKit
 
+extension Duration {
+    /// A fake answer held until the test cancels it. The outcome must depend on the cancellation alone: a short delay
+    /// (it was 5 s) races the cancel on a starved 3-core CI runner and lets the response through. This only guards
+    /// against a hang if cancellation breaks.
+    static let heldUntilCancelled = Duration.seconds(60)
+}
+
 /// A clock tests move by hand.
 final class ManualClock: NetworkClock {
     private let current: OSAllocatedUnfairLock<Date>

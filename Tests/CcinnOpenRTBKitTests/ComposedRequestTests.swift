@@ -210,7 +210,7 @@ struct ComposedRequestMonitorTests {
 
     @Test func goingOfflineCancelsIt() async throws {
         let transport = FakeTransport()
-        transport.respond(endpoint, body: bidResponseJSON, delay: .seconds(5))
+        transport.respond(endpoint, body: bidResponseJSON, delay: .heldUntilCancelled)
         let monitor = makeMonitor(transport: transport)
 
         let sending = Task { try await monitor.send(composed(), userAgent: deviceUA) }
@@ -223,7 +223,7 @@ struct ComposedRequestMonitorTests {
 
     @Test func theCallerCanCancelIt() async throws {
         let transport = FakeTransport()
-        transport.respond(endpoint, body: bidResponseJSON, delay: .seconds(5))
+        transport.respond(endpoint, body: bidResponseJSON, delay: .heldUntilCancelled)
         let monitor = makeMonitor(transport: transport)
 
         let sending = Task { try await monitor.send(composed(), userAgent: deviceUA) }
@@ -645,7 +645,7 @@ struct ComposedRedirectPolicyTests {
     @Test func goingOfflineMidChainStopsTheNextHop() async throws {
         let transport = FakeTransport()
         transport.redirect(endpoint, to: "https://other.example/hop", status: 307)
-        transport.respond("https://other.example/hop", body: "{}", delay: .seconds(5))
+        transport.respond("https://other.example/hop", body: "{}", delay: .heldUntilCancelled)
         let monitor = makeMonitor(transport: transport)
 
         let sending = Task { try await send(monitor, .all) }
