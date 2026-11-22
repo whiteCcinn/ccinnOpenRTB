@@ -126,8 +126,11 @@ struct SavedRequest: Codable, Hashable, Identifiable, Sendable {
     var updatedAt: Date
     var request: ClientRequest
     var exchange: ClientExchange?
+    /// The group the request is listed under in Saved (`SavedRequestGroups`); `nil`, and absent from the file, for none.
+    /// Optional in the file, so files written before groups read as ungrouped and older versions ignore it.
+    var group: String?
 
-    init(id: UUID, name: String, createdAt: Date, updatedAt: Date, request: ClientRequest, exchange: ClientExchange?) {
+    init(id: UUID, name: String, createdAt: Date, updatedAt: Date, request: ClientRequest, exchange: ClientExchange?, group: String? = nil) {
         format = Self.currentFormat
         self.id = id
         self.name = name
@@ -135,6 +138,7 @@ struct SavedRequest: Codable, Hashable, Identifiable, Sendable {
         self.updatedAt = updatedAt
         self.request = request
         self.exchange = exchange
+        self.group = group
     }
 
     /// "ssp.example/openrtb2/auction" for an unnamed request; "Untitled request" without a URL.

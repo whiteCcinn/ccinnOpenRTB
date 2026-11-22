@@ -114,8 +114,60 @@ final class SavedRequestLibrary {
         guard let original = request(id: id) else { return nil }
         let date = now()
         let copy = SavedRequest(id: UUID(), name: original.name + " copy", createdAt: date, updatedAt: date, request: original.request,
-                                exchange: original.exchange)
+                                exchange: original.exchange, group: original.group)
         return await save(copy) ? copy : nil
+    }
+
+    // MARK: Groups
+
+    /// Puts the requests in `group` (`nil` or blank: no group). The name is normalized and, when a group of that name
+    /// exists whatever the case, takes its spelling. Only requests whose group changes are written, each with a new
+    /// `updatedAt` (an import elsewhere is merged newer-wins, so the move travels). Returns the ids moved; what could not
+    /// be written keeps its group and `lastError` says so.
+    @discardableResult
+    func move(_ ids: Set<UUID>, toGroup group: String?) async -> Set<UUID> {
+        await loadIfNeeded()
+        return await assign(ids, to: SavedRequestGroups.canonical(group, among: requests))
+    }
+
+    /// Moves every request of the group `key` (`SavedRequestGroups.key`) to `name`: a new spelling of the same name
+    /// applies (it is not taken from the group itself), a name another group has merges into it, a blank one ungroups.
+    @discardableResult
+    func renameGroup(_ key: String, to name: String?) async -> Set<UUID> {
+        await loadIfNeeded()
+        let members = Set(requests.lazy.filter { SavedRequestGroups.key($0.group) == key }.map(\.id))
+        guard !members.isEmpty else { return [] }
+        let others = requests.filter { !members.contains($0.id) }
+        return await assign(members, to: SavedRequestGroups.canonical(name, among: others))
+    }
+
+    /// Writes `group` (already canonical) into the requests that do not have exactly it.
+    private func assign(_ ids: Set<UUID>, to group: String?) async -> Set<UUID> {
+        let date = now()
+        let changed = requests.filter { ids.contains($0.id) && $0.group != group }.map { request in
+            var moved = request
+            moved.group = group
+            moved.updatedAt = date
+            return moved
+        }
+        guard !changed.isEmpty else { return [] }
+        let failed: Set<UUID>
+        do {
+            failed = try await store.write(changed)
+        } catch {
+            lastError = "The requests could not be moved: \(error.localizedDescription)"
+            lastNotice = nil
+            return []
+        }
+        let written = changed.filter { !failed.contains($0.id) }
+        if !written.isEmpty {
+            var byID = Dictionary(requests.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for request in written { byID[request.id] = request }
+            requests = Self.sorted(Array(byID.values))
+        }
+        lastError = failed.isEmpty ? nil : "\(Self.count(failed.count, "request")) could not be moved: the Requests folder could not be written."
+        lastNotice = nil
+        return Set(written.map(\.id))
     }
 
     // MARK: Export and import

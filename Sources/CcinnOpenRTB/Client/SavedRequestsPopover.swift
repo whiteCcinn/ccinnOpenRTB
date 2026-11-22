@@ -1,14 +1,44 @@
 import AppKit
 import SwiftUI
 
-/// The library: find a saved request, open it (with its response), render its saved response, duplicate or delete it.
-/// A plain click opens; ⌘-click, ⇧-click and ⌘A select several, which the Delete key, the context menu or the footer
-/// delete together. Opening over unsaved changes and deleting both ask first.
+/// The library: find a saved request, open it (with its response), render its saved response, duplicate or delete it,
+/// and sort requests into groups (a section each, folded or not). A plain click opens; ⌘-click, ⇧-click and ⌘A select
+/// several, which the Delete key, the context menu or the footer delete or move together. Opening over unsaved
+/// changes, deleting and removing a group ask first.
 struct SavedRequestsPopover: View {
     /// A saved request waiting for the user to discard the draft's changes.
     private struct PendingOpen {
         var saved: SavedRequest
         var render: Bool
+    }
+
+    /// A group name being typed: for a new group the requests go to, or a group's new name.
+    private enum GroupEdit {
+        case create([SavedRequest])
+        case rename(SavedRequestGroups.Section)
+
+        var title: String {
+            switch self {
+            case .create: "New Group"
+            case .rename: "Rename Group"
+            }
+        }
+
+        var action: String {
+            switch self {
+            case .create: "Move"
+            case .rename: "Rename"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case let .create(requests):
+                requests.count == 1 ? "“\(requests[0].name)” moves to the new group." : "The \(requests.count) requests move to the new group."
+            case let .rename(section):
+                "Every request in “\(section.title)” takes the new name. A name another group has merges the two."
+            }
+        }
     }
 
     let client: ClientModel
@@ -18,6 +48,11 @@ struct SavedRequestsPopover: View {
     @State private var pendingOpen: PendingOpen?
     /// The requests waiting for the user to confirm their deletion (never empty).
     @State private var pendingDelete: [SavedRequest]?
+    @State private var groupEdit: GroupEdit?
+    @State private var groupName = ""
+    @State private var pendingRemoval: SavedRequestGroups.Section?
+    /// Folded sections (`SavedRequestGroups.encodeCollapsed`), the same in every window and across launches.
+    @AppStorage("SavedRequests.collapsedGroups") private var collapsedText = ""
 
     init(client: ClientModel, isPresented: Binding<Bool>, selection: Set<UUID> = []) {
         self.client = client
@@ -26,28 +61,26 @@ struct SavedRequestsPopover: View {
     }
 
     private var library: SavedRequestLibrary { client.library }
+    private var collapsed: Set<String> { SavedRequestGroups.decodeCollapsed(collapsedText) }
 
     var body: some View {
-        let listed = ClientPresentation.filter(library.requests, by: query)
-        let targets = SavedRequestSelection.targets(selection, in: listed)
+        let listing = SavedRequestGroups.listing(library.requests, query: query, collapsed: collapsed)
+        let groupNames = SavedRequestGroups.names(library.requests)
         VStack(spacing: 0) {
-            TextField("Search", text: $query, prompt: Text("Name, method or URL"))
+            TextField("Search", text: $query, prompt: Text("Name, group, method or URL"))
                 .textFieldStyle(.roundedBorder)
                 .padding(10)
             Divider()
-            SavedRequestsList(requests: listed, currentID: client.savedID, selection: $selection,
+            SavedRequestsList(listing: listing, currentID: client.savedID, selection: $selection,
                               isEmptyLibrary: library.requests.isEmpty, isLoaded: library.isLoaded,
-                              open: { request(open: $0, render: false) }, render: { request(open: $0, render: true) },
-                              duplicate: { saved in Task { _ = await library.duplicate(saved.id) } }, delete: { pendingDelete = $0 })
+                              actions: requestActions(groupNames), groupActions: groupActions)
             Divider()
-            SavedRequestsFooter(library: library, selection: targets.isEmpty ? nil : SelectionBar(
-                selected: targets.count, listed: listed.count, selectAll: { selection = Set(listed.map(\.id)) },
-                deselect: { selection = [] }, delete: { pendingDelete = targets }))
+            SavedRequestsFooter(library: library, selection: selectionBar(listing, groupNames: groupNames))
         }
         .frame(width: 380, height: 440)
         .task { await library.loadIfNeeded() }
-        .onChange(of: listed.map(\.id)) {
-            let kept = SavedRequestSelection.pruned(selection, to: listed)
+        .onChange(of: listing.shown.map(\.id)) {
+            let kept = SavedRequestSelection.pruned(selection, to: listing.shown)
             if kept != selection { selection = kept }
         }
         .confirmationDialog("Discard the unsaved changes?", isPresented: Binding(get: { pendingOpen != nil }, set: { if !$0 { pendingOpen = nil } }),
@@ -63,6 +96,44 @@ struct SavedRequestsPopover: View {
         } message: { requests in
             Text(SavedRequestSelection.confirmation(deleting: requests).message)
         }
+        .confirmationDialog("Remove the group “\(pendingRemoval?.title ?? "")”?",
+                            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+                            presenting: pendingRemoval) { section in
+            Button("Remove Group", role: .destructive) { removeGroup(section) }
+        } message: { section in
+            // Every member, not only those a search shows: the whole group goes.
+            let count = library.requests.lazy.filter { SavedRequestGroups.key($0.group) == section.key }.count
+            Text(count == 1 ? "Its request stays, under No Group." : "Its \(count) requests stay, under No Group.")
+        }
+        .alert(groupEdit?.title ?? "", isPresented: Binding(get: { groupEdit != nil }, set: { if !$0 { groupEdit = nil } }),
+               presenting: groupEdit) { edit in
+            TextField("Group name", text: $groupName)
+            Button(edit.action) { commit(edit) }
+            Button("Cancel", role: .cancel) {}
+        } message: { edit in
+            Text(edit.message)
+        }
+    }
+
+    private func requestActions(_ groupNames: [String]) -> SavedRequestActions {
+        SavedRequestActions(open: { request(open: $0, render: false) }, render: { request(open: $0, render: true) },
+                            duplicate: { saved in Task { _ = await library.duplicate(saved.id) } }, delete: { pendingDelete = $0 },
+                            move: move, newGroup: { edit(.create($0), name: "") },
+                            groupNames: groupNames)
+    }
+
+    private var groupActions: SavedGroupActions {
+        SavedGroupActions(toggle: { setCollapsed(SavedRequestGroups.toggled($0.id, in: collapsed, library: library.requests)) },
+                          selectAll: selectAll(in:), rename: { edit(.rename($0), name: $0.title) }, remove: { pendingRemoval = $0 })
+    }
+
+    private func selectionBar(_ listing: SavedRequestGroups.Listing, groupNames: [String]) -> SelectionBar? {
+        let targets = SavedRequestSelection.targets(selection, in: listing.shown)
+        guard !targets.isEmpty else { return nil }
+        return SelectionBar(selected: targets.count, listed: listing.shown.count, selectAll: { selection = Set(listing.shown.map(\.id)) },
+                            deselect: { selection = [] }, delete: { pendingDelete = targets },
+                            move: MoveToGroupMenu(title: "Move to", targets: targets, groupNames: groupNames,
+                                                  move: move, newGroup: { edit(.create($0), name: "") }, asLink: true))
     }
 
     /// Opens at once when nothing would be lost, else asks (rendering a saved response opens it too).
@@ -86,44 +157,122 @@ struct SavedRequestsPopover: View {
         let ids = Set(requests.map(\.id))
         Task { await client.deleteSaved(ids) }
     }
+
+    private func move(_ requests: [SavedRequest], to group: String?) {
+        let ids = Set(requests.map(\.id))
+        Task { await library.move(ids, toGroup: group) }
+    }
+
+    private func edit(_ edit: GroupEdit, name: String) {
+        groupName = name
+        groupEdit = edit
+    }
+
+    /// A blank name does nothing (removing a group has its own command, which asks first).
+    private func commit(_ edit: GroupEdit) {
+        let name = groupName
+        guard let key = SavedRequestGroups.key(name) else { return }
+        switch edit {
+        case let .create(requests):
+            move(requests, to: name)
+        case let .rename(section):
+            guard let oldKey = section.key else { return }
+            // The fold travels with the group.
+            if collapsed.contains(section.id) {
+                var next = collapsed
+                next.remove(section.id)
+                next.insert(SavedRequestGroups.Section.id(key: key))
+                setCollapsed(next)
+            }
+            Task { await library.renameGroup(oldKey, to: name) }
+        }
+    }
+
+    private func removeGroup(_ section: SavedRequestGroups.Section) {
+        guard let key = section.key else { return }
+        var next = collapsed
+        next.remove(section.id)
+        setCollapsed(next)
+        Task { await library.renameGroup(key, to: nil) }
+    }
+
+    /// Unfolds the section and selects exactly its requests.
+    private func selectAll(in section: SavedRequestGroups.Section) {
+        if collapsed.contains(section.id) {
+            var next = collapsed
+            next.remove(section.id)
+            setCollapsed(next)
+        }
+        selection = Set(section.requests.map(\.id))
+    }
+
+    private func setCollapsed(_ ids: Set<String>) {
+        collapsedText = SavedRequestGroups.encodeCollapsed(ids)
+    }
+}
+
+/// What a row (or the selection) can do.
+private struct SavedRequestActions {
+    var open: (SavedRequest) -> Void
+    var render: (SavedRequest) -> Void
+    var duplicate: (SavedRequest) -> Void
+    var delete: ([SavedRequest]) -> Void
+    var move: ([SavedRequest], String?) -> Void
+    var newGroup: ([SavedRequest]) -> Void
+    var groupNames: [String]
 }
 
 private struct SavedRequestsList: View {
-    let requests: [SavedRequest]
+    let listing: SavedRequestGroups.Listing
     let currentID: UUID?
     @Binding var selection: Set<UUID>
     let isEmptyLibrary: Bool
     let isLoaded: Bool
-    let open: (SavedRequest) -> Void
-    let render: (SavedRequest) -> Void
-    let duplicate: (SavedRequest) -> Void
-    let delete: ([SavedRequest]) -> Void
+    let actions: SavedRequestActions
+    let groupActions: SavedGroupActions
 
     var body: some View {
         if !isLoaded {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if requests.isEmpty {
+        } else if listing.isEmpty {
             ContentUnavailableView(isEmptyLibrary ? "No Saved Requests" : "No Matches", systemImage: "tray",
                                    description: Text(isEmptyLibrary ? "Save a request and its response with ⌘S." : "Try other words."))
         } else {
-            List(requests, selection: $selection) { saved in
-                SavedRequestRow(saved: saved, isCurrent: saved.id == currentID)
-                    .contentShape(Rectangle())
-                    // Simultaneous, so the list still selects: ⌘/⇧-click select without opening.
-                    .simultaneousGesture(TapGesture().onEnded { if Self.isPlainClick { open(saved) } })
+            List(selection: $selection) {
+                if let sections = listing.sections {
+                    ForEach(sections) { section in
+                        Section {
+                            if listing.isExpanded(section) { rows(section.requests) }
+                        } header: {
+                            SavedGroupHeader(section: section, isExpanded: listing.isExpanded(section), canFold: !listing.expandAll,
+                                             actions: groupActions)
+                        }
+                    }
+                } else {
+                    rows(listing.shown)
+                }
             }
             .listStyle(.plain)
             .contextMenu(forSelectionType: UUID.self) { ids in
-                menu(for: SavedRequestSelection.targets(ids, in: requests))
+                menu(for: SavedRequestSelection.targets(ids, in: listing.shown))
             } primaryAction: { ids in
                 // Return, or a double click.
-                let targets = SavedRequestSelection.targets(ids, in: requests)
-                if targets.count == 1, let saved = targets.first { open(saved) }
+                let targets = SavedRequestSelection.targets(ids, in: listing.shown)
+                if targets.count == 1, let saved = targets.first { actions.open(saved) }
             }
             .onDeleteCommand {
-                let targets = SavedRequestSelection.targets(selection, in: requests)
-                if !targets.isEmpty { delete(targets) }
+                let targets = SavedRequestSelection.targets(selection, in: listing.shown)
+                if !targets.isEmpty { actions.delete(targets) }
             }
+        }
+    }
+
+    private func rows(_ requests: [SavedRequest]) -> some View {
+        ForEach(requests) { saved in
+            SavedRequestRow(saved: saved, isCurrent: saved.id == currentID)
+                .contentShape(Rectangle())
+                // Simultaneous, so the list still selects: ⌘/⇧-click select without opening.
+                .simultaneousGesture(TapGesture().onEnded { if Self.isPlainClick { actions.open(saved) } })
         }
     }
 
@@ -131,14 +280,17 @@ private struct SavedRequestsList: View {
     @ViewBuilder
     private func menu(for targets: [SavedRequest]) -> some View {
         if targets.count == 1, let saved = targets.first {
-            Button("Open") { open(saved) }
-            Button("Render Saved Response") { render(saved) }
+            Button("Open") { actions.open(saved) }
+            Button("Render Saved Response") { actions.render(saved) }
                 .disabled(saved.exchange?.response.carriesAResponseToRender != true)
-            Button("Duplicate") { duplicate(saved) }
+            Button("Duplicate") { actions.duplicate(saved) }
             Divider()
         }
         if !targets.isEmpty {
-            Button(SavedRequestSelection.deleteMenuTitle(count: targets.count), role: .destructive) { delete(targets) }
+            MoveToGroupMenu(title: "Move to Group", targets: targets, groupNames: actions.groupNames, move: actions.move,
+                            newGroup: actions.newGroup)
+            Divider()
+            Button(SavedRequestSelection.deleteMenuTitle(count: targets.count), role: .destructive) { actions.delete(targets) }
         }
     }
 
@@ -187,6 +339,7 @@ private struct SelectionBar {
     var selectAll: () -> Void
     var deselect: () -> Void
     var delete: () -> Void
+    var move: MoveToGroupMenu
 }
 
 private struct SavedRequestsFooter: View {
@@ -219,6 +372,12 @@ private struct SavedRequestsFooter: View {
             .disabled(selection.selected == selection.listed)
             .help("Select every listed request (⌘A)")
         Button("Deselect", action: selection.deselect)
+        selection.move
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Move the selected requests to a group, a new one, or out of theirs")
         Button("Delete…", role: .destructive, action: selection.delete)
             .foregroundStyle(.red)
             .help("Delete the selected requests and their saved responses (⌫)")

@@ -49,7 +49,7 @@ enum ClientPresentation {
         let words = query.lowercased().split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty else { return requests }
         return requests.filter { saved in
-            let haystack = [saved.name, saved.request.method.rawValue, saved.request.url].joined(separator: "\n").lowercased()
+            let haystack = [saved.name, saved.request.method.rawValue, saved.request.url, saved.group ?? ""].joined(separator: "\n").lowercased()
             return words.allSatisfy { haystack.contains($0) }
         }
     }

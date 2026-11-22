@@ -246,8 +246,10 @@ final class ClientModel {
         let date = now()
         let id = asNew ? UUID() : (savedID ?? UUID())
         let existing = asNew ? nil : library.request(id: id)
+        // The group as it is in the library now (it may have been moved in Saved while open); as new, the source's.
+        let group = savedID.flatMap { library.request(id: $0)?.group }
         let item = SavedRequest(id: id, name: effectiveName, createdAt: existing?.createdAt ?? date, updatedAt: date, request: request,
-                                exchange: exchange)
+                                exchange: exchange, group: group)
         guard await library.save(item) else { return false }
         // Saved; the tab may show another request by now, which keeps its own identity.
         guard draft == draftGeneration else { return true }

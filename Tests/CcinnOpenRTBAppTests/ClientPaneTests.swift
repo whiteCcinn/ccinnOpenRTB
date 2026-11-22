@@ -165,6 +165,45 @@ struct ClientPaneTests {
         }
     }
 
+    /// Grouped: a header per group ("No Group" last), a folded group shows only its header, and the selection is the
+    /// native one across sections. With `CCINN_CLIENT_SNAPSHOTS` the popover is written as a PNG.
+    @Test func theSavedListShowsGroupsAndFoldsThem() async throws {
+        let fixture = Fixture()
+        defer { fixture.directory.cleanUp() }
+        let key = "SavedRequests.collapsedGroups"
+        let previous = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set("group:banner", forKey: key)
+        defer { UserDefaults.standard.set(previous, forKey: key) }
+        let entries: [(String, String?)] = [("G24 · 2 Banner 300×250 iOS SG → 200 fill", "G24"), ("G24 · 8 Malformed body → 204", "G24"),
+                                            ("Banner floor 5.0", "Banner"), ("Rewarded video · SSP staging", nil)]
+        var ids: [UUID] = []
+        for (offset, entry) in entries.enumerated() {
+            let date = Date(timeIntervalSince1970: 1_795_000_000 - Double(offset) * 60)
+            let saved = SavedRequest(id: UUID(), name: entry.0, createdAt: date, updatedAt: date,
+                                     request: ClientRequest(url: endpoint, body: bidRequest), exchange: nil, group: entry.1)
+            #expect(await fixture.client.library.save(saved))
+            ids.append(saved.id)
+        }
+        let popover = SavedRequestsPopover(client: fixture.client, isPresented: .constant(true), selection: [ids[1]])
+            .background(Color(nsColor: .windowBackgroundColor))
+        let harness = WindowHarness(popover, size: CGSize(width: 380, height: 440))
+        harness.window.appearance = NSAppearance(named: .darkAqua)
+        defer { harness.close() }
+        try await Task.sleep(for: .milliseconds(400))
+
+        let table = try #require(Self.table(in: harness.hosting))
+        // Banner, G24 (2 rows), No Group (1 row): 3 headers + 3 rows; Banner's row is folded away.
+        #expect(table.numberOfRows == 6)
+        #expect(table.allowsMultipleSelection)
+        #expect(table.selectedRowIndexes == IndexSet([3]))
+
+        if let path = ProcessInfo.processInfo.environment["CCINN_CLIENT_SNAPSHOTS"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try write(harness.hosting, to: directory.appendingPathComponent("saved-requests-groups.png"))
+        }
+    }
+
     private static func table(in view: NSView) -> NSTableView? {
         if let table = view as? NSTableView { return table }
         return view.subviews.lazy.compactMap { table(in: $0) }.first
