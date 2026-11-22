@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plain http works in the app.** The packaged app refused every `http://` load with "The resource could not be loaded because the App Transport Security policy requires the use of a secure connection" before it reached the network: Client bid requests to http endpoints, http trackers in Real mode, http sync hops, VAST media and creative assets. Builds run with `swift run` were not affected, so it went unnoticed. The bundle now allows cleartext, and the simulator's modes decide what is sent, as they always did. The bundle's `Info.plist` is `Resources/Info.plist`, checked by a test.
+
+### Security
+
+- Update checks and downloads now refuse http themselves, on the first request and on every redirect; App Transport Security used to do this for them. A redirect to http fails with its reason instead of a bare 3xx status.
+
 ## [1.4.0] - 2026-11-19
 
 ### Added

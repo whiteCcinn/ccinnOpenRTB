@@ -104,7 +104,7 @@ The toolbar shows **Offline · Simulated · Real**, and each segment's tooltip s
 A request composer in the right panel of every window, for sending a bid request to an exchange, SSP or DSP endpoint and seeing what comes back on the device.
 
 - **Compose.** Method (**POST**, or **GET** for an endpoint that takes its query in the URL), the endpoint URL, headers and the body you type. New requests carry `Content-Type: application/json` and `x-openrtb-version: 2.6`; turn headers off, edit them or add your own. **Format** (⇧⌘F) pretty-prints the body without reordering it.
-- **Send** (⌘↩) through the window's network gate, with the simulated device's User-Agent (the iPhone 18 Pro unless you pick another device) and an explicit `Accept-Language`, unless you set those headers yourself. **Cancel** (⌘.) stops it. A request that cannot be sent says why: a URL that is not http(s), a header name that is not a token, a value with a line break, a header set twice. A body that is not JSON is sent as typed, with a warning.
+- **Send** (⌘↩) through the window's network gate, with the simulated device's User-Agent (the iPhone 18 Pro unless you pick another device) and an explicit `Accept-Language`, unless you set those headers yourself. The endpoint may be plain `http://` or `https://`. **Cancel** (⌘.) stops it. A request that cannot be sent says why: a URL that is not http(s), a header name that is not a token, a value with a line break, a header set twice. A body that is not JSON is sent as typed, with a warning.
 - **The response**: status, time, size, headers, and the body, pretty-printed when it is JSON. Any status is shown, error bodies included.
 - **On the device.** A 2xx response with a body goes into the **Response** editor and the request into **Request**, so the simulator takes the bid's format from both (`mtype`, the impression's media types, the markup) and its placement from the request (rewarded, interstitial, in-feed …). Simulated and Offline windows render it at once; in Real mode the editors are filled and the device waits for **Render**, since rendering sends the bid's trackers. A 204 or an empty body is no bid and leaves the simulator alone. The tab says what the simulator made of it: "OpenRTB 2.6 · 1 bid · Video · Rewarded · iPhone 18 Pro".
 - **Saved requests.** **Save** (⌘S) keeps the request with its last response and the device it was sent as; **Saved** lists them (newest first, searchable) in every window. Open one to send it again, or **Render** its saved response on its device without sending anything. Duplicate and delete from the list. Each is a JSON file in `~/Library/Application Support/CcinnOpenRTB/Requests/`, readable only by your account; it holds your headers (credentials included) and the request's personal data.
@@ -269,7 +269,7 @@ Each release lists SHA-256 checksums in `SHA256SUMS.txt`.
 
 Choose **CcinnOpenRTB ▸ Check for Updates…**. If a newer release exists, CcinnOpenRTB shows what's new. **Download & Open** saves the disk image to your Downloads folder, checks it against the release's `SHA256SUMS.txt`, and opens it. Quit CcinnOpenRTB, then drag the new version onto **Applications**.
 
-CcinnOpenRTB also checks quietly once a day; turn this off in **Settings ▸ General**. The check contacts only GitHub's public releases API, and you can **Skip This Version**.
+CcinnOpenRTB also checks quietly once a day; turn this off in **Settings ▸ General**. The check contacts only GitHub's public releases API, over https on every hop, and you can **Skip This Version**.
 
 The project page, release notes and issue tracker are also in the **Help** menu, the About window and **Settings ▸ General**.
 
@@ -314,6 +314,8 @@ swift test                           # unit, renderer and end-to-end acceptance 
 scripts/build-app.sh --open          # build dist/CcinnOpenRTB.app and launch it
 scripts/package-release.sh 1.4.0     # universal .app, .zip, .dmg and checksums in dist/
 ```
+
+The bundle's `Info.plist` is `Resources/Info.plist`; the build script adds the version. It allows plain http (see [SECURITY.md](SECURITY.md)): a bundled app is held to App Transport Security and `swift run` is not, so a test checks the file.
 
 ### Launch arguments for checks
 

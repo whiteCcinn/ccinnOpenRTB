@@ -104,7 +104,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 每个窗口右侧面板中的请求编辑器，用来向 Exchange、SSP 或 DSP 的端点发送竞价请求，并在设备上查看返回的结果。
 
 - **编写**：方法（**POST**；端点通过 URL 接收查询时用 **GET**）、端点 URL、请求头，以及你输入的请求体。新请求默认带有 `Content-Type: application/json` 与 `x-openrtb-version: 2.6`；可以停用、修改这些请求头或添加自己的请求头。**Format**（⇧⌘F）只格式化请求体，不改变键的顺序。
-- **发送**（⌘↩）：经由该窗口的网络关口发出，带有模拟设备的 User-Agent（除非另选设备，否则为 iPhone 18 Pro）和显式的 `Accept-Language`，除非你自己设置了这些请求头。**Cancel**（⌘.）可以中止。无法发送的请求会说明原因：URL 不是 http(s)、请求头名称不是合法 token、取值中含有换行、同一请求头设置了两次。请求体不是 JSON 时仍按原样发送，并给出警告。
+- **发送**（⌘↩）：经由该窗口的网络关口发出，带有模拟设备的 User-Agent（除非另选设备，否则为 iPhone 18 Pro）和显式的 `Accept-Language`，除非你自己设置了这些请求头。端点可以是 `http://`，也可以是 `https://`。**Cancel**（⌘.）可以中止。无法发送的请求会说明原因：URL 不是 http(s)、请求头名称不是合法 token、取值中含有换行、同一请求头设置了两次。请求体不是 JSON 时仍按原样发送，并给出警告。
 - **响应**：状态码、耗时、大小、响应头，以及响应体（JSON 会被格式化）。任何状态码都会展示，包括错误响应的响应体。
 - **在设备上展示**：带响应体的 2xx 响应会填入 **Response** 编辑器，请求填入 **Request** 编辑器，因此模拟器会根据两者确定出价格式（`mtype`、曝光位的媒体类型、素材本身），并根据请求确定广告位（激励、插屏、信息流……）。模拟模式与离线模式下会立即渲染；真实模式下只填入编辑器，设备等待你点击 **Render**，因为渲染会发出该出价的监测请求。204 或空响应体表示无出价，模拟器保持不变。标签页会显示模拟器的识别结果，例如 "OpenRTB 2.6 · 1 bid · Video · Rewarded · iPhone 18 Pro"。
 - **保存的请求**：**Save**（⌘S）会保存请求及其最近一次响应和发送时使用的设备；**Saved** 在每个窗口中列出它们（最新的在前，可搜索）。打开后可以再次发送，或者在其设备上 **Render** 保存的响应而不发出任何请求。可以在列表中复制或删除。每个请求是 `~/Library/Application Support/CcinnOpenRTB/Requests/` 下的一个 JSON 文件，只有你的账户可以读取；其中包含你的请求头（包括凭据）以及请求中的个人数据。
@@ -269,7 +269,7 @@ CcinnOpenRTB 支持 **macOS 14 Sonoma 及以上**（Apple 芯片与 Intel）。
 
 选择 **CcinnOpenRTB ▸ Check for Updates…（检查更新…）**。如果有新版本，CcinnOpenRTB 会显示更新内容。**Download & Open（下载并打开）** 会把磁盘映像保存到“下载”文件夹，按该版本的 `SHA256SUMS.txt` 校验后再打开。退出 CcinnOpenRTB，然后把新版本拖到 **应用程序** 文件夹即可。
 
-CcinnOpenRTB 每天也会在后台自动检查一次，可以在 **Settings ▸ General** 中关闭。检查只访问 GitHub 的公开 Releases API，也可以选择 **Skip This Version（跳过此版本）**。
+CcinnOpenRTB 每天也会在后台自动检查一次，可以在 **Settings ▸ General** 中关闭。检查只访问 GitHub 的公开 Releases API，每一跳都走 https，也可以选择 **Skip This Version（跳过此版本）**。
 
 项目主页、发布说明和问题反馈入口也在 **Help** 菜单、“关于”窗口和 **Settings ▸ General** 中。
 
@@ -314,6 +314,8 @@ swift test                           # 单元测试、渲染器测试与端到�
 scripts/build-app.sh --open          # 构建 dist/CcinnOpenRTB.app 并启动
 scripts/package-release.sh 1.4.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
 ```
+
+应用包的 `Info.plist` 即 `Resources/Info.plist`，版本号由构建脚本写入。它允许明文 http（见 [SECURITY.md](SECURITY.md)）：打包后的应用受 App Transport Security 约束，`swift run` 则不受约束，因此由测试检查该文件。
 
 ### 用于检查的启动参数
 
