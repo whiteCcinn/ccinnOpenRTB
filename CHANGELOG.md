@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Select and delete several saved requests.** In **Saved**, ⌘-click adds or removes a request and ⇧-click selects a range; the footer then shows how many are selected, with **Select All** (or ⌘A), **Deselect** and **Delete…**. The Delete key, the context menu of a selected row ("Delete 4 Requests…") and the footer delete them all after one confirmation. A plain click still opens a request. Only requests the search lists can be selected: searching again drops hidden ones from the selection. A request that cannot be deleted stays listed with the reason, and the others are deleted all the same; a deleted request open in a Client tab stays there as unsaved. The folder is read once for the whole selection, removing every copy of each request's file as before.
+
 ## [1.4.1] - 2026-11-22
 
 ### Fixed
