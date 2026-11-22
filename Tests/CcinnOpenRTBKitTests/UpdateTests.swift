@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import Testing
 @testable import CcinnOpenRTBKit
 
@@ -396,6 +397,91 @@ struct DownloadBridgeTests {
             _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, any Error>) in
                 delegate.start(task, continuation: continuation)
             }
+        }
+    }
+}
+
+/// The app allows cleartext (`NSAllowsArbitraryLoads`) for the endpoints it simulates, so App Transport Security no
+/// longer keeps update traffic on https: the update client does, on the first request and on every redirect.
+@Suite("Update transport")
+struct UpdateTransportTests {
+    private static func redirect(_ status: Int = 302, from: String, to location: String?) throws -> HTTPURLResponse {
+        let url = try #require(URL(string: from))
+        return try #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+                                            headerFields: location.map { ["Location": $0] } ?? [:]))
+    }
+
+    @Test(arguments: [
+        ("https://github.com/x", true), ("HTTPS://objects.githubusercontent.com/x", true),
+        ("http://github.com/x", false), ("ftp://github.com/x", false), ("file:///tmp/x.dmg", false), ("//github.com/x", false),
+    ])
+    func onlyHTTPSIsSecure(url: String, secure: Bool) {
+        #expect(UpdateTransport.isSecure(URL(string: url)) == secure)
+        #expect(UpdateTransport.isSecure(nil) == false)
+    }
+
+    @Test func redirectsAreFollowedOnlyToHTTPS() throws {
+        let task = URLSession.shared.dataTask(with: try #require(URL(string: "https://github.com/a")))
+        let guardian = SecureRedirectDelegate()
+        let response = try Self.redirect(from: "https://github.com/a", to: nil)
+        for (target, followed) in [("https://objects.githubusercontent.com/b", true), ("http://objects.githubusercontent.com/b", false)] {
+            let request = URLRequest(url: try #require(URL(string: target)))
+            let answered = OSAllocatedUnfairLock<URLRequest??>(initialState: .none)
+            guardian.urlSession(URLSession.shared, task: task, willPerformHTTPRedirection: response, newRequest: request) { next in
+                answered.withLock { $0 = .some(next) }
+            }
+            #expect(answered.withLock { $0 } == .some(followed ? request : nil))
+        }
+    }
+
+    @Test func aRefusedRedirectIsExplained() throws {
+        let refused = try #require(UpdateTransport.refusedRedirect(try Self.redirect(from: "https://github.com/a", to: "http://evil.example/b?x=1")))
+        #expect(refused.kind == .network)
+        #expect(refused.message.contains("http://evil.example"))
+        #expect(!refused.message.contains("x=1"))
+        // Followed (https, relative, scheme-relative) or not a redirect: the status speaks for itself.
+        #expect(UpdateTransport.refusedRedirect(try Self.redirect(from: "https://github.com/a", to: "https://cdn.example/b")) == nil)
+        #expect(UpdateTransport.refusedRedirect(try Self.redirect(from: "https://github.com/a", to: "/b")) == nil)
+        #expect(UpdateTransport.refusedRedirect(try Self.redirect(from: "https://github.com/a", to: "//cdn.example/b")) == nil)
+        #expect(UpdateTransport.refusedRedirect(try Self.redirect(from: "https://github.com/a", to: nil)) == nil)
+        #expect(UpdateTransport.refusedRedirect(try Self.redirect(200, from: "https://github.com/a", to: "http://evil.example/")) == nil)
+    }
+
+    @Test func theClientsSessionGuardsRedirects() {
+        #expect(URLSessionUpdateClient().session.delegate is SecureRedirectDelegate)
+    }
+
+    /// A cleartext URL is refused before anything is sent.
+    @Test func cleartextIsNeverRequested() async throws {
+        let server = try LoopbackHTTPServer { _ in .text("{}") }
+        let port = try await server.start()
+        defer { server.stop() }
+        let url = try #require(URL(string: "http://127.0.0.1:\(port)/SHA256SUMS.txt"))
+        let client = URLSessionUpdateClient()
+        await #expect { _ = try await client.get(URLRequest(url: url), maxBytes: 1024) } throws: { ($0 as? UpdateError)?.kind == .network }
+        await #expect { _ = try await client.download(url, expectedBytes: 10) { _ in } } throws: { ($0 as? UpdateError)?.kind == .network }
+        #expect(server.connectionCount == 0)
+    }
+
+    /// A download redirected to http fails with that reason, not as "status 302", and keeps no file.
+    @Test func downloadRedirectedToCleartextFails() async throws {
+        let delegate = DownloadDelegate(expectedBytes: 10) { _ in }
+        let task = URLSession.shared.downloadTask(with: try #require(URL(string: "https://github.com/a.dmg")))
+        let response = try Self.redirect(from: "https://github.com/a.dmg", to: "http://cdn.example/a.dmg")
+        let answered = OSAllocatedUnfairLock<URLRequest??>(initialState: .none)
+        delegate.urlSession(URLSession.shared, task: task, willPerformHTTPRedirection: response,
+                            newRequest: URLRequest(url: try #require(URL(string: "http://cdn.example/a.dmg")))) { next in
+            answered.withLock { $0 = .some(next) }
+        }
+        #expect(answered.withLock { $0 } == .some(nil))
+        delegate.urlSession(URLSession.shared, task: task, didCompleteWithError: nil)
+        await #expect {
+            _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, any Error>) in
+                delegate.start(task, continuation: continuation)
+            }
+        } throws: { error in
+            guard let error = error as? UpdateError else { return false }
+            return error.kind == .network && error.message.contains("http://cdn.example")
         }
     }
 }

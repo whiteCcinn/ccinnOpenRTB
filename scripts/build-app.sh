@@ -14,6 +14,7 @@ VERSION="${CCINNOPENRTB_VERSION:-1.4.0}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 ICON="$ROOT/Resources/AppIcon.icns"
+INFO_PLIST="$ROOT/Resources/Info.plist"
 
 ARCH_ARGS=()
 OPEN_AFTER=false
@@ -41,27 +42,17 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 
-cat > "$APP/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>${APP_NAME}</string>
-  <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
-  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
-  <key>CFBundleExecutable</key><string>${APP_NAME}</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>NSSupportsAutomaticTermination</key><false/>
-  <key>NSHumanReadableCopyright</key><string>CcinnOpenRTB — a native OpenRTB ad rendering and tracking simulator. © 2026 whiteCcinn, MIT License.</string>
-</dict>
-</plist>
-PLIST
+# Resources/Info.plist holds everything but the version (App Transport Security included; see the comment there).
+PLIST="$APP/Contents/Info.plist"
+cp "$INFO_PLIST" "$PLIST"
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
+plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
+plutil -lint -s "$PLIST"
+if [[ "$(plutil -extract CFBundleIdentifier raw "$PLIST")" != "$BUNDLE_ID" \
+   || "$(plutil -extract CFBundleExecutable raw "$PLIST")" != "$APP_NAME" ]]; then
+  echo "Resources/Info.plist does not name $BUNDLE_ID / $APP_NAME" >&2
+  exit 1
+fi
 
 codesign --force --deep --sign - "$APP" >/dev/null
 echo "Built $APP"

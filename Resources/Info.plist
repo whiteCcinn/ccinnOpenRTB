@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CcinnOpenRTB.app's Info.plist. scripts/build-app.sh copies it into the bundle and stamps
+  CFBundleShortVersionString and CFBundleVersion; keep the version out of this file.
+  Tests/CcinnOpenRTBAppTests/AppBundleInfoTests.swift guards it.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>CcinnOpenRTB</string>
+  <key>CFBundleDisplayName</key><string>CcinnOpenRTB</string>
+  <key>CFBundleIdentifier</key><string>io.github.whiteccinn.ccinnopenrtb</string>
+  <key>CFBundleExecutable</key><string>CcinnOpenRTB</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticTermination</key><false/>
+  <key>NSHumanReadableCopyright</key><string>CcinnOpenRTB — a native OpenRTB ad rendering and tracking simulator. © 2026 whiteCcinn, MIT License.</string>
+  <!--
+    App Transport Security would refuse every http:// load (NSURLErrorDomain -1022) before it reached the network:
+    bidder endpoints in the Request tab, trackers, sync partners, VAST media and creative assets are often plain http.
+    What leaves the Mac is decided by the simulator's own dispatch policy (Offline, Simulated, Real) and shown in the
+    Network window; the update checker keeps every hop on https by itself (UpdateTransport).
+    Do not add NSAllowsArbitraryLoadsForMedia, NSAllowsArbitraryLoadsInWebContent or NSAllowsLocalNetworking here:
+    with any of them present macOS ignores NSAllowsArbitraryLoads and refuses http again.
+  -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key><true/>
+  </dict>
+</dict>
+</plist>

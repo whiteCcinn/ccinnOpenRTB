@@ -180,21 +180,28 @@ enum UpdateErrors {
     }
 }
 
-/// `URLSession`-based client: an ephemeral session (no cookies, no cache, no credentials).
+/// `URLSession`-based client: an ephemeral session (no cookies, no cache, no credentials), https on every hop
+/// (`UpdateTransport`).
 public final class URLSessionUpdateClient: UpdateHTTPClient {
-    private let session: URLSession
+    let session: URLSession
 
     public init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.waitsForConnectivity = false
         configuration.timeoutIntervalForRequest = 30
-        session = URLSession(configuration: configuration)
+        session = URLSession(configuration: configuration, delegate: SecureRedirectDelegate(), delegateQueue: nil)
+    }
+
+    deinit {
+        session.invalidateAndCancel()
     }
 
     public func get(_ request: URLRequest, maxBytes: Int) async throws -> (Data, HTTPURLResponse) {
+        guard UpdateTransport.isSecure(request.url) else { throw UpdateTransport.refused(request.url, redirected: false) }
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw UpdateError(.invalidResponse, "Not an HTTP response.") }
+        if let refused = UpdateTransport.refusedRedirect(http) { throw refused }
         if http.expectedContentLength > Int64(maxBytes) { throw UpdateError(.invalidResponse, "The response is too large.") }
         var data = Data()
         data.reserveCapacity(min(maxBytes, max(0, Int(clamping: http.expectedContentLength))))
@@ -207,6 +214,7 @@ public final class URLSessionUpdateClient: UpdateHTTPClient {
 
     public func download(_ url: URL, expectedBytes: Int64, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         if Task.isCancelled { throw UpdateError(.cancelled, "Cancelled.") }
+        guard UpdateTransport.isSecure(url) else { throw UpdateTransport.refused(url, redirected: false) }
         let delegate = DownloadDelegate(expectedBytes: expectedBytes, progress: progress)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -266,10 +274,22 @@ final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
         if expectedBytes > 0 { progress(min(1, Double(totalBytesWritten) / Double(expectedBytes))) }
     }
 
+    /// Only to https (`UpdateTransport`); a refused redirect is the download's failure, not "status 302".
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        let next = UpdateTransport.follow(request)
+        if next == nil {
+            let refused = UpdateTransport.refused(request.url, redirected: true)
+            state.withLockUnchecked { $0.failure = $0.failure ?? refused }
+        }
+        completionHandler(next)
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         // The file at `location` is deleted when this method returns: move it now.
         if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            state.withLockUnchecked { $0.failure = UpdateError(.network, "The download server answered with status \(http.statusCode).") }
+            let failure = UpdateError(.network, "The download server answered with status \(http.statusCode).")
+            state.withLockUnchecked { $0.failure = $0.failure ?? failure }
             return
         }
         let target = FileManager.default.temporaryDirectory.appendingPathComponent("ccinn-update-\(UUID().uuidString).download")
