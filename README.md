@@ -312,7 +312,7 @@ git clone https://github.com/whiteCcinn/ccinnopenrtb.git && cd ccinnopenrtb
 swift build                          # debug build
 swift test                           # unit, renderer and end-to-end acceptance tests
 scripts/build-app.sh --open          # build dist/CcinnOpenRTB.app and launch it
-scripts/package-release.sh 1.4.1     # universal .app, .zip, .dmg and checksums in dist/
+scripts/package-release.sh 1.5.0     # universal .app, .zip, .dmg and checksums in dist/
 ```
 
 The bundle's `Info.plist` is `Resources/Info.plist`; the build script adds the version. It allows plain http (see [SECURITY.md](SECURITY.md)): a bundled app is held to App Transport Security and `swift run` is not, so a test checks the file.

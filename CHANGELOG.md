@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-22
+
 ### Added
 
 - **Groups for saved requests.** Right-click a saved request (or use **Move to** in the footer for a selection) › **Move to Group** › an existing group or **New Group…**, or **Remove from Group**. Once any request has a group, **Saved** shows a section per group, by name, with "No Group" last; click a header to fold it (remembered across launches; a search shows every match), and its ⋯ menu has **Select All in Group**, **Rename Group…** and **Remove Group…** (the requests stay, ungrouped). A request is in one group at most; names are trimmed and ignore case, so "G24" and "g24" are one group. The search matches group names. Save, Save as New and Duplicate keep the group; it is an optional `group` field in the request's file, so exports carry it, files from earlier versions are ungrouped, and earlier versions ignore it. Moving a request counts as a change: the newer copy wins on import. A folded group's requests are not selected by **Select All** and so never deleted by it.
@@ -100,7 +102,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...v1.3.0
