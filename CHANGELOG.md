@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-22
+
 ### Fixed
 
 - **Plain http works in the app.** The packaged app refused every `http://` load with "The resource could not be loaded because the App Transport Security policy requires the use of a secure connection" before it reached the network: Client bid requests to http endpoints, http trackers in Real mode, http sync hops, VAST media and creative assets. Builds run with `swift run` were not affected, so it went unnoticed. The bundle now allows cleartext, and the simulator's modes decide what is sent, as they always did. The bundle's `Info.plist` is `Resources/Info.plist`, checked by a test.
@@ -93,7 +95,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.1.0...v1.2.0
