@@ -447,8 +447,13 @@ struct UpdateTransportTests {
         #expect(UpdateTransport.refusedRedirect(try Self.redirect(200, from: "https://github.com/a", to: "http://evil.example/")) == nil)
     }
 
+    /// The client is kept alive while its session is read: a temporary one may be released at once, and its `deinit`
+    /// invalidates the session, which drops the delegate (a 3-core CI runner saw `nil`).
     @Test func theClientsSessionGuardsRedirects() {
-        #expect(URLSessionUpdateClient().session.delegate is SecureRedirectDelegate)
+        let client = URLSessionUpdateClient()
+        withExtendedLifetime(client) {
+            #expect(client.session.delegate is SecureRedirectDelegate)
+        }
     }
 
     /// A cleartext URL is refused before anything is sent.
