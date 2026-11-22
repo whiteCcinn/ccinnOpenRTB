@@ -287,9 +287,13 @@ final class ClientModel {
         simulatorNote = nil
     }
 
-    /// The library deleted `id`: the tab keeps its content as an unsaved request.
-    func forget(_ id: UUID) {
-        if savedID == id { savedID = nil }
+    /// Deletes saved requests from the library; returns the ids deleted. When the open request is one of them, the tab
+    /// keeps its content as an unsaved request.
+    @discardableResult
+    func deleteSaved(_ ids: Set<UUID>) async -> Set<UUID> {
+        let deleted = await library.delete(ids)
+        if let savedID, deleted.contains(savedID) { self.savedID = nil }
+        return deleted
     }
 
     private func stopSending() {

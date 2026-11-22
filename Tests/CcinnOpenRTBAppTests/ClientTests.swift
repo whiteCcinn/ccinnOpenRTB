@@ -249,8 +249,8 @@ struct SavedRequestStoreTests {
         let item = saved("A")
         try await store.write(item)
 
-        try await store.delete(id: item.id)
-        try await store.delete(id: item.id)
+        #expect(try await store.delete(ids: [item.id]).isEmpty)
+        #expect(try await store.delete(ids: [item.id]).isEmpty)
 
         #expect(try await store.loadAll().requests.isEmpty)
     }
@@ -285,7 +285,7 @@ struct SavedRequestStoreTests {
         try FileManager.default.copyItem(at: directory.url.appendingPathComponent("\(item.id.uuidString).json"),
                                          to: directory.url.appendingPathComponent("Secret copy.json"))
 
-        try await store.delete(id: item.id)
+        #expect(try await store.delete(ids: [item.id]).isEmpty)
 
         #expect(try await store.loadAll().requests == [keep])
         #expect(!FileManager.default.fileExists(atPath: directory.url.appendingPathComponent("Secret copy.json").path))
@@ -316,6 +316,81 @@ struct SavedRequestStoreTests {
         try await store.write(newer)
 
         #expect(try await store.loadAll().requests == [newer])
+    }
+
+    /// Several requests in one pass: each one's file and every copy claiming it go; the rest stays.
+    @Test func deletingSeveralRemovesEachWithEveryCopy() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let store = SavedRequestStore(directory: directory.url)
+        let first = saved("First")
+        let second = saved("Second")
+        let keep = saved("Keep")
+        for item in [first, second, keep] { try await store.write(item) }
+        let copy = directory.url.appendingPathComponent("First copy.json")
+        try FileManager.default.copyItem(at: directory.url.appendingPathComponent("\(first.id.uuidString).json"), to: copy)
+
+        let failures = try await store.delete(ids: [first.id, second.id])
+
+        #expect(failures.isEmpty)
+        #expect(try await store.loadAll().requests == [keep])
+        #expect(!FileManager.default.fileExists(atPath: copy.path))
+    }
+
+    /// No ids, ids without a file, or no folder at all: nothing fails and nothing else is touched.
+    @Test func deletingWhatIsNotThereIsFine() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let store = SavedRequestStore(directory: directory.url)
+        #expect(try await store.delete(ids: [UUID()]).isEmpty)
+        let keep = saved("Keep")
+        try await store.write(keep)
+
+        #expect(try await store.delete(ids: []).isEmpty)
+        #expect(try await store.delete(ids: [UUID()]).isEmpty)
+
+        #expect(try await store.loadAll().requests == [keep])
+    }
+
+    /// A file that cannot be removed is reported for its request, with why; the other requests are still removed.
+    @Test func aFileThatCannotBeRemovedIsReportedAndTheOthersGo() async throws {
+        let directory = TemporaryDirectory()
+        let store = SavedRequestStore(directory: directory.url)
+        let locked = saved("Locked")
+        let gone = saved("Gone")
+        let lockedFile = directory.url.appendingPathComponent("\(locked.id.uuidString).json")
+        defer {
+            try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: lockedFile.path)
+            directory.cleanUp()
+        }
+        try await store.write(locked)
+        try await store.write(gone)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: lockedFile.path)
+
+        let failures = try await store.delete(ids: [locked.id, gone.id])
+
+        #expect(Set(failures.keys) == [locked.id])
+        #expect(failures[locked.id]?.isEmpty == false)
+        #expect(try await store.loadAll().requests == [locked])
+    }
+
+    /// A folder that cannot be listed: copies cannot be found, so nothing is removed (a copy left behind would bring the
+    /// request back) and the call throws.
+    @Test func aFolderThatCannotBeListedRemovesNothing() async throws {
+        let directory = TemporaryDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.url.path)
+            directory.cleanUp()
+        }
+        let store = SavedRequestStore(directory: directory.url)
+        let item = saved("Kept")
+        try await store.write(item)
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: directory.url.path)
+
+        await #expect(throws: (any Error).self) { try await store.delete(ids: [item.id]) }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.url.path)
+        #expect(try await store.loadAll().requests == [item])
     }
 }
 
@@ -383,6 +458,80 @@ struct SavedRequestLibraryTests {
 
         #expect(library.requests.map(\.id) == [kept.id])
         #expect(library.lastError != nil)
+    }
+
+    @Test func deletingSeveralRemovesOnlyThose() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let items = [item("A", at: 100), item("B", at: 200), item("C", at: 300), item("D", at: 400)]
+        for saved in items { #expect(await library.save(saved)) }
+
+        let deleted = await library.delete([items[0].id, items[2].id])
+
+        #expect(deleted == [items[0].id, items[2].id])
+        #expect(library.requests.map(\.name) == ["D", "B"])
+        #expect(library.lastError == nil)
+        let reopened = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        await reopened.loadIfNeeded()
+        #expect(reopened.requests.map(\.name) == ["D", "B"])
+    }
+
+    @Test func deletingNothingChangesNothing() async throws {
+        let directory = TemporaryDirectory()
+        defer { directory.cleanUp() }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let kept = item("Kept", at: 1)
+        #expect(await library.save(kept))
+
+        #expect(await library.delete(Set<UUID>()).isEmpty)
+
+        #expect(library.requests == [kept])
+        #expect(library.lastError == nil)
+    }
+
+    /// One request cannot be deleted: the others go, it stays listed, and the error names it.
+    @Test func aRequestThatCannotBeDeletedStaysListedWithWhy() async throws {
+        let directory = TemporaryDirectory()
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let locked = item("Locked", at: 1)
+        let gone = item("Gone", at: 2)
+        let lockedFile = directory.url.appendingPathComponent("\(locked.id.uuidString).json")
+        defer {
+            try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: lockedFile.path)
+            directory.cleanUp()
+        }
+        #expect(await library.save(locked))
+        #expect(await library.save(gone))
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: lockedFile.path)
+
+        let deleted = await library.delete([locked.id, gone.id])
+
+        #expect(deleted == [gone.id])
+        #expect(library.requests.map(\.id) == [locked.id])
+        let error = try #require(library.lastError)
+        #expect(error.hasPrefix("“Locked” could not be deleted: "))
+    }
+
+    /// None can be deleted (the folder is read-only): every request stays and the error counts them.
+    @Test func whenNoneCanBeDeletedTheErrorCountsThem() async throws {
+        let directory = TemporaryDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.url.path)
+            directory.cleanUp()
+        }
+        let library = SavedRequestLibrary(store: SavedRequestStore(directory: directory.url))
+        let first = item("First", at: 1)
+        let second = item("Second", at: 2)
+        #expect(await library.save(first))
+        #expect(await library.save(second))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.url.path)
+
+        #expect(await library.delete([first.id, second.id]).isEmpty)
+
+        #expect(library.requests.map(\.id) == [second.id, first.id])
+        let error = try #require(library.lastError)
+        #expect(error.hasPrefix("2 requests could not be deleted: "))
     }
 
     @Test func duplicatingMakesAnIndependentCopy() async throws {
@@ -658,6 +807,44 @@ struct ClientModelTests {
 
         #expect(harness.target.loads == [.init(request: rewardedVideoRequest, response: videoResponse, deviceID: "galaxy-z-fold", rendering: .always)])
         #expect(harness.transport.requests.isEmpty)
+    }
+
+    /// Deleting saved requests from the library while one is open: the tab keeps its content, as an unsaved request.
+    @Test func deletingTheOpenRequestKeepsItsContentUnsaved() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+        harness.model.name = "Open"
+        #expect(await harness.model.save())
+        let openID = try #require(harness.model.savedID)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let other = SavedRequest(id: UUID(), name: "Other", createdAt: date, updatedAt: date, request: request(), exchange: nil)
+        #expect(await harness.library.save(other))
+        let content = harness.model.request
+
+        let deleted = await harness.model.deleteSaved([openID, other.id])
+
+        #expect(deleted == [openID, other.id])
+        #expect(harness.library.requests.isEmpty)
+        #expect(harness.model.savedID == nil)
+        #expect(harness.model.name == "Open")
+        #expect(harness.model.request == content)
+        #expect(harness.model.hasUnsavedChanges)
+    }
+
+    @Test func deletingOtherRequestsKeepsTheOpenOne() async throws {
+        let harness = Harness()
+        defer { harness.directory.cleanUp() }
+        #expect(await harness.model.save())
+        let openID = try #require(harness.model.savedID)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let other = SavedRequest(id: UUID(), name: "Other", createdAt: date, updatedAt: date, request: request(), exchange: nil)
+        #expect(await harness.library.save(other))
+
+        #expect(await harness.model.deleteSaved([other.id]) == [other.id])
+
+        #expect(harness.model.savedID == openID)
+        #expect(harness.library.requests.map(\.id) == [openID])
+        #expect(!harness.model.hasUnsavedChanges)
     }
 
     @Test func aNewRequestStartsBlank() async throws {

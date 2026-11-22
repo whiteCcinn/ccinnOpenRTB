@@ -131,6 +131,45 @@ struct ClientPaneTests {
         try write(chain.hosting, to: directory.appendingPathComponent("client-redirect-chain.png"))
     }
 
+    /// The Saved popover with two rows selected: the list is the native table with multiple selection, showing exactly
+    /// those rows selected. With `CCINN_CLIENT_SNAPSHOTS` the popover is written as a PNG (the selection footer).
+    @Test func theSavedListSelectsSeveralRows() async throws {
+        let fixture = Fixture()
+        defer { fixture.directory.cleanUp() }
+        let names = ["G24 · 2 Banner 300×250 iOS SG → 200 fill", "G24 · 3 Banner, floor 5.0 above the 3.0 offer → 204",
+                     "G24 · 4 Video 1080×1920 → 204 (no DSP for video)", "G24 · 5 Native 1.2 → 204 (no DSP for native)"]
+        var ids: [UUID] = []
+        for (offset, name) in names.enumerated() {
+            let date = Date(timeIntervalSince1970: 1_795_000_000 - Double(offset) * 60)
+            let saved = SavedRequest(id: UUID(), name: name, createdAt: date, updatedAt: date,
+                                     request: ClientRequest(url: endpoint, body: bidRequest), exchange: nil)
+            #expect(await fixture.client.library.save(saved))
+            ids.append(saved.id)
+        }
+        let popover = SavedRequestsPopover(client: fixture.client, isPresented: .constant(true), selection: [ids[0], ids[2]])
+            .background(Color(nsColor: .windowBackgroundColor))
+        let harness = WindowHarness(popover, size: CGSize(width: 380, height: 440))
+        harness.window.appearance = NSAppearance(named: .darkAqua)
+        defer { harness.close() }
+        try await Task.sleep(for: .milliseconds(400))
+
+        let table = try #require(Self.table(in: harness.hosting))
+        #expect(table.allowsMultipleSelection)
+        #expect(table.numberOfRows == names.count)
+        #expect(table.selectedRowIndexes == IndexSet([0, 2]))
+
+        if let path = ProcessInfo.processInfo.environment["CCINN_CLIENT_SNAPSHOTS"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try write(harness.hosting, to: directory.appendingPathComponent("saved-requests-selection.png"))
+        }
+    }
+
+    private static func table(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        return view.subviews.lazy.compactMap { table(in: $0) }.first
+    }
+
     private func write(_ view: NSView, to file: URL) throws {
         view.layoutSubtreeIfNeeded()
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))

@@ -85,24 +85,39 @@ actor SavedRequestStore {
         }
     }
 
-    /// Removes every file that holds the request — `<id>.json` and any copy claiming its id (`loadAll` would bring a copy
-    /// back) — so a deleted request's headers and data are gone from disk. A request that has no file is already gone.
-    func delete(id: UUID) throws {
+    /// Removes every file that holds one of `ids` — its `<id>.json` and any copy claiming its id (`loadAll` would bring a
+    /// copy back) — so a deleted request's headers and data are gone from disk. The folder is read once whatever the
+    /// count: each other `.json` file's id is read once. A request that has no file is already gone.
+    ///
+    /// Returns why, for each request a file of which could not be removed (its other files may be gone). Throws, removing
+    /// nothing, only when the folder cannot be listed: its copies could not be found.
+    func delete(ids: Set<UUID>) throws -> [UUID: String] {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: directory.path) else { return }
-        var files = [fileURL(for: id)]
-        let others = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
-                                                     options: [.skipsHiddenFiles])
-            .filter { $0.pathExtension.lowercased() == "json" && $0.lastPathComponent != files[0].lastPathComponent }
+        guard !ids.isEmpty, manager.fileExists(atPath: directory.path) else { return [:] }
+        let named = Dictionary(uniqueKeysWithValues: ids.map { (fileURL(for: $0).lastPathComponent, $0) })
+        let files = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                                                    options: [.skipsHiddenFiles])
+            .filter { $0.pathExtension.lowercased() == "json" }
         let decoder = JSONDecoder()
-        for file in others where readID(file, decoder: decoder) == id { files.append(file) }
+        var holders: [(file: URL, id: UUID)] = []
         for file in files {
-            do {
-                try manager.removeItem(at: file)
-            } catch CocoaError.fileNoSuchFile {
-                continue
+            if let id = named[file.lastPathComponent] {
+                holders.append((file, id))
+            } else if let id = readID(file, decoder: decoder), ids.contains(id) {
+                holders.append((file, id))
             }
         }
+        var failures: [UUID: String] = [:]
+        for holder in holders {
+            do {
+                try manager.removeItem(at: holder.file)
+            } catch CocoaError.fileNoSuchFile {
+                continue
+            } catch {
+                if failures[holder.id] == nil { failures[holder.id] = error.localizedDescription }
+            }
+        }
+        return failures
     }
 
     // MARK: Files

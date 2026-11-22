@@ -78,17 +78,34 @@ final class SavedRequestLibrary {
     /// Deletes the request from disk and the list; `false` (with `lastError`, the request still listed) when it could not.
     @discardableResult
     func delete(_ id: UUID) async -> Bool {
+        await delete([id]).contains(id)
+    }
+
+    /// Deletes the requests from disk and the list, reading the folder once; returns the ids deleted. A request that could
+    /// not be deleted stays listed and `lastError` says why — the others are deleted all the same.
+    @discardableResult
+    func delete(_ ids: Set<UUID>) async -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
         await loadIfNeeded()
+        let failures: [UUID: String]
         do {
-            try await store.delete(id: id)
+            failures = try await store.delete(ids: ids)
         } catch {
-            lastError = "The request could not be deleted: \(error.localizedDescription)"
-            return false
+            failures = Dictionary(uniqueKeysWithValues: ids.map { ($0, error.localizedDescription) })
         }
-        requests.removeAll { $0.id == id }
-        lastError = nil
+        let deleted = ids.subtracting(failures.keys)
+        if !deleted.isEmpty { requests.removeAll { deleted.contains($0.id) } }
+        lastError = failures.isEmpty ? nil : deleteFailureMessage(failures)
         lastNotice = nil
-        return true
+        return deleted
+    }
+
+    /// One failure names its request; several are counted. The reason shown is the first in list order.
+    private func deleteFailureMessage(_ failures: [UUID: String]) -> String {
+        let first = requests.first { failures[$0.id] != nil }
+        let reason = first.flatMap { failures[$0.id] } ?? failures.values.sorted().first ?? ""
+        if failures.count > 1 { return "\(Self.count(failures.count, "request")) could not be deleted: \(reason)" }
+        return (first.map { "“\($0.name)”" } ?? "The request") + " could not be deleted: \(reason)"
     }
 
     /// A copy named "<name> copy", saved as a new request.
