@@ -113,10 +113,15 @@ protocol AdRenderingHost: AnyObject {
     func resolveVAST(_ source: VASTSource) async -> ResolvedVAST
     /// Real-mode script trackers waiting to be run, oldest first (observable on the session).
     var scriptTrackers: [ScriptTracker] { get }
+    /// Takes charge of an injector running this render's script trackers: the session tears it down in the same turn
+    /// as Real mode ends (or a new render or reset starts), not when a view next updates.
+    func adopt(_ injector: ScriptTrackerInjector)
 }
 
 extension AdRenderingHost {
     var scriptTrackers: [ScriptTracker] { [] }
+
+    func adopt(_ injector: ScriptTrackerInjector) {}
 
     func navigate(to url: String, trigger: String, source: String, vastAdIndex: Int) {
         navigate(to: url, trigger: trigger, source: source)

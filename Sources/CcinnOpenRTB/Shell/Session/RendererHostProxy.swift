@@ -57,6 +57,15 @@ final class RendererHostProxy: AdRenderingHost {
         current?.scriptTrackers ?? []
     }
 
+    /// A render that is no longer current runs no tracker: its injector is torn down at once.
+    func adopt(_ injector: ScriptTrackerInjector) {
+        guard let session = current else {
+            injector.teardown()
+            return
+        }
+        session.adopt(injector)
+    }
+
     func resolveVAST(_ source: VASTSource) async -> ResolvedVAST {
         guard let session = current else { return ResolvedVAST() }
         return await session.resolveVAST(source)

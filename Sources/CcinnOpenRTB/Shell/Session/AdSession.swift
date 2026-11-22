@@ -102,6 +102,9 @@ final class AdSession: AdRenderingHost {
     /// once each and report with `monitor.finishRendererLoad` (host requirement). Simulated mode records them and never
     /// lists them; a new render starts an empty list.
     private(set) var scriptTrackers: [ScriptTracker] = []
+    /// The injectors running this render's script trackers (weak): torn down with the list, in the same turn — never left
+    /// to a view's next update, which a hidden or busy window delays (`endScriptTrackers`).
+    @ObservationIgnored private var trackerInjectors = NSHashTable<ScriptTrackerInjector>.weakObjects()
     /// The Native video asset's VAST, resolved through `resolveVAST(_:)`.
     private(set) var nativeVideoVAST: ResolvedVAST?
     /// What renderers of the current generation report through (see `RendererHostProxy`).
@@ -455,7 +458,7 @@ final class AdSession: AdRenderingHost {
         renderIssues = []
         playback = [:]
         currentAdIndex = 0
-        scriptTrackers = []
+        endScriptTrackers()
         nativeVideoVAST = nil
         nativeVideoResolution = nil
         rendererHost = RendererHostProxy(generation: generation, monitor: monitor, device: device)
@@ -1060,9 +1063,20 @@ final class AdSession: AdRenderingHost {
         let wasReal = monitor.mode == .real
         monitor.offline = true
         if wasReal { stopRenderStartedInRealMode() }
-        // The renderers tear down every Real-mode script tracker web view when the list empties.
-        scriptTrackers = []
+        endScriptTrackers()
         log("Offline: nothing is loaded or sent; only data: URLs and built-in samples", origin: "mode", outcome: .fired(requests: 0))
+    }
+
+    func adopt(_ injector: ScriptTrackerInjector) {
+        trackerInjectors.add(injector)
+    }
+
+    /// No script tracker runs any more: the list empties and every injector's web views are torn down now.
+    private func endScriptTrackers() {
+        scriptTrackers = []
+        let injectors = trackerInjectors.allObjects
+        trackerInjectors.removeAllObjects()
+        for injector in injectors { injector.teardown() }
     }
 
     func useSimulatedMode() {
@@ -1075,8 +1089,7 @@ final class AdSession: AdRenderingHost {
         guard monitor.mode != .simulated else { return }
         monitor.mode = .simulated
         stopRenderStartedInRealMode()
-        // The renderers tear down every Real-mode script tracker web view when the list empties.
-        scriptTrackers = []
+        endScriptTrackers()
         log("Simulated mode: trackers are recorded, not sent", origin: "mode", outcome: .fired(requests: 0))
     }
 

@@ -38,12 +38,16 @@ final class ScriptTrackerInjector {
 
     /// How long a finished tracker's page stays alive, so the outcomes of its own loads are still recorded.
     static let linger: Duration = .seconds(2)
+    /// The outcome of a tracker still loading when it is torn down (Real mode ended, a new render, a reset).
+    static let removedBeforeLoad = "The ad was removed before the script tracker loaded"
 
     init(host: any AdRenderingHost) {
         self.host = host
+        host.adopt(self)
     }
 
     var runningCount: Int { running.count }
+    var isTornDown: Bool { tornDown }
 
     func inject(_ trackers: [ScriptTracker]) {
         guard !tornDown, let host else { return }
@@ -66,7 +70,7 @@ final class ScriptTrackerInjector {
         tornDown = true
         for (entryID, controller) in running {
             controller.teardown()
-            host?.monitor.finishRendererLoad(entryID, error: "The ad was removed before the script tracker loaded")
+            host?.monitor.finishRendererLoad(entryID, error: Self.removedBeforeLoad)
         }
         running.removeAll()
         for controller in lingering.values { controller.teardown() }
@@ -117,9 +121,9 @@ private struct ScriptTrackerRunner: ViewModifier {
     @State private var injector: ScriptTrackerInjector?
 
     func body(content: Content) -> some View {
-        // Observable on the session: a tracker listed after `.rendered` updates this view. The session empties the list
-        // when Real mode ends (and on every new render or reset): every Real-mode web view is torn down at once, linger
-        // included, so nothing more reaches the network (safety review).
+        // Observable on the session: a tracker listed after `.rendered` updates this view. When Real mode ends (and on
+        // every new render or reset) the session tears every injector it adopted down in that same turn, linger
+        // included, so nothing more reaches the network (safety review); emptying the list here is the backstop.
         let trackers = host.scriptTrackers
         let real = host.monitor.mode == .real
         content
@@ -129,7 +133,8 @@ private struct ScriptTrackerRunner: ViewModifier {
                     injector = nil
                     return
                 }
-                let active = injector ?? ScriptTrackerInjector(host: host)
+                // The session may have torn the last one down already (Real mode ended, then a new render).
+                let active = injector.flatMap { $0.isTornDown ? nil : $0 } ?? ScriptTrackerInjector(host: host)
                 injector = active
                 active.inject(current)
             }

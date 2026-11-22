@@ -48,12 +48,37 @@ struct RealModeTeardownTests {
     private func expectSilence(_ server: EchoServer, after change: String) async throws {
         let changedAt = Date().timeIntervalSince1970 * 1000
         try await Task.sleep(for: .milliseconds(4000))
-        let made = server.requests.compactMap { request -> Double? in
-            guard let mark = request.target.firstIndex(of: "?") else { return nil }
-            return Double(request.target[request.target.index(after: mark)...])
-        }
+        let made = beaconTimes(server)
         let afterTeardown = made.filter { $0 > changedAt + 2000 }
         #expect(afterTeardown.isEmpty, "\(change): \(afterTeardown.count) beacons made more than 2 s after the change (\(made.count) in all)")
+        #expect(!made.isEmpty, "\(change): the beacons carry the page's clock")
+    }
+
+    /// The script tracker's own page, hidden (not in any window), is judged in two parts.
+    ///
+    /// - The app's part, exactly: the tracker is torn down in the change's own turn, before anything is awaited — its
+    ///   entry already carries the teardown's outcome.
+    /// - WebKit's part, loosely: WebKit runs a hidden web view's content process at background priority (its timers tick
+    ///   once a second: CI's late beacons were 1000 ms apart), so on a starved 3-core runner it acted on the teardown
+    ///   2–4 s late, while the visible creative and companion stop within `expectSilence`'s 2 s. The page must still be
+    ///   silent long before the regression this guards, a tracker running to its 15 s timeout plus the 2 s linger.
+    private func expectTrackerStopped(_ harness: AcceptanceSession, _ server: EchoServer, after change: String,
+                                      _ perform: () -> Void) async throws {
+        let trackers = harness.monitor.liveEntries.filter(\.isScript).map(\.id)
+        try #require(!trackers.isEmpty, "the jstracker has an entry")
+        #expect(trackers.allSatisfy { harness.monitor.entry(id: $0)?.state == .pending }, "the jstracker is still loading (its pixel is held)")
+
+        let changedAt = Date().timeIntervalSince1970 * 1000
+        perform()
+        for id in trackers {
+            #expect(harness.monitor.entry(id: id)?.state == .failed(ScriptTrackerInjector.removedBeforeLoad),
+                    "\(change): the tracker is torn down in the change's own turn")
+        }
+
+        try await Task.sleep(for: .milliseconds(8000))
+        let made = beaconTimes(server).map { Int($0 - changedAt) }
+        let late = made.filter { $0 > 6000 }
+        #expect(late.isEmpty, "\(change): the hidden tracker page still made beacons \(late) ms after the change (last: \(made.suffix(12)))")
         #expect(!made.isEmpty, "\(change): the beacons carry the page's clock")
     }
 
@@ -63,8 +88,7 @@ struct RealModeTeardownTests {
             window.close()
             server.stop()
         }
-        harness.session.useSimulatedMode()
-        try await expectSilence(server, after: "Simulated")
+        try await expectTrackerStopped(harness, server, after: "Simulated") { harness.session.useSimulatedMode() }
     }
 
     /// The HTML creative itself loads freely in Real mode; leaving Real (to Simulated or Offline) closes its network at once.
@@ -124,13 +148,20 @@ struct RealModeTeardownTests {
         try await expectSilence(server, after: change)
     }
 
+    /// When each beacon was made, by the page's own clock (`?<Date.now()>`).
+    private func beaconTimes(_ server: EchoServer) -> [Double] {
+        server.requests.compactMap { request -> Double? in
+            guard let mark = request.target.firstIndex(of: "?") else { return nil }
+            return Double(request.target[request.target.index(after: mark)...])
+        }
+    }
+
     @Test func resettingStopsEveryRealModeWebView() async throws {
         let (harness, server, window) = try await beatingSession()
         defer {
             window.close()
             server.stop()
         }
-        harness.session.reset()
-        try await expectSilence(server, after: "Reset")
+        try await expectTrackerStopped(harness, server, after: "Reset") { harness.session.reset() }
     }
 }
