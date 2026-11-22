@@ -63,9 +63,15 @@ struct SavedRequestsPopover: View {
     private var library: SavedRequestLibrary { client.library }
     private var collapsed: Set<String> { SavedRequestGroups.decodeCollapsed(collapsedText) }
 
+    // The body is split into functions that each type-check alone: as one expression, the panel with its four dialogs
+    // took 314 ms locally and timed out on CI's Swift 6.2.
     var body: some View {
         let listing = SavedRequestGroups.listing(library.requests, query: query, collapsed: collapsed)
         let groupNames = SavedRequestGroups.names(library.requests)
+        return namingGroups(askingToRemoveGroups(askingToDelete(askingToOpen(panel(listing, groupNames: groupNames)))))
+    }
+
+    private func panel(_ listing: SavedRequestGroups.Listing, groupNames: [String]) -> some View {
         VStack(spacing: 0) {
             TextField("Search", text: $query, prompt: Text("Name, group, method or URL"))
                 .textFieldStyle(.roundedBorder)
@@ -79,40 +85,59 @@ struct SavedRequestsPopover: View {
         }
         .frame(width: 380, height: 440)
         .task { await library.loadIfNeeded() }
-        .onChange(of: listing.shown.map(\.id)) {
-            let kept = SavedRequestSelection.pruned(selection, to: listing.shown)
-            if kept != selection { selection = kept }
-        }
-        .confirmationDialog("Discard the unsaved changes?", isPresented: Binding(get: { pendingOpen != nil }, set: { if !$0 { pendingOpen = nil } }),
-                            presenting: pendingOpen) { pending in
+        .onChange(of: listing.shown.map(\.id)) { prune(to: listing.shown) }
+    }
+
+    private func askingToOpen(_ content: some View) -> some View {
+        content.confirmationDialog("Discard the unsaved changes?", isPresented: Self.presence($pendingOpen), presenting: pendingOpen) { pending in
             Button("Open “\(pending.saved.name)”", role: .destructive) { open(pending.saved, render: pending.render) }
         } message: { _ in
             Text("The request in the Client tab has changes that are not saved.")
         }
-        .confirmationDialog(pendingDelete.map { SavedRequestSelection.confirmation(deleting: $0).title } ?? "",
-                            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-                            presenting: pendingDelete) { requests in
-            Button(SavedRequestSelection.confirmation(deleting: requests).button, role: .destructive) { delete(requests) }
-        } message: { requests in
-            Text(SavedRequestSelection.confirmation(deleting: requests).message)
+    }
+
+    private func askingToDelete(_ content: some View) -> some View {
+        let confirmation = pendingDelete.map(SavedRequestSelection.confirmation(deleting:))
+        return content.confirmationDialog(confirmation?.title ?? "", isPresented: Self.presence($pendingDelete), presenting: pendingDelete) { requests in
+            Button(confirmation?.button ?? "Delete", role: .destructive) { delete(requests) }
+        } message: { _ in
+            Text(confirmation?.message ?? "")
         }
-        .confirmationDialog("Remove the group “\(pendingRemoval?.title ?? "")”?",
-                            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
-                            presenting: pendingRemoval) { section in
+    }
+
+    private func askingToRemoveGroups(_ content: some View) -> some View {
+        let title = "Remove the group “\(pendingRemoval?.title ?? "")”?"
+        return content.confirmationDialog(title, isPresented: Self.presence($pendingRemoval), presenting: pendingRemoval) { section in
             Button("Remove Group", role: .destructive) { removeGroup(section) }
         } message: { section in
-            // Every member, not only those a search shows: the whole group goes.
-            let count = library.requests.lazy.filter { SavedRequestGroups.key($0.group) == section.key }.count
-            Text(count == 1 ? "Its request stays, under No Group." : "Its \(count) requests stay, under No Group.")
+            Text(removalMessage(section))
         }
-        .alert(groupEdit?.title ?? "", isPresented: Binding(get: { groupEdit != nil }, set: { if !$0 { groupEdit = nil } }),
-               presenting: groupEdit) { edit in
+    }
+
+    private func namingGroups(_ content: some View) -> some View {
+        content.alert(groupEdit?.title ?? "", isPresented: Self.presence($groupEdit), presenting: groupEdit) { edit in
             TextField("Group name", text: $groupName)
             Button(edit.action) { commit(edit) }
             Button("Cancel", role: .cancel) {}
         } message: { edit in
             Text(edit.message)
         }
+    }
+
+    /// Presented while `value` holds something; dismissing clears it.
+    private static func presence<Value>(_ value: Binding<Value?>) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue != nil }, set: { if !$0 { value.wrappedValue = nil } })
+    }
+
+    /// Counts every member, not only those a search shows: the whole group goes.
+    private func removalMessage(_ section: SavedRequestGroups.Section) -> String {
+        let count = library.requests.lazy.filter { SavedRequestGroups.key($0.group) == section.key }.count
+        return count == 1 ? "Its request stays, under No Group." : "Its \(count) requests stay, under No Group."
+    }
+
+    private func prune(to shown: [SavedRequest]) {
+        let kept = SavedRequestSelection.pruned(selection, to: shown)
+        if kept != selection { selection = kept }
     }
 
     private func requestActions(_ groupNames: [String]) -> SavedRequestActions {
