@@ -91,3 +91,8 @@ public struct DeviceProfile: Sendable, Hashable, Identifiable, Codable {
         self.timeZone = timeZone
     }
 }
+
+extension DeviceProfile {
+    /// `navigator.maxTouchPoints` on the device: 5 on a touch screen (what iOS and Android report), 0 with a remote.
+    public var maxTouchPoints: Int { input == .touch ? 5 : 0 }
+}

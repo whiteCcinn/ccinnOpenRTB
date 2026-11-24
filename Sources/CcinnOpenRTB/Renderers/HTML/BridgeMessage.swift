@@ -42,6 +42,8 @@ enum BridgeMessage: Equatable, Sendable {
     case windowOpen(url: String)
     /// `console.*` / `window.onerror` output of the creative.
     case console(level: String, message: String)
+    /// A gesture of the emulated finger (touch devices), reported when it ends.
+    case touch(TouchGesture)
 
     static let handlerName = "ccinn"
     /// The key of the per-load secret every message of the injected scripts carries (see `CreativeWebController`).
@@ -70,6 +72,8 @@ enum BridgeMessage: Equatable, Sendable {
         case "console":
             let level = string(object["level"]).flatMap { consoleLevels.contains($0) ? $0 : nil } ?? "log"
             return .console(level: level, message: string(object["message"]) ?? "")
+        case "touch":
+            return TouchGesture.decode(object).map(BridgeMessage.touch)
         default:
             return nil
         }

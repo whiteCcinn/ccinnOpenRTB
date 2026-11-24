@@ -94,6 +94,12 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。出价对应的曝光位决定广告单元：`imp.rwdd`（或 `imp.ext.is_rewarded_inventory`、`imp.ext.prebid.is_rewarded_inventory`；AdCOM `placement.reward`）表示激励，`imp.instl` 或 `video.plcmt` 为 3（AdCOM `display.instl`）表示插屏。
 - **像设备一样渲染**
   - HTML 与富媒体运行在带 MRAID 3.0 桥接的沙盒 Web 视图中。桥接调用都会被记录；点击和导航只会被记录，不会离开模拟器。
+  - 像在设备上一样触摸。在手机、折叠屏和平板上，鼠标就是 HTML 创意和 HTML 伴随广告的一根手指，每个 frame 都是如此：它们能看到 `TouchEvent`、`ontouchstart`、值为 5 的 `navigator.maxTouchPoints`，`matchMedia('(pointer: coarse)')` 与 `(hover: none)` 也会给出手机上的结果，因此会走移动端的逻辑。
+    - 点击就是轻点：按手机上的顺序依次收到 `pointerdown`（`pointerType: "touch"`）、`touchstart`、`pointerup`、`touchend`，然后是 `mousemove`、`mousedown`、`mouseup` 和 click。创意如果取消了这次轻点（在 `touchstart` 或 `touchend` 中调用 `preventDefault()`），就和手机上一样不会收到 click。
+    - 拖动就是滑动：`touchmove` 事件发给手指按下时所在的元素，不会产生 click。它会滚动手指本来会滚动的内容（`overflow` 轮播、长页面；遵守 CSS `touch-action`），除非创意取消了它；松手后会带着惯性滑动，并停在轮播的 scroll-snap 吸附点上。
+    - 没有悬停、文本选择和拖放。创意自己派发的事件不受影响。
+    - 每个手势都会在日志中记录一行，例如 "Tap at 120, 340"、"Swipe left 180 pt in 220 ms"，并说明创意如何处理了它。在滑动手指抬起时打开的落地页算作一次点击，不论这次滑动持续了多久。
+    - 未模拟：双指手势、长按，以及样式表中的 CSS `@media (hover)` / `:hover` 规则（它们看到的仍是 Mac 的鼠标）。合成的事件 `isTrusted` 为 `false`；click 是真实的那一个。滚轮和触控板仍然像以前一样滚动信息流，右键仍然提供 Inspect Element。
   - 图片横幅（OpenRTB 3.0 `display.banner`）。
   - Native 1.0、1.1、1.2，提供信息流、内容流和应用安装三种布局，支持隐私链接与按资源的点击。
   - VAST 视频与音频：跳过（来自 `skipoffset`）、静音、暂停、倒计时、点击跳转、进度条、伴随广告（从该广告的第一帧起展示）或结束卡片、AdChoices 等行业图标、按 `sequence` 顺序播放的 Ad Pod，以及最多 5 层的 Wrapper 链。必需的伴随广告（`CompanionAds@required`）无法展示时（CTV 上一个都无法展示），该广告不会播放（错误 602）；Wrapper 的 `BlockedAdCategories` 会拒绝类别匹配的广告（错误 205）。

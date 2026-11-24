@@ -65,7 +65,7 @@ struct PrebidDevice: Sendable, Hashable {
         let bars = Self.points(device.safeArea.top + device.safeArea.bottom)
         let chrome = Self.chromeHints(userAgent: userAgent, device: device)
         self.init(screenWidth: width, screenHeight: height, viewportWidth: width, viewportHeight: max(1, height - bars),
-                  pixelRatio: device.scale, platform: Self.platform(forUserAgent: userAgent), maxTouchPoints: device.input == .touch ? 5 : 0,
+                  pixelRatio: device.scale, platform: Self.platform(forUserAgent: userAgent), maxTouchPoints: device.maxTouchPoints,
                   vendor: chrome != nil ? "Google Inc." : (userAgent.contains("Firefox/") ? "" : "Apple Computer, Inc."), chrome: chrome)
     }
 

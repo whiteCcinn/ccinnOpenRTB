@@ -10,6 +10,8 @@ enum RendererLogOrigin: String, Sendable, CaseIterable {
     case html = "HTML"
     /// The OpenRTB 3.0 image banner.
     case display = "Display"
+    /// Taps and swipes on a touch device's HTML creative (the emulated finger).
+    case touch = "Touch"
 }
 
 extension RendererLogEntry {

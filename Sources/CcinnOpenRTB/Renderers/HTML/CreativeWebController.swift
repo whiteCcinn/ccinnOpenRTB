@@ -11,6 +11,8 @@ import WebKit
 ///   loaded; if the rules cannot be compiled the creative is not loaded at all (fails closed).
 /// - Nothing navigates the web view after the document: clicks are reported (`.click`), gesture-less attempts are
 ///   recorded as auto-redirects, `window.open` never opens a window.
+/// - On a touch device the mouse is a finger (`TouchEmulation`): every frame sees touch events, and each tap or swipe
+///   is logged.
 /// - Main-actor only; `teardown()` removes the script handlers (they retain their target weakly anyway) and finishes the
 ///   creative loads still open.
 @MainActor
@@ -68,6 +70,7 @@ final class CreativeWebController: NSObject {
     /// The last real click or key press in this web view (seen natively, never reported by the page).
     private var lastGesture: Date?
     private var gestureMonitor: Any?
+    private var pressTracker = GesturePressTracker()
     /// This load's secret: every message of the injected scripts carries it; anything else was posted by the page.
     private var bridgeNonce = ""
     private var messageBudget = CreativeWebController.messageCapacity
@@ -113,21 +116,27 @@ final class CreativeWebController: NSObject {
         installGestureMonitor()
     }
 
-    /// A real click or key press in this web view, seen in the app's event stream (the page cannot synthesise one). A
-    /// click-through, `mraid.open` or `mraid.playVideo` needs one within `NavigationClassifier.gestureWindow`.
+    /// A real click, release or key press in this web view, seen in the app's event stream (the page cannot synthesise
+    /// one). A click-through, `mraid.open` or `mraid.playVideo` needs one within `NavigationClassifier.gestureWindow`.
     private func installGestureMonitor() {
-        gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+        gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown, .keyDown]) {
+            [weak self] event in
             MainActor.assumeIsolated { self?.observe(event) }
             return event
         }
     }
 
-    private func observe(_ event: NSEvent) {
+    /// One event of the app's stream (`date`: when it happened; tests pass it). A press in the web view is a gesture, and
+    /// so is its release wherever the pointer is then: a creative opens its landing page when a swipe's finger lifts.
+    func observe(_ event: NSEvent, at date: Date = Date()) {
         guard !tornDown, let window = webView.window, event.window === window else { return }
-        if event.type == .keyDown {
-            if let responder = window.firstResponder as? NSView, responder === webView || responder.isDescendant(of: webView) { noteUserGesture() }
-        } else if webView.bounds.contains(webView.convert(event.locationInWindow, from: nil)) {
-            noteUserGesture()
+        switch event.type {
+        case .keyDown:
+            if let responder = window.firstResponder as? NSView, responder === webView || responder.isDescendant(of: webView) { noteUserGesture(at: date) }
+        case .leftMouseUp:
+            if pressTracker.release() { noteUserGesture(at: date) }
+        default:
+            if pressTracker.press(inside: webView.bounds.contains(webView.convert(event.locationInWindow, from: nil))) { noteUserGesture(at: date) }
         }
     }
 
@@ -166,6 +175,10 @@ final class CreativeWebController: NSObject {
         userContent.removeAllContentRuleLists()
         userContent.addUserScript(WKUserScript(source: CreativeScripts.instrumentation(nonce: bridgeNonce), injectionTime: .atDocumentStart,
                                                forMainFrameOnly: false, in: .page))
+        if let device = host?.device, device.maxTouchPoints > 0 {
+            userContent.addUserScript(WKUserScript(source: TouchEmulation.script(nonce: bridgeNonce, maxTouchPoints: device.maxTouchPoints),
+                                                   injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        }
         if let environment = content.mraid {
             controllerName = "__ccinnMRAID_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
             userContent.addUserScript(WKUserScript(source: CreativeScripts.mraid(environment: environment, controller: controllerName, nonce: bridgeNonce),
@@ -287,6 +300,8 @@ final class CreativeWebController: NSObject {
             default: .info
             }
             log(.html, mapped, "console.\(level): \(text)")
+        case let .touch(gesture):
+            log(.touch, .info, gesture.logLine)
         }
     }
 
