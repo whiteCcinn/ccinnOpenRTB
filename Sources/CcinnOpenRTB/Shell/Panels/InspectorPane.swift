@@ -13,13 +13,23 @@ struct InspectorPane: View {
 
     var body: some View {
         if let candidate = session.selectedCandidate {
-            inspector(candidate, rendered: session.prepared?.candidate.id == candidate.id ? session.prepared : nil)
+            inspector(candidate, rendered: prepared(for: candidate))
         } else {
-            ContentUnavailableView {
-                Label("No Bid Selected", systemImage: "doc.text.magnifyingglass")
-            } description: {
-                Text("Paste a response or pick a sample. The Inspector shows the selected bid's markup, Native assets, VAST chain and trackers.")
-            }
+            noBid
+        }
+    }
+
+    /// The last render, when it was of this bid.
+    private func prepared(for candidate: AdCandidate) -> PreparedAd? {
+        guard let prepared = session.prepared, prepared.candidate.id == candidate.id else { return nil }
+        return prepared
+    }
+
+    private var noBid: some View {
+        ContentUnavailableView {
+            Label("No Bid Selected", systemImage: "doc.text.magnifyingglass")
+        } description: {
+            Text("Paste a response or pick a sample. The Inspector shows the selected bid's markup, Native assets, VAST chain and trackers.")
         }
     }
 
