@@ -8,6 +8,20 @@ enum MarkupFormatter {
     enum Language: Equatable, Sendable {
         case json, vast, xml, html
 
+        /// From a response's MIME type: `…json`, `…xml`, `…html`.
+        init?(mimeType: String?) {
+            guard let mime = mimeType?.lowercased() else { return nil }
+            if mime.contains("json") {
+                self = .json
+            } else if mime.contains("html") {
+                self = .html
+            } else if mime.contains("xml") {
+                self = .xml
+            } else {
+                return nil
+            }
+        }
+
         var title: String {
             switch self {
             case .json: "JSON"
@@ -69,10 +83,10 @@ enum MarkupFormatter {
         }
     }
 
-    /// Unescapes and pretty-prints `text`. `hint` (from a MIME type) chooses XML over HTML for markup that does not say.
-    /// Succeeds when the text was unescaped, pretty-printed or both.
-    static func format(_ text: String, as hint: Language? = nil) -> Result<Formatted, Failure> {
-        let unescaped = JSONEscapedText.unescaped(text)
+    /// Unescapes (unless `unescape` is false) and pretty-prints `text`. `hint` (from a MIME type) chooses XML over HTML
+    /// for markup that does not say. Succeeds when the text was unescaped, pretty-printed or both.
+    static func format(_ text: String, as hint: Language? = nil, unescape: Bool = true) -> Result<Formatted, Failure> {
+        let unescaped = unescape ? JSONEscapedText.unescaped(text) : nil
         let source = (unescaped?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
         let levels = unescaped?.levels ?? 0
         let pretty = prettyPrinted(source, hint: hint)
@@ -92,8 +106,8 @@ enum MarkupFormatter {
     }
 
     /// The formatted text for a viewer, or the text itself when it cannot be formatted.
-    static func displayText(_ text: String, as hint: Language? = nil) -> String {
-        (try? format(text, as: hint).get())?.text ?? text
+    static func displayText(_ text: String, as hint: Language? = nil, unescape: Bool = true) -> String {
+        (try? format(text, as: hint, unescape: unescape).get())?.text ?? text
     }
 
     /// `trimmed` has no surrounding whitespace.

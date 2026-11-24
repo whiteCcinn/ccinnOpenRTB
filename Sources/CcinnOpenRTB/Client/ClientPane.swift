@@ -182,7 +182,7 @@ private struct ClientRequestEditor: View {
 
     @Bindable var client: ClientModel
     @State private var tab: Tab = .body
-    @State private var formatError: String?
+    @State private var formatNote: FormatNote?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,11 +197,8 @@ private struct ClientRequestEditor: View {
                 Spacer(minLength: 0)
                 ClientRedirectPicker(client: client)
                 if tab == .body {
-                    if let formatError { Text(formatError).font(.caption).foregroundStyle(.orange).lineLimit(1) }
-                    Button("Format", systemImage: "text.alignleft") { format() }
-                        .keyboardShortcut("f", modifiers: [.command, .shift])
-                        .disabled(SyntaxHighlighter.Language.detect(client.request.body) != .json)
-                        .help("Pretty-print the JSON (keeps key order and number spelling) (⇧⌘F)")
+                    FormatNoteLabel(note: formatNote, text: client.request.body)
+                    FormatButton(text: $client.request.body, note: $formatNote)
                 }
             }
             .controlSize(.small)
@@ -211,20 +208,6 @@ private struct ClientRequestEditor: View {
             switch tab {
             case .body: ClientBodyEditor(client: client)
             case .headers: ClientHeadersEditor(client: client)
-            }
-        }
-    }
-
-    private func format() {
-        let text = client.request.body
-        Task {
-            let formatted = await Task.detached(priority: .userInitiated) { JSONFormatter.prettyPrinted(text) }.value
-            guard client.request.body == text else { return }
-            if let formatted {
-                formatError = nil
-                client.request.body = formatted
-            } else {
-                formatError = "Not well-formed JSON"
             }
         }
     }
@@ -415,9 +398,11 @@ private struct ClientExchangeView: View {
         }
         .onChange(of: showsChain) { if !showsChain, tab == .redirects { tab = .body } }
         .task(id: exchange.response.body) {
-            // Pretty-printed off the main actor; shown as received when it is not JSON.
+            // Pretty-printed off the main actor (JSON, XML such as a VAST answer, HTML), escapes as received; shown as
+            // received when it is none of them.
             let raw = exchange.response.body
-            shownBody = await Task.detached(priority: .userInitiated) { JSONFormatter.prettyPrinted(raw) ?? raw }.value
+            let language = MarkupFormatter.Language(mimeType: HTTPHeaders.mimeType(fromContentType: HTTPHeaders.value("Content-Type", in: exchange.response.headers)))
+            shownBody = await Task.detached(priority: .userInitiated) { MarkupFormatter.displayText(raw, as: language, unescape: false) }.value
         }
     }
 }

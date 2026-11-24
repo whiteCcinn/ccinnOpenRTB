@@ -310,17 +310,8 @@ private struct ResponsePreview: View {
                 Text("\(Int(image.size.width))×\(Int(image.size.height)) · \(Format.bytes(data.count))").font(.caption).foregroundStyle(.secondary)
             }
         } else if TextDecoding.isTextual(mimeType: mime) || mime.isEmpty || looksLikeText {
-            let text = TextDecoding.string(from: data, charset: HTTPHeaders.charset(fromContentType: contentType))
-            let shown = text.count > Self.maxCharacters ? String(text.prefix(Self.maxCharacters)) + "\n…" : text
-            ScrollView(.horizontal) {
-                Text(shown)
-                    .font(Theme.monospacedSmall)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(8)
-            }
-            .frame(maxHeight: 360)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+            TextBodyPreview(text: TextDecoding.string(from: data, charset: HTTPHeaders.charset(fromContentType: contentType)),
+                            language: MarkupFormatter.Language(mimeType: mime), maxCharacters: Self.maxCharacters)
         } else {
             Text("\(Format.bytes(data.count)) of \(mimeType ?? "binary data")").font(.callout).foregroundStyle(.secondary)
         }
@@ -328,5 +319,62 @@ private struct ResponsePreview: View {
 
     private var looksLikeText: Bool {
         data.prefix(512).allSatisfy { $0 == 0x09 || $0 == 0x0A || $0 == 0x0D || ($0 >= 0x20 && $0 != 0x7F) }
+    }
+}
+
+/// A text body, formatted (JSON, VAST / XML, HTML) or raw, the formatting done off the main actor.
+private struct TextBodyPreview: View {
+    let text: String
+    let language: MarkupFormatter.Language?
+    let maxCharacters: Int
+    @AppStorage("network.body.formatted") private var formatted = true
+    @State private var shown: Shown?
+
+    private struct Shown: Equatable {
+        var source: String
+        var text: String
+        var summary: String
+    }
+
+    var body: some View {
+        let canFormat = MarkupFormatter.mightFormat(text)
+        let current = formatted && canFormat ? shown.flatMap { $0.source == text ? $0 : nil } : nil
+        let display = current?.text ?? text
+        VStack(alignment: .leading, spacing: 4) {
+            if canFormat {
+                HStack(spacing: 8) {
+                    Picker("Body", selection: $formatted) {
+                        Text("Formatted").tag(true)
+                        Text("Raw").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .controlSize(.small)
+                    if let current {
+                        Text(current.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
+            ScrollView(.horizontal) {
+                Text(display.count > maxCharacters ? String(display.prefix(maxCharacters)) + "\n…" : display)
+                    .font(Theme.monospacedSmall)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(8)
+            }
+            .frame(maxHeight: 360)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .task(id: formatted && canFormat ? text : nil) {
+            guard formatted, canFormat, shown?.source != text else { return }
+            let source = text
+            let language = language
+            let result = await Task.detached(priority: .userInitiated) { MarkupFormatter.format(source, as: language) }.value
+            switch result {
+            case let .success(output): shown = Shown(source: source, text: output.text, summary: output.summary)
+            case let .failure(failure): shown = Shown(source: source, text: source, summary: failure.message)
+            }
+        }
     }
 }

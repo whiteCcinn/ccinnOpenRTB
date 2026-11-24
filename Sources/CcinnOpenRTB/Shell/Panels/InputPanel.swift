@@ -145,20 +145,13 @@ private struct StatusLine: View {
 
 private struct ResponsePane: View {
     @Bindable var session: AdSession
-    @State private var formatError: String?
+    @State private var formatNote: FormatNote?
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 SampleMenu(session: session)
-                Button {
-                    format()
-                } label: {
-                    Label("Format", systemImage: "text.alignleft")
-                }
-                .help("Pretty-print the JSON (keeps key order and number spelling) (⇧⌘F)")
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(SyntaxHighlighter.Language.detect(session.responseText) != .json)
+                FormatButton(text: $session.responseText, note: $formatNote)
                 Button {
                     session.responseText = ""
                 } label: {
@@ -166,9 +159,7 @@ private struct ResponsePane: View {
                 }
                 .disabled(session.responseText.isEmpty)
                 Spacer(minLength: 0)
-                if let formatError {
-                    Text(formatError).font(.caption).foregroundStyle(.orange).lineLimit(1)
-                }
+                FormatNoteLabel(note: formatNote, text: session.responseText)
             }
             .labelStyle(.titleAndIcon)
             .controlSize(.small)
@@ -189,24 +180,11 @@ private struct ResponsePane: View {
     private static let placeholder = """
     Paste an OpenRTB 2.x / 3.0 bid response, Native JSON, VAST XML, a VAST tag URL or HTML markup — or pick a sample.
     """
-
-    private func format() {
-        let text = session.responseText
-        Task {
-            let formatted = await Task.detached(priority: .userInitiated) { JSONFormatter.prettyPrinted(text) }.value
-            guard session.responseText == text else { return }
-            if let formatted {
-                formatError = nil
-                session.responseText = formatted
-            } else {
-                formatError = "Not well-formed JSON: unbalanced brackets or an open string"
-            }
-        }
-    }
 }
 
 private struct RequestPane: View {
     @Bindable var session: AdSession
+    @State private var formatNote: FormatNote?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -217,6 +195,10 @@ private struct RequestPane: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
+                FormatNoteLabel(note: formatNote, text: session.requestText)
+                FormatButton(text: $session.requestText, note: $formatNote)
+                    .labelStyle(.titleAndIcon)
+                    .controlSize(.small)
                 Button("Clear") { session.requestText = "" }
                     .controlSize(.small)
                     .disabled(session.requestText.isEmpty)
