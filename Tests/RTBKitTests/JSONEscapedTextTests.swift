@@ -79,9 +79,11 @@ struct JSONEscapedTextTests {
         let ad = #"<Ad id=\"1\"><InLine><Impression><![CDATA[https://t.example/i?x=1]]></Impression></InLine></Ad>"#
         let text = #"<VAST version=\"4.0\">"# + String(repeating: ad, count: 12_000) + "</VAST>"
         #expect(text.utf8.count > 1_000_000)
-        let start = Date()
+        let start = ContinuousClock.now
         #expect(JSONEscapedText.unescaped(text)?.levels == 1)
-        #expect(Date().timeIntervalSince(start) < 1)
+        // A hang guard, not a speed target: linear is well under a second, a rescan per byte would never finish.
+        // CI's 3-core runner, busy with the whole suite, is many times slower than a laptop.
+        #expect(ContinuousClock.now - start < .seconds(60))
     }
 }
 

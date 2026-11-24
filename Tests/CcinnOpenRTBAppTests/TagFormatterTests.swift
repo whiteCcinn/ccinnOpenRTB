@@ -218,13 +218,18 @@ struct HTMLTagFormatterTests {
         let unit = #"<div class="row"><a href="https://x.example/c?id=1"><img src="https://x.example/i.png" width="300"></a><p>Text <b>bold</b></p></div>"#
         let text = "<div>" + String(repeating: unit, count: 8_000) + "</div>"
         #expect(text.utf8.count > 1_000_000)
-        let start = Date()
+        let start = ContinuousClock.now
         let html = try #require(format(text))
         let xml = try #require(try? TagFormatter.prettyPrinted(text.replacingOccurrences(of: "width=\"300\">", with: "width=\"300\"/>"), dialect: .xml).get())
-        #expect(Date().timeIntervalSince(start) < 2)
+        #expect(ContinuousClock.now - start < linearWorkHangGuard)
         #expect(html.count > text.count && xml.count > text.count)
     }
 }
+
+/// A hang guard, not a speed target: it only has to tell linear work from quadratic. Linear takes under a second alone
+/// on a laptop and up to 8 s on CI's 3-core runner with the whole suite running (2 s and 3 s limits failed there); a
+/// stack scanned per tag (`OpenElements.isOpen` without its counts) runs past 300 s on the laptop.
+private let linearWorkHangGuard = Duration.seconds(60)
 
 @Suite("Tag formatter – pathological input")
 struct TagFormatterStressTests {
@@ -232,9 +237,9 @@ struct TagFormatterStressTests {
         // 200,000 open elements, then stray and implied end tags: must not scan the stack per tag.
         let deep = String(repeating: "<div>", count: 100_000) + String(repeating: "<span>", count: 100_000)
             + String(repeating: "<li>x</em>", count: 20_000) + "<pre> a </pre>"
-        let start = Date()
+        let start = ContinuousClock.now
         let html = try #require(try? TagFormatter.prettyPrinted(deep, dialect: .html, indentWidth: 0).get())
-        #expect(Date().timeIntervalSince(start) < 3)
+        #expect(ContinuousClock.now - start < linearWorkHangGuard)
         #expect(html.filter { !$0.isWhitespace } == deep.filter { !$0.isWhitespace })
         let xml = String(repeating: "<a>", count: 100_000) + String(repeating: "</a>", count: 100_000)
         #expect((try? TagFormatter.prettyPrinted(xml, dialect: .xml, indentWidth: 0).get()) != nil)
