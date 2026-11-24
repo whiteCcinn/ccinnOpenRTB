@@ -68,6 +68,13 @@ final class AdSession: AdRenderingHost {
     var canvasMagnification = 1.0
     /// The viewability slider for every placement except in-feed (where the feed's scroll position decides).
     var visibility: Double = 1 { didSet { visibilityInputsChanged() } }
+    /// Whether the apps deep links name are installed on the device (the Apps menu); when not, a deep link opens the bid's
+    /// fallback, if any.
+    var appsInstalled = true
+    /// What a click-through opened on the device, covering the publisher app until `returnToApp()`.
+    private(set) var foreground: DeviceForeground? { didSet { if oldValue != foreground { visibilityInputsChanged() } } }
+    /// A click-through that opened nothing: the device says why.
+    private(set) var clickThroughNotice: ClickThroughNotice?
     /// The in-feed app's scroll position in points.
     var feedOffset: CGFloat = 0 { didSet { visibilityInputsChanged() } }
 
@@ -182,6 +189,25 @@ final class AdSession: AdRenderingHost {
         placement == .inFeed ? feedGeometry.visibleFraction(offset: feedOffset) : min(1, max(0, visibility))
     }
 
+    /// What the ad's viewability and its renderers see: nothing while another app, a store or the in-app browser covers
+    /// the publisher app (`foreground`), else `visibleFraction`.
+    var exposedFraction: Double { foreground == nil ? visibleFraction : 0 }
+
+    /// Back from what a click-through opened (iOS's "◀ App", Android's Back): the publisher app and the ad again.
+    func returnToApp() {
+        foreground = nil
+    }
+
+    func dismissClickThroughNotice() {
+        clickThroughNotice = nil
+    }
+
+    /// A new render, another device or another placement: the device is back in the publisher app.
+    private func closeJump() {
+        foreground = nil
+        clickThroughNotice = nil
+    }
+
     /// The slider: sets the in-feed scroll position or the visibility directly.
     func setVisibleFraction(_ fraction: Double) {
         if placement == .inFeed {
@@ -203,7 +229,7 @@ final class AdSession: AdRenderingHost {
         var candidate = prepared.candidate
         if let deviceMarkup = prepared.deviceMarkup { candidate.markup = deviceMarkup }
         return RenderRequest(candidate: candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
-                             landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: visibleFraction,
+                             landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: exposedFraction,
                              generation: generation, markupRequestID: prepared.markupEntryID,
                              publisherAppBundle: renderInput.request?.appBundle, replay: replay)
     }
@@ -339,6 +365,7 @@ final class AdSession: AdRenderingHost {
     // MARK: Device and placement
 
     private func deviceChanged() {
+        closeJump()
         isAdjustingContext = true
         if device.family != .foldable { folded = false }
         if device.family != .dualScreen { spanned = false }
@@ -358,6 +385,7 @@ final class AdSession: AdRenderingHost {
 
     private func placementChanged(from oldValue: Placement) {
         guard placement != oldValue else { return }
+        closeJump()
         if !Placement.available(on: device).contains(placement) {
             let candidate = selectedCandidate
             placement = placement.compatible(with: device, format: candidate?.format, size: candidate?.size,
@@ -392,7 +420,7 @@ final class AdSession: AdRenderingHost {
     }
 
     private func visibilityInputsChanged() {
-        let fraction = visibleFraction
+        let fraction = exposedFraction
         guard fraction != lastReportedFraction else { return }
         lastReportedFraction = fraction
         guard phase == .ready else { return }
@@ -446,6 +474,7 @@ final class AdSession: AdRenderingHost {
     nonisolated static let playEndedCancellation = "a new render started"
 
     private func startGeneration() {
+        closeJump()
         renderTask?.cancel()
         viewabilityTimer?.cancel()
         // The last play ends here: its trackers still in flight are cancelled (no late hit, no further hop) and what the
@@ -586,8 +615,8 @@ final class AdSession: AdRenderingHost {
         prepared = PreparedAd(candidate: candidate, native: native, vast: vast, markupEntryID: markupEntryID, markupFromWinNotice: fromWinNotice,
                               deviceMarkup: deviceMarkup)
         viewability = ViewabilityController(kind: Self.viewabilityKind(markup: candidate.markup, format: candidate.format))
-        lastReportedFraction = visibleFraction
-        _ = viewability.visibility(visibleFraction, at: clock.now())
+        lastReportedFraction = exposedFraction
+        _ = viewability.visibility(exposedFraction, at: clock.now())
         phase = .ready
         if let vast { resolutionFollowUps(vast, candidate: candidate, input: input, source: sourceRoot(candidate) + " › VAST") }
     }
@@ -779,7 +808,8 @@ final class AdSession: AdRenderingHost {
         for var request in requests {
             if let prepared { request.source = AuctionReplays.source(request.source, candidateID: prepared.candidate.id, replay: replay) }
             if request.category == .navigation {
-                recordNavigation(url: request.url, trigger: request.trigger, source: request.source, parentID: request.parentID)
+                recordNavigation(url: request.url, trigger: request.trigger, source: request.source, parentID: request.parentID,
+                                 fallback: request.fallback)
                 continue
             }
             let entryID = monitor.dispatch(request, userAgent: device.userAgent)
@@ -792,14 +822,32 @@ final class AdSession: AdRenderingHost {
         return requests.count
     }
 
-    private func recordNavigation(url: String, trigger: String, source: String, parentID: UUID?) {
+    /// The one choke point for every click-through (tracking-plan navigations and the renderers' own): what the device
+    /// opens (`ClickThroughResolver`: the app a deep link names, a store, the in-app browser, a system app, the bid's
+    /// fallback) covers the publisher app; in Real mode with "Open click-throughs in browser" the Mac opens the web page
+    /// the device shows. The Network entry and the log say what happened.
+    private func recordNavigation(url: String, trigger: String, source: String, parentID: UUID?, fallback: String? = nil) {
+        guard device.supportsClickThrough else {
+            monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID)
+            return
+        }
+        let resolution = ClickThroughResolver.resolve(url, fallback: fallback, platform: device.platform, appsInstalled: appsInstalled)
         var opened = false
-        if NetworkPreferences.shouldOpenInBrowser(url, mode: monitor.mode, settingEnabled: opensClickThroughs(), device: device),
-           let target = URLText.requestURL(url) {
+        if let page = resolution.webPageURL,
+           NetworkPreferences.shouldOpenInBrowser(page, mode: monitor.mode, settingEnabled: opensClickThroughs(), device: device),
+           let target = URLText.requestURL(page) {
             opened = browser.open(target)
             if !opened { log(trigger, origin: source, outcome: .ignored("no default web browser: the click-through was not opened")) }
         }
-        monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened)
+        monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID, openedInBrowser: opened,
+                                 note: resolution.summary + (opened ? " · opened in the default browser" : ""))
+        log(resolution.summary, origin: "device", outcome: resolution.screen == nil ? .ignored("nothing opens") : .fired(requests: 0))
+        if let screen = resolution.screen {
+            clickThroughNotice = nil
+            foreground = DeviceForeground(screen: screen, platform: device.platform, usedFallback: resolution.usedFallback, openedOnMac: opened)
+        } else {
+            clickThroughNotice = ClickThroughNotice(text: resolution.sentences)
+        }
     }
 
     /// The one choke point for what the player fetches to render (VAST tag and wrapper URIs: the render's, the Native video

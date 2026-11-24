@@ -54,16 +54,23 @@ struct TrackerRequestFactory {
     }
 
     /// One click: its click trackers, then one navigation to `destination`, all siblings with the trigger "click" (the
-    /// click causes each of them; no tracker causes the navigation). A deep-link `fallback` is noted in the navigation's
-    /// source. No navigation on devices without click-through (CTV) or when `destination` is blank.
+    /// click causes each of them; no tracker causes the navigation). A deep-link `fallback` travels with the navigation
+    /// (macros expanded as its URL) and is noted in its source. No navigation on devices without click-through (CTV) or when `destination` is blank.
     func click(trackers: [(template: String, source: String)], destination: String?, fallback: String?, destinationSource: String)
         -> [TrackerRequest] {
         var requests = trackers.map { url($0.template, category: .click, trigger: Self.clickTrigger, source: $0.source) }
         guard context.device?.supportsClickThrough ?? true,
               let destination, !destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return requests }
         var source = destinationSource
-        if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { source += " (fallback: \(fallback))" }
-        requests.append(url(destination, category: .navigation, trigger: Self.clickTrigger, source: source))
+        var navigation: TrackerRequest
+        if let fallback, !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            source += " (fallback: \(fallback))"
+            navigation = url(destination, category: .navigation, trigger: Self.clickTrigger, source: source)
+            navigation.fallback = url(fallback, category: .navigation, trigger: Self.clickTrigger, source: source).url
+        } else {
+            navigation = url(destination, category: .navigation, trigger: Self.clickTrigger, source: source)
+        }
+        requests.append(navigation)
         return requests
     }
 

@@ -86,9 +86,12 @@ public struct TrackerRequest: Sendable, Hashable, Identifiable {
     public var unknownMacros: [String]
     /// Script trackers (Native `jstracker`, method 2) are recorded, and injected only in Real mode.
     public var isScript: Bool
+    /// A navigation's deep-link fallback (Native `link.fallback`, AdCOM `urlfb`), macros expanded: what the device opens
+    /// when no installed app opens `url`.
+    public var fallback: String?
 
     public init(id: UUID = UUID(), parentID: UUID? = nil, category: TrackerCategory, trigger: String, source: String, template: String,
-                url: String, replacedMacros: [String] = [], unknownMacros: [String] = [], isScript: Bool = false) {
+                url: String, replacedMacros: [String] = [], unknownMacros: [String] = [], isScript: Bool = false, fallback: String? = nil) {
         self.id = id
         self.parentID = parentID
         self.category = category
@@ -99,6 +102,7 @@ public struct TrackerRequest: Sendable, Hashable, Identifiable {
         self.replacedMacros = replacedMacros
         self.unknownMacros = unknownMacros
         self.isScript = isScript
+        self.fallback = fallback
     }
 }
 

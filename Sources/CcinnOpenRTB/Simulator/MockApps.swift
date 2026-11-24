@@ -30,6 +30,21 @@ enum MockPalette {
     static let photoSymbols = ["mountain.2.fill", "building.2.fill", "leaf.fill", "airplane", "sun.max.fill", "tram.fill"]
 }
 
+/// The mock publisher apps' names (their app bars, and where Back returns after a click-through opened another app).
+enum MockAppNames {
+    static let news = "The Daily Brief"
+    static let feed = "Pulse"
+    static let television = "TV"
+
+    static func publisher(for placement: Placement) -> String {
+        switch placement {
+        case .inFeed: feed
+        case .ctvInstream: television
+        case .inlineBanner, .interstitial, .rewarded: news
+        }
+    }
+}
+
 /// App bar + tab bar heights shared by the phone apps.
 enum MockMetrics {
     static let appBarHeight = FeedGeometry.appBarHeight
@@ -53,7 +68,7 @@ struct NewsArticleApp<Banner: View>: View {
     var body: some View {
         let insets = layout.safeArea
         VStack(spacing: 0) {
-            MockAppBar(title: "The Daily Brief", accent: MockPalette.newsAccent, symbol: "newspaper.fill", topInset: CGFloat(insets.top),
+            MockAppBar(title: MockAppNames.news, accent: MockPalette.newsAccent, symbol: "newspaper.fill", topInset: CGFloat(insets.top),
                        leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
             if banner == .top { bannerSlot(edge: .top) }
             ArticleBody(width: size.width - CGFloat(insets.leading + insets.trailing))
@@ -141,7 +156,7 @@ struct FeedApp<Ad: View>: View {
         let insets = layout.safeArea
         let viewport = geometry.viewport
         VStack(spacing: 0) {
-            MockAppBar(title: "Pulse", accent: MockPalette.feedAccent, symbol: "bolt.heart.fill", topInset: CGFloat(insets.top),
+            MockAppBar(title: MockAppNames.feed, accent: MockPalette.feedAccent, symbol: "bolt.heart.fill", topInset: CGFloat(insets.top),
                        leadingInset: CGFloat(insets.leading), trailingInset: CGFloat(insets.trailing))
             ZStack(alignment: .topLeading) {
                 ForEach(Array(geometry.items.enumerated()), id: \.offset) { _, item in

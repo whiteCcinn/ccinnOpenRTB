@@ -58,7 +58,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 | **广告内容**：VAST 标签与 Wrapper 请求、图片、媒体文件、Native `assetsurl`、按引用提供的素材（AdCOM `display.curl`） | **不加载**。记录为 `offline`，广告位上会说明缺少什么 | 从素材中的 URL 加载 | 从素材中的 URL 加载 |
 | **由竞价成功通知返回的广告素材**（有 `nurl` 但没有 `adm` 的出价） | 不请求 | 不请求：竞价成功通知本身是监测请求。广告位上会说明原因，切换到真实模式后才会请求 | 使用 `nurl` 的响应体作为广告素材，素材中的 URL 都挂在该请求之下 |
 | **`data:` URL 与内置示例媒体**（`ccinn-sample://`） | 在本机解码或生成 | 在本机解码或生成 | 在本机解码或生成 |
-| **点击跳转** | 记录为导航，永不打开 | 记录为导航，永不打开 | 记录；只有在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭）才会打开，并且使用默认 Web 浏览器——即打开网页链接的那个应用，绝不会交给声明了该链接的其他应用。 |
+| **点击跳转** | 记录为导航；设备上显示它本来会打开的内容（应用、应用商店或应用内浏览器） | 与 Offline 相同 | 同上；另外在开启 **Settings ▸ Network ▸ Open click-throughs in browser in Real mode** 时（默认关闭），设备上显示的网页（链接本身或出价中的备用链接）也会在 Mac 上用默认 Web 浏览器打开——即打开网页链接的那个应用，绝不会交给声明了该链接的其他应用。深度链接永远不会在 Mac 上打开。 |
 | **你在 [Client](#client-标签页) 标签页中发送的竞价请求** | 记录为 `offline`，**不发出** | 按你输入的内容发往你填写的 URL | 按你输入的内容发往你填写的 URL |
 | **[Sync](#sync-标签页) 标签页中的 Cookie 同步运行** | 记录为 `offline`，**不发出** | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 | 带着该窗口内存中的 Cookie 罐发出，跟随每一次重定向 |
 | **[Prebid](#prebid-标签页) 标签页中的 Prebid.js 竞价** | 若该版本此前加载过（已缓存），Prebid.js 照常运行；各竞价方的请求记录为 `offline`，**不发出** | 每个版本从 jsDelivr 获取一次 Prebid.js；各竞价方的请求发往其端点，不带 Cookie | 与模拟模式相同 |
@@ -100,6 +100,13 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
     - 没有悬停、文本选择和拖放。创意自己派发的事件不受影响。
     - 每个手势都会在日志中记录一行，例如 "Tap at 120, 340"、"Swipe left 180 pt in 220 ms"，并说明创意如何处理了它。在滑动手指抬起时打开的落地页算作一次点击，不论这次滑动持续了多久。
     - 未模拟：双指手势、长按，以及样式表中的 CSS `@media (hover)` / `:hover` 规则（它们看到的仍是 Mac 的鼠标）。合成的事件 `isTrusted` 为 `false`；click 是真实的那一个。滚轮和触控板仍然像以前一样滚动信息流，右键仍然提供 Inspect Element。
+  - 点击跳转会打开设备本来会打开的内容，覆盖在发布者应用之上，从而可以看到跳转到广告主应用的过程：
+    - 深度链接（`lazada://product/123`）会打开对应的应用，并显示该链接、它的路由和参数。设备下方的 **Apps** 菜单用来选择深度链接对应的应用是否已安装；未安装时会打开出价中的备用链接（Native `link.fallback`、AdCOM `urlfb`），如果没有可打开的内容，设备会说明原因。
+    - Android 的 `intent://…#Intent;scheme=…;package=…;end` 链接在应用已安装时打开应用，否则打开其 `S.browser_fallback_url`，再否则打开该包名在 Google Play 的页面；iOS 无法打开这类链接。
+    - App Store 链接（`apps.apple.com/…/id…`、`itms-apps:`）在 iOS 上打开 App Store 页面，Google Play 链接（`play.google.com/store/apps/details?id=…`、`market:`）在 Android 上打开 Google Play；在另一个平台上它们是普通网页，或者没有任何应用能打开。
+    - 网页在应用内浏览器（SFSafariViewController、Chrome Custom Tab）中打开，显示 URL 及其参数，但不会加载页面本身。Universal Links 与 App Links 按网页打开：模拟器无法知道某个应用声明了哪些域名。`tel:`、`sms:` 和 `mailto:` 分别打开电话、信息和邮件。
+    - 跳转到其他应用后，iOS 会在状态栏显示 "◀ The Daily Brief"，Android 则提供返回按钮；应用内浏览器和应用商店页面带有 Done 或关闭按钮。在发布者应用被覆盖期间，广告不在视野内：可见性计时停止、MRAID 曝光为 0、内嵌视频暂停，直到返回为止。
+    - 该点击在 Network 中的条目以及生命周期日志会说明打开了什么、原因是什么（例如 "Deep link: no installed app opens lazada: links → Fallback https://…: Opens in the in-app browser"）。
   - 图片横幅（OpenRTB 3.0 `display.banner`）。
   - Native 1.0、1.1、1.2，提供信息流、内容流和应用安装三种布局，支持隐私链接与按资源的点击。
   - VAST 视频与音频：跳过（来自 `skipoffset`）、静音、暂停、倒计时、点击跳转、进度条、伴随广告（从该广告的第一帧起展示）或结束卡片、AdChoices 等行业图标、按 `sequence` 顺序播放的 Ad Pod，以及最多 5 层的 Wrapper 链。必需的伴随广告（`CompanionAds@required`）无法展示时（CTV 上一个都无法展示），该广告不会播放（错误 602）；Wrapper 的 `BlockedAdCategories` 会拒绝类别匹配的广告（错误 205）。

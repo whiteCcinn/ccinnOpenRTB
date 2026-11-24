@@ -278,6 +278,24 @@ struct TrackingPlanNativeTests {
                                              "deeplink://deeplink/url/into/app"))
     }
 
+    /// The fallback travels with the navigation, so the device can open it when the deep link's app is not installed.
+    /// It is read as its link is: Native links are markup, taken as written (the exchange substituted its macros in the
+    /// `adm` before the device got it).
+    @Test func theDeepLinkFallbackTravelsWithTheNavigation() throws {
+        let native = NativeAd(version: "1.2", assets: [], link: AdLink(url: "lazada://p?a=${AUCTION_ID}", fallback: "https://lazada.example/p?a=${AUCTION_ID}"))
+        let candidate = AdCandidate(id: "0.0", bidID: "n", price: 1, format: .native, markup: .native("{}"))
+        let requests = TrackingPlan.requests(for: .click(assetID: nil), candidate: candidate, native: native, vast: nil, context: TrackingFixtures.context,
+                                             options: TrackingPlan.Options())
+        let navigation = try #require(requests.last)
+        #expect(navigation.category == .navigation)
+        #expect(navigation.url == "lazada://p?a=${AUCTION_ID}")
+        #expect(navigation.fallback == "https://lazada.example/p?a=${AUCTION_ID}")
+        #expect(requests.dropLast().allSatisfy { $0.fallback == nil })
+        let blank = NativeAd(version: "1.2", assets: [], link: AdLink(url: "lazada://p", fallback: "  "))
+        #expect(TrackingPlan.requests(for: .click(assetID: nil), candidate: candidate, native: blank, vast: nil, context: TrackingFixtures.context,
+                                      options: TrackingPlan.Options()).last?.fallback == nil)
+    }
+
     @Test func noNativeTrackersWithoutTheParsedAd() {
         #expect(TrackingFixtures.plan(.rendered, Self.candidate, native: nil).map(\.category) == [.billing])
     }

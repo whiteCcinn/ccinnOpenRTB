@@ -38,6 +38,7 @@ struct SimulatorControls: View {
                 FireMenu(session: session)
                 LoseMenu(session: session)
                 ErrorMenu(session: session)
+                AppsMenu(session: session)
                 Spacer(minLength: 8)
                 PhaseBadge(phase: session.phase, rendered: session.hasFired(.rendered), stale: session.renderIsStale)
             }
@@ -193,6 +194,27 @@ private struct FireMenu: View {
         case .click: "cursorarrow.click"
         case .close: "xmark.circle"
         }
+    }
+}
+
+/// Whether the apps deep links name are installed on the device: a deep link opens its app, or the bid's fallback.
+private struct AppsMenu: View {
+    @Bindable var session: AdSession
+
+    var body: some View {
+        Menu {
+            Picker("Deep links", selection: $session.appsInstalled) {
+                Text("Apps Installed: Deep Links Open Them").tag(true)
+                Text("Not Installed: Use the Bid's Fallback").tag(false)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Apps", systemImage: session.appsInstalled ? "app.badge.checkmark" : "app.dashed")
+        }
+        .fixedSize()
+        .disabled(!session.device.supportsClickThrough)
+        .help(session.appsInstalled ? "Deep links open their apps (installed). Choose Not Installed to test the fallback."
+              : "Deep links' apps are not installed: the bid's fallback opens, or nothing")
     }
 }
 

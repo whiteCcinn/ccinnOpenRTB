@@ -159,6 +159,7 @@ private struct ScreensView: View {
                 .frame(width: content.width, height: content.height)
                 .coordinateSpace(name: SimulatorTextLayout.screenSpace)
                 .offset(x: content.minX, y: content.minY)
+            AppJumpLayer(session: session, layout: layout)
             if let hinge = layout.hinge {
                 Rectangle().fill(Color(white: 0.04))
                     .frame(width: hinge.width, height: hinge.height)
@@ -166,9 +167,13 @@ private struct ScreensView: View {
             }
             ForEach(Array(layout.panes.enumerated()), id: \.offset) { index, pane in
                 let inContent = content.intersects(pane.frame.insetBy(dx: 1, dy: 1))
-                SystemChrome(layout: layout, pane: pane.frame, showsStatusBar: !(fullScreenAd && inContent), isFirstPane: index == 0,
-                             lightContent: fullScreenAd && inContent)
+                let covered = fullScreenAd && inContent && session.foreground == nil
+                SystemChrome(layout: layout, pane: pane.frame, showsStatusBar: !covered, isFirstPane: index == 0, lightContent: covered)
                     .offset(x: pane.frame.minX, y: pane.frame.minY)
+            }
+            if let foreground = session.foreground, foreground.showsBackBreadcrumb {
+                BackBreadcrumb(publisherApp: MockAppNames.publisher(for: session.placement), onBack: session.returnToApp)
+                    .offset(x: content.minX + 14, y: content.minY + max(4, CGFloat(layout.safeArea.top) / 2 - 9))
             }
             if let crease = layout.crease { CreaseView(crease: crease, size: layout.canvasSize) }
         }
@@ -186,6 +191,29 @@ private struct ScreensView: View {
             }
             .frame(width: layout.canvasSize.width, height: layout.canvasSize.height, alignment: .topLeading)
         }
+    }
+}
+
+/// What a click-through opened, over the publisher app (`AppJumpView`), or why nothing opened.
+private struct AppJumpLayer: View {
+    let session: AdSession
+    let layout: ScreenLayout
+
+    var body: some View {
+        let content = layout.contentFrame
+        ZStack(alignment: .bottom) {
+            if let foreground = session.foreground {
+                AppJumpView(foreground: foreground, layout: layout, publisherApp: MockAppNames.publisher(for: session.placement),
+                            onBack: session.returnToApp)
+                    .transition(.move(edge: .trailing))
+            }
+            if let notice = session.clickThroughNotice {
+                ClickThroughNoticeView(notice: notice, bottomInset: CGFloat(layout.safeArea.bottom), onDismiss: session.dismissClickThroughNotice)
+            }
+        }
+        .frame(width: content.width, height: content.height, alignment: .bottom)
+        .offset(x: content.minX, y: content.minY)
+        .animation(.easeOut(duration: 0.25), value: session.foreground?.id)
     }
 }
 

@@ -438,10 +438,12 @@ public final class NetworkMonitor {
     /// Records a click-through navigation (never followed inside the simulator). `openedInBrowser`: the app opened it in
     /// the default browser (Real mode with "Open click-throughs in browser" on).
     @discardableResult
-    public func recordNavigation(url: String, trigger: String, source: String, parentID: UUID?, openedInBrowser: Bool = false) -> UUID {
+    /// `note`: what the device did with it (the session's click-through resolution); the default says it was recorded.
+    public func recordNavigation(url: String, trigger: String, source: String, parentID: UUID?, openedInBrowser: Bool = false,
+                                 note: String? = nil) -> UUID {
         append(NetworkEntry(parentID: parentID, sequence: 0, startedAt: clock.now(), category: .navigation, trigger: trigger, source: source,
                             template: url, url: url, state: .simulated, delivery: openedInBrowser ? .browser : .simulated, sessionMode: mode,
-                            note: openedInBrowser ? "Opened in the default browser" : DispatchPolicy.navigationNote)).id
+                            note: note ?? (openedInBrowser ? "Opened in the default browser" : DispatchPolicy.navigationNote))).id
     }
 
     // MARK: Session
