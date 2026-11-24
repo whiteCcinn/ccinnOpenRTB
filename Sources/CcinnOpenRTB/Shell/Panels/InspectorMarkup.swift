@@ -84,37 +84,45 @@ struct InspectorMarkupView: View {
     private func content(sources: [InspectorMarkup.Source], source: InspectorMarkup.Source) -> some View {
         let current = shown.flatMap { $0.key.source == source ? $0 : nil }
         return VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if sources.count > 1 {
-                    Picker("Markup", selection: $sourceTitle) {
-                        ForEach(sources) { Text($0.title).tag($0.title) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .help("The markup in the bid, or as the device receives it with the exchange's macros substituted")
-                }
-                if source.language != nil {
-                    Toggle("Formatted", isOn: $formatted)
-                        .toggleStyle(.checkbox)
-                        .help("Pretty-printed, unescaped when it was copied out of a JSON string; off: as received")
-                }
-                Spacer(minLength: 0)
-                Text(current?.summary ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(current?.summary ?? "")
-                Button("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(current?.text ?? source.text) }
-                    .help("Copy the markup as shown")
-            }
-            .controlSize(.small)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            header(sources: sources, source: source, current: current)
+                .controlSize(.small)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
             Divider()
             CodeEditor(text: .constant(current?.text ?? source.text), accessibilityLabel: "\(source.title) markup", isEditable: false)
         }
+    }
+
+    private func header(sources: [InspectorMarkup.Source], source: InspectorMarkup.Source, current: Shown?) -> some View {
+        HStack(spacing: 8) {
+            if sources.count > 1 {
+                Picker("Markup", selection: $sourceTitle) {
+                    ForEach(sources) { Text($0.title).tag($0.title) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("The markup in the bid, or as the device receives it with the exchange's macros substituted")
+            }
+            if source.language != nil {
+                Toggle("Formatted", isOn: $formatted)
+                    .toggleStyle(.checkbox)
+                    .help("Pretty-printed, unescaped when it was copied out of a JSON string; off: as received")
+            }
+            Spacer(minLength: 0)
+            summary(current?.summary ?? "")
+            Button("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(current?.text ?? source.text) }
+                .help("Copy the markup as shown")
+        }
+    }
+
+    private func summary(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(text)
     }
 
     private func show(_ key: Key) async {

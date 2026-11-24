@@ -13,30 +13,7 @@ struct InspectorPane: View {
 
     var body: some View {
         if let candidate = session.selectedCandidate {
-            let rendered = session.prepared?.candidate.id == candidate.id ? session.prepared : nil
-            VStack(spacing: 0) {
-                HStack {
-                    Picker("Inspector", selection: $mode) {
-                        Text("Outline").tag(Mode.outline)
-                        Text("Markup").tag(Mode.markup)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .help("The bid as an outline, or its markup (VAST, Native JSON, HTML) formatted")
-                    Spacer(minLength: 0)
-                }
-                .controlSize(.small)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                Divider()
-                switch mode {
-                case .outline:
-                    outline(candidate: candidate, rendered: rendered)
-                case .markup:
-                    InspectorMarkupView(candidate: rendered?.candidate ?? candidate, deviceMarkup: rendered?.deviceMarkup)
-                }
-            }
+            inspector(candidate, rendered: session.prepared?.candidate.id == candidate.id ? session.prepared : nil)
         } else {
             ContentUnavailableView {
                 Label("No Bid Selected", systemImage: "doc.text.magnifyingglass")
@@ -44,6 +21,36 @@ struct InspectorPane: View {
                 Text("Paste a response or pick a sample. The Inspector shows the selected bid's markup, Native assets, VAST chain and trackers.")
             }
         }
+    }
+
+    private func inspector(_ candidate: AdCandidate, rendered: PreparedAd?) -> some View {
+        VStack(spacing: 0) {
+            modePicker
+            Divider()
+            switch mode {
+            case .outline:
+                outline(candidate: candidate, rendered: rendered)
+            case .markup:
+                InspectorMarkupView(candidate: rendered?.candidate ?? candidate, deviceMarkup: rendered?.deviceMarkup)
+            }
+        }
+    }
+
+    private var modePicker: some View {
+        HStack {
+            Picker("Inspector", selection: $mode) {
+                Text("Outline").tag(Mode.outline)
+                Text("Markup").tag(Mode.markup)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("The bid as an outline, or its markup (VAST, Native JSON, HTML) formatted")
+            Spacer(minLength: 0)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private func outline(candidate: AdCandidate, rendered: PreparedAd?) -> some View {
