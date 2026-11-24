@@ -331,7 +331,7 @@ git clone https://github.com/whiteCcinn/ccinnopenrtb.git && cd ccinnopenrtb
 swift build                          # Debug 构建
 swift test                           # 单元测试、渲染器测试与端到端验收测试
 scripts/build-app.sh --open          # 构建 dist/CcinnOpenRTB.app 并启动
-scripts/package-release.sh 1.6.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
+scripts/package-release.sh 1.7.0     # 在 dist/ 中生成通用架构 .app、.zip、.dmg 与校验和
 ```
 
 应用包的 `Info.plist` 即 `Resources/Info.plist`，版本号由构建脚本写入。它允许明文 http（见 [SECURITY.md](SECURITY.md)）：打包后的应用受 App Transport Security 约束，`swift run` 则不受约束，因此由测试检查该文件。

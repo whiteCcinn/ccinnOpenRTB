@@ -6,7 +6,7 @@ public enum AppInfo {
     /// One line for the About window.
     public static let tagline = "A native OpenRTB ad rendering and tracking simulator for macOS."
     /// Used when there is no app bundle (`swift run`); keep in step with `scripts/build-app.sh`.
-    public static let fallbackVersion = "1.6.0"
+    public static let fallbackVersion = "1.7.0"
     public static let repository = GitHubRepository(owner: "whiteCcinn", name: "ccinnopenrtb")
 
     public static var version: String {

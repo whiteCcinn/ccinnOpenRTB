@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-24
+
 ### Added
 
 - **Touch emulation.** On phones, foldables and tablets, the mouse is a finger for HTML creatives and HTML companions, in every frame (an ad tag's own iframes included). They used to see a Mac: no `TouchEvent`, `navigator.maxTouchPoints` 0, `pointerType: "mouse"`, so mobile creatives took their desktop path and swipe carousels, "swipe up" interstitials and buttons bound to `touchend` did not react. Now a click is a tap and a drag is a swipe, with the events a phone sends in its order (`pointerdown` with `pointerType: "touch"`, `touchstart`, `touchmove`, `touchend`, then for a tap `mousemove`, `mousedown`, `mouseup` and the real click). A creative that cancels a tap gets no click; a swipe never clicks; a click lands on what is under the finger once `touchend` ran, as a phone's does (an overlay hidden in `touchend` reveals an accidental click-through). A drag scrolls what a finger would (CSS `touch-action` respected), coasting and settling on scroll-snap points. There is no hover, text selection or drag-and-drop, and `matchMedia('(pointer: coarse)')` / `(hover: none)` answer as a phone. Each gesture is logged ("Swipe left 180 pt in 220 ms") with what the creative did with it. CTV keeps its remote.
@@ -123,7 +125,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...v1.4.1
