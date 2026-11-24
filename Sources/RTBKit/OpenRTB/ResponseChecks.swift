@@ -69,6 +69,17 @@ enum ResponseChecks {
         }
     }
 
+    /// Markup that is still escaped as inside a JSON string after the response was decoded: the DSP encoded it twice. A
+    /// device receives it as is, so it is rendered as received.
+    static func escapedMarkup(_ adm: String, at pointer: JSONPointer, log: inout IssueLog) {
+        guard let unescaped = JSONEscapedText.unescaped(adm),
+              MarkupSniffer.startsLikeInput(unescaped.text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        log.warning("openrtb.bid.adm.escaped",
+                    "`adm` is still escaped as inside a JSON string (`\\\"`): it was encoded\(unescaped.levels > 1 ? " three times or more" : " twice"). "
+                        + "A device receives it as is and cannot read it; it is rendered as received.",
+                    at: pointer)
+    }
+
     /// Native markup in a bid: its own issues (re-rooted under `pointer`) and, for a secure impression, plain-HTTP trackers.
     static func nativeMarkup(_ json: String, impression: BidRequestSummary.Impression?, at pointer: JSONPointer, log: inout IssueLog) {
         let (decoded, nativeIssues) = NativeParser.decode(json, hints: impression?.nativeHints)

@@ -29,6 +29,31 @@ public enum InputParser {
     static func parseResponse(_ text: String, request: BidRequestSummary?) -> ParsedInput {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return ParsedInput(kind: .empty) }
+        // Markup or a response copied out of a JSON string (a log line, an `adm` value) is read as it was before escaping.
+        if let unescaped = JSONEscapedText.unescaped(trimmed) {
+            let inner = unescaped.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if MarkupSniffer.startsLikeInput(inner) {
+                var parsed = parseUnescaped(inner, request: request)
+                let message = "The input is escaped\(timesPhrase(unescaped.levels)) as inside a JSON string (`\\\"`); it was read unescaped. "
+                    + "Format (⇧⌘F) unescapes the text itself."
+                parsed.issues.insert(ValidationIssue(.info, code: "input.unescaped", message: message, path: ""), at: 0)
+                return parsed
+            }
+        }
+        return parseUnescaped(trimmed, request: request)
+    }
+
+    /// "", " twice", " 3 times".
+    static func timesPhrase(_ levels: Int) -> String {
+        switch levels {
+        case ...1: ""
+        case 2: " twice"
+        default: " \(levels) times"
+        }
+    }
+
+    /// `trimmed` is not empty and has no surrounding whitespace.
+    private static func parseUnescaped(_ trimmed: String, request: BidRequestSummary?) -> ParsedInput {
         if MarkupSniffer.isVASTDocument(trimmed) { return bareVAST(.xml(trimmed), kind: .vastMarkup, xml: trimmed, request: request) }
         if MarkupSniffer.isHTTPURL(trimmed) { return bareVAST(.url(trimmed), kind: .vastURL, xml: nil, request: request) }
 

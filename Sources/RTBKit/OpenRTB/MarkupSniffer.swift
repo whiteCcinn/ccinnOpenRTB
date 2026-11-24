@@ -48,6 +48,11 @@ enum MarkupSniffer {
         return after == nil || after == ">" || after == "/" || after?.isWhitespace == true
     }
 
+    /// Starts like something the simulator reads (markup, JSON or a URL); `trimmed` has no surrounding whitespace.
+    static func startsLikeInput(_ trimmed: String) -> Bool {
+        trimmed.first == "<" || trimmed.first == "{" || trimmed.first == "[" || isHTTPURL(trimmed)
+    }
+
     /// A single absolute `http(s)://` URL with no whitespace inside.
     static func isHTTPURL(_ text: String) -> Bool {
         let lowered = text.prefix(8).lowercased()

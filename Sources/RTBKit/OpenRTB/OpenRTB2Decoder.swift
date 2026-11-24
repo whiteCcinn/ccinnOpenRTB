@@ -92,6 +92,7 @@ struct OpenRTB2Decoder {
         }
 
         let adm = readMarkup(bid)
+        if let adm { ResponseChecks.escapedMarkup(adm, at: pointer.appending("adm"), log: &log) }
         let sniffed = adm.map(MarkupSniffer.kind(of:))
         let format = inferFormat(mtype: mtypeFormat, impression: impression, adm: adm, sniffed: sniffed)
         if let impression, !impression.formats.isEmpty, !impression.formats.contains(format) {

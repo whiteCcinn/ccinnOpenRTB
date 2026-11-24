@@ -175,6 +175,7 @@ struct OpenRTB3Decoder {
     private mutating func decodeDisplay(_ display: JSONObjectReader, impression: BidRequestSummary.Impression?, into facts: inout MediaFacts) {
         facts.size = OpenRTB2Decoder.size(display, log: &log)
         let adm = display.nonBlankString("adm", log: &log)
+        if let adm { ResponseChecks.escapedMarkup(adm, at: display.pointer.appending("adm"), log: &log) }
         let banner = display.object("banner", log: &log)
         let native = display.object("native", log: &log)
         let curl = display.nonBlankString("curl", log: &log)
@@ -235,6 +236,7 @@ struct OpenRTB3Decoder {
     /// `video` / `audio`: `adm` (VAST XML) or `curl` (VAST tag URL).
     private mutating func vastMarkup(_ media: JSONObjectReader, kind: String) -> AdMarkup {
         let adm = media.nonBlankString("adm", log: &log)
+        if let adm { ResponseChecks.escapedMarkup(adm, at: media.pointer.appending("adm"), log: &log) }
         let curl = media.nonBlankString("curl", log: &log)
         if adm != nil, curl != nil {
             log.warning("adcom.\(kind).markup.multiple", "`adm` and `curl` are mutually exclusive; `adm` is used.", at: media.pointer)

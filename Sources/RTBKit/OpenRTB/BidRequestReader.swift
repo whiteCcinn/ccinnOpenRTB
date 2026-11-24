@@ -7,6 +7,20 @@ enum BidRequestReader {
     static let rootPointer = JSONPointer(prefix: "request:")
 
     static func read(_ json: String) -> (summary: BidRequestSummary?, issues: [ValidationIssue]) {
+        // A request copied out of a JSON string (a log line) is read as it was before escaping.
+        if let unescaped = JSONEscapedText.unescaped(json), unescaped.text.trimmingCharacters(in: .whitespacesAndNewlines).first == "{" {
+            var (summary, issues) = readJSON(unescaped.text)
+            var log = IssueLog()
+            log.info("request.unescaped",
+                     "The bid request is escaped\(InputParser.timesPhrase(unescaped.levels)) as inside a JSON string (`\\\"`); it was read unescaped.",
+                     at: rootPointer)
+            issues.insert(contentsOf: log.issues, at: 0)
+            return (summary, issues)
+        }
+        return readJSON(json)
+    }
+
+    private static func readJSON(_ json: String) -> (summary: BidRequestSummary?, issues: [ValidationIssue]) {
         var log = IssueLog()
         let value: JSONValue
         do {
