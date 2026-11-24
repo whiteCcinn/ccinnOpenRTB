@@ -144,6 +144,7 @@ private struct ScreensView: View {
     var body: some View {
         let content = layout.contentFrame
         let fullScreenAd = session.placement.isFullScreen && session.renderRequest != nil
+        let showsBreadcrumb = (session.foreground?.showsBackBreadcrumb ?? false) && layout.showsStatusBar
         ZStack(alignment: .topLeading) {
             ForEach(Array(layout.panes.enumerated()), id: \.offset) { _, pane in
                 RoundedRectangle(cornerRadius: style.screenCornerRadius, style: .continuous)
@@ -168,12 +169,14 @@ private struct ScreensView: View {
             ForEach(Array(layout.panes.enumerated()), id: \.offset) { index, pane in
                 let inContent = content.intersects(pane.frame.insetBy(dx: 1, dy: 1))
                 let covered = fullScreenAd && inContent && session.foreground == nil
-                SystemChrome(layout: layout, pane: pane.frame, showsStatusBar: !covered, isFirstPane: index == 0, lightContent: covered)
+                SystemChrome(layout: layout, pane: pane.frame, showsStatusBar: !covered, isFirstPane: index == 0, lightContent: covered,
+                             hidesTime: index == 0 && showsBreadcrumb)
                     .offset(x: pane.frame.minX, y: pane.frame.minY)
             }
-            if let foreground = session.foreground, foreground.showsBackBreadcrumb {
-                BackBreadcrumb(publisherApp: MockAppNames.publisher(for: session.placement), onBack: session.returnToApp)
-                    .offset(x: content.minX + 14, y: content.minY + max(4, CGFloat(layout.safeArea.top) / 2 - 9))
+            if showsBreadcrumb, let first = layout.panes.first {
+                BackBreadcrumbSlot(layout: layout, paneWidth: first.frame.width, publisherApp: MockAppNames.publisher(for: session.placement),
+                                   onBack: session.returnToApp)
+                    .offset(x: first.frame.minX, y: first.frame.minY)
             }
             if let crease = layout.crease { CreaseView(crease: crease, size: layout.canvasSize) }
         }
@@ -200,10 +203,10 @@ private struct AppJumpLayer: View {
     let layout: ScreenLayout
 
     var body: some View {
-        let content = layout.contentFrame
+        let area = Self.area(in: layout)
         ZStack(alignment: .bottom) {
             if let foreground = session.foreground {
-                AppJumpView(foreground: foreground, layout: layout, publisherApp: MockAppNames.publisher(for: session.placement),
+                AppJumpView(foreground: foreground, layout: layout, size: area.size, publisherApp: MockAppNames.publisher(for: session.placement),
                             onBack: session.returnToApp)
                     .transition(.move(edge: .trailing))
             }
@@ -211,9 +214,16 @@ private struct AppJumpLayer: View {
                 ClickThroughNoticeView(notice: notice, bottomInset: CGFloat(layout.safeArea.bottom), onDismiss: session.dismissClickThroughNotice)
             }
         }
-        .frame(width: content.width, height: content.height, alignment: .bottom)
-        .offset(x: content.minX, y: content.minY)
+        .frame(width: area.width, height: area.height, alignment: .bottom)
+        .offset(x: area.minX, y: area.minY)
         .animation(.easeOut(duration: 0.25), value: session.foreground?.id)
+    }
+
+    /// The app's area, or its first screen when it spans a hinge: an app opened from it takes one screen.
+    static func area(in layout: ScreenLayout) -> CGRect {
+        guard layout.isSpanned, let first = layout.panes.first else { return layout.contentFrame }
+        let screen = layout.contentFrame.intersection(first.frame)
+        return screen.isEmpty ? layout.contentFrame : screen
     }
 }
 

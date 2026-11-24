@@ -172,7 +172,7 @@ final class HTMLAdModel {
             log(.warning, "Two-part expand (\(url)) is shown as a one-part expand: the simulator does not load the second document")
         case let .playVideo(url):
             guard allowsClickThrough else { return }
-            host?.navigate(to: url, trigger: "mraid.playVideo (native player)", source: source)
+            host?.navigate(to: url, trigger: MRAIDCommand.playVideoTrigger, source: source)
         case .open, .close, .unload, .expand, .resize, .useCustomClose, .other:
             // State changes arrive as `mraidState`; `open` as `mraidOpen`.
             break

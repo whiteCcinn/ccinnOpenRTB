@@ -11,6 +11,10 @@ enum MRAIDCommand: Equatable, Sendable {
     case playVideo(url: String)
     /// Any other call (getters, setters, listeners, unsupported features): logged only.
     case other
+
+    /// The trigger of `playVideo`'s navigation: the SDK's own video player plays it — recorded, not a click-through that
+    /// opens another screen.
+    static let playVideoTrigger = "mraid.playVideo (native player)"
 }
 
 /// What the network instrumentation saw the creative do.

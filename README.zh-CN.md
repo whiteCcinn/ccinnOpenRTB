@@ -102,10 +102,10 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
     - 未模拟：双指手势、长按，以及样式表中的 CSS `@media (hover)` / `:hover` 规则（它们看到的仍是 Mac 的鼠标）。合成的事件 `isTrusted` 为 `false`；click 是真实的那一个。滚轮和触控板仍然像以前一样滚动信息流，右键仍然提供 Inspect Element。
   - 点击跳转会打开设备本来会打开的内容，覆盖在发布者应用之上，从而可以看到跳转到广告主应用的过程：
     - 深度链接（`lazada://product/123`）会打开对应的应用，并显示该链接、它的路由和参数。设备下方的 **Apps** 菜单用来选择深度链接对应的应用是否已安装；未安装时会打开出价中的备用链接（Native `link.fallback`、AdCOM `urlfb`），如果没有可打开的内容，设备会说明原因。
-    - Android 的 `intent://…#Intent;scheme=…;package=…;end` 链接在应用已安装时打开应用，否则打开其 `S.browser_fallback_url`，再否则打开该包名在 Google Play 的页面；iOS 无法打开这类链接。
+    - Android 的 `intent://…#Intent;scheme=…;package=…;end` 链接在应用已安装时打开应用（由 `package`、`component` 或 `scheme` 指定），否则打开其 `S.browser_fallback_url`，再否则打开出价中的备用链接，最后才打开该包名在 Google Play 的页面；`scheme=https` 是普通网页，iOS 无法打开这类链接。`javascript:`、`about:` 和 `data:` 链接不会打开任何内容，`mraid.playVideo` 由 SDK 自带的播放器播放，不算跳转。
     - App Store 链接（`apps.apple.com/…/id…`、`itms-apps:`）在 iOS 上打开 App Store 页面，Google Play 链接（`play.google.com/store/apps/details?id=…`、`market:`）在 Android 上打开 Google Play；在另一个平台上它们是普通网页，或者没有任何应用能打开。
     - 网页在应用内浏览器（SFSafariViewController、Chrome Custom Tab）中打开，显示 URL 及其参数，但不会加载页面本身。Universal Links 与 App Links 按网页打开：模拟器无法知道某个应用声明了哪些域名。`tel:`、`sms:` 和 `mailto:` 分别打开电话、信息和邮件。
-    - 跳转到其他应用后，iOS 会在状态栏显示 "◀ The Daily Brief"，Android 则提供返回按钮；应用内浏览器和应用商店页面带有 Done 或关闭按钮。在发布者应用被覆盖期间，广告不在视野内：可见性计时停止、MRAID 曝光为 0、内嵌视频暂停，直到返回为止。
+    - 跳转到其他应用后，iOS 会在状态栏显示 "◀ The Daily Brief"，Android 则提供返回按钮；应用内浏览器和应用商店页面带有 Done 或关闭按钮。在发布者应用被覆盖期间，广告不在视野内：可见性计时停止、MRAID 曝光为 0、视频暂停（全屏视频也一样），直到返回为止。
     - 该点击在 Network 中的条目以及生命周期日志会说明打开了什么、原因是什么（例如 "Deep link: no installed app opens lazada: links → Fallback https://…: Opens in the in-app browser"）。
   - 图片横幅（OpenRTB 3.0 `display.banner`）。
   - Native 1.0、1.1、1.2，提供信息流、内容流和应用安装三种布局，支持隐私链接与按资源的点击。

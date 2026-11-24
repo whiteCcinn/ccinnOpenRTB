@@ -125,20 +125,29 @@ public enum ClickThroughResolver {
         let first = attempt(url, platform: platform, appsInstalled: appsInstalled)
         if let screen = first.screen { return ClickThroughResolution(screen: screen, steps: first.steps, usedFallback: false) }
         var steps = first.steps
-        guard let fallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines), !fallback.isEmpty else {
-            steps.append("No fallback in the bid: nothing opens")
-            return ClickThroughResolution(screen: nil, steps: steps, usedFallback: false)
+        let fallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        if let fallback {
+            let second = attempt(fallback, platform: platform, appsInstalled: appsInstalled)
+            steps.append("Fallback \(fallback): " + second.steps.joined(separator: "; "))
+            if let screen = second.screen { return ClickThroughResolution(screen: screen, steps: steps, usedFallback: true) }
         }
-        let second = attempt(fallback, platform: platform, appsInstalled: appsInstalled)
-        steps.append("Fallback \(fallback): " + second.steps.joined(separator: "; "))
-        if second.screen == nil { steps.append("Nothing opens") }
-        return ClickThroughResolution(screen: second.screen, steps: steps, usedFallback: second.screen != nil)
+        if let last = first.lastResort {
+            steps.append(last.step)
+            return ClickThroughResolution(screen: last.screen, steps: steps, usedFallback: false)
+        }
+        steps.append(fallback == nil ? "No fallback in the bid: nothing opens" : "Nothing opens")
+        return ClickThroughResolution(screen: nil, steps: steps, usedFallback: false)
     }
 
     private struct Attempt {
         var screen: ClickThroughScreen?
         var steps: [String]
+        /// What opens when neither the link nor the bid's fallback can (an intent's package page on Google Play).
+        var lastResort: (screen: ClickThroughScreen, step: String)?
     }
+
+    /// Schemes no app opens: the creative's own script or document, never a destination.
+    private static let inert: Set<String> = ["javascript", "about", "data", "blob", "file", "vbscript"]
 
     private static func attempt(_ url: String, platform: DevicePlatform, appsInstalled: Bool) -> Attempt {
         let link = Link(url)
@@ -148,7 +157,7 @@ public enum ClickThroughResolver {
             return web(link, platform: platform)
         case "itms-apps", "itms-appss", "itms":
             guard platform == .apple else { return Attempt(steps: ["No app on Android opens \(link.scheme): links"]) }
-            let id = appStoreID(in: link.path) ?? ""
+            let id = appStoreID(path: link.path, parameters: link.parameters) ?? ""
             return Attempt(screen: .store(StorePage(store: .appStore, appID: id, url: link.text, parameters: link.parameters)),
                            steps: ["\(link.scheme): opens the App Store" + (id.isEmpty ? "" : " (\(id))")])
         case "market":
@@ -160,10 +169,15 @@ public enum ClickThroughResolver {
             return intent(link, platform: platform, appsInstalled: appsInstalled)
         case "tel", "sms", "mailto":
             let app: SystemApp = link.scheme == "tel" ? .phone : (link.scheme == "sms" ? .messages : .mail)
-            let target = link.opaqueTarget
+            var target = link.opaqueTarget
+            // iOS writes `sms:NUMBER&body=…`; `mailto:?to=…` puts the address in a parameter.
+            if app == .messages, let ampersand = target.firstIndex(of: "&") { target = String(target[..<ampersand]) }
+            if app == .mail, target.isEmpty { target = link.parameter("to") ?? "" }
             return Attempt(screen: .system(app, target: target), steps: ["\(link.scheme): opens \(app.rawValue)" + (target.isEmpty ? "" : " (\(target))")])
         case "":
             return Attempt(steps: ["\(url.isEmpty ? "An empty link" : "\(url)") is not a URL: nothing opens it"])
+        case let scheme where inert.contains(scheme):
+            return Attempt(steps: ["\(scheme): links open nothing"])
         default:
             let app = ThirdPartyApp(name: appName(scheme: link.scheme), identifier: link.scheme + ":", link: link.text, route: link.route,
                                     parameters: link.parameters)
@@ -174,14 +188,15 @@ public enum ClickThroughResolver {
 
     private static func web(_ link: Link, platform: DevicePlatform) -> Attempt {
         let host = link.host.lowercased()
-        if host == "apps.apple.com" || host == "itunes.apple.com", let id = appStoreID(in: link.path) {
+        if host == "apps.apple.com" || host == "itunes.apple.com" {
             guard platform == .apple else {
                 return Attempt(screen: .browser(page(link)), steps: ["An App Store link on Android: opens as a web page in the in-app browser"])
             }
+            let id = appStoreID(path: link.path, parameters: link.parameters) ?? ""
             return Attempt(screen: .store(StorePage(store: .appStore, appID: id, url: link.text, parameters: link.parameters)),
-                           steps: ["An App Store link: opens the App Store (\(id))"])
+                           steps: ["An App Store link: opens the App Store" + (id.isEmpty ? "" : " (\(id))")])
         }
-        if host == "play.google.com", link.path.hasPrefix("/store/apps/details"), let id = link.parameter("id"), !id.isEmpty {
+        if host == "play.google.com", link.path.lowercased().hasPrefix("/store/apps/details"), let id = link.parameter("id"), !id.isEmpty {
             guard platform == .android else {
                 return Attempt(screen: .browser(page(link)), steps: ["A Google Play link on iOS: opens as a web page in the in-app browser"])
             }
@@ -199,33 +214,46 @@ public enum ClickThroughResolver {
     private static func intent(_ link: Link, platform: DevicePlatform, appsInstalled: Bool) -> Attempt {
         guard platform == .android else { return Attempt(steps: ["intent: links are Android's: nothing on iOS opens them"]) }
         let extras = link.intentExtras
-        let package = extras["package"].flatMap { $0.isEmpty ? nil : $0 }
-        let scheme = extras["scheme"].flatMap { $0.isEmpty ? nil : $0.lowercased() }
-        let target = Link((scheme ?? "intent") + ":" + link.beforeFragment.dropFirst("intent:".count))
+        // `component=PACKAGE/.Activity` names the app when `package=` does not.
+        let package = extras["package"]?.nonEmpty ?? extras["component"]?.split(separator: "/").first.map(String.init)?.nonEmpty
+        let scheme = extras["scheme"]?.nonEmpty?.lowercased()
+        let path = link.beforeFragment.dropFirst("intent:".count)
+        if let scheme, scheme == "http" || scheme == "https" {
+            let page = Link(scheme + ":" + path)
+            return Attempt(screen: .browser(self.page(page)), steps: ["intent: a web page (scheme=\(scheme)): opens in the in-app browser"])
+        }
+        let target = scheme.map { Link($0 + ":" + path) }
+        let opened = target?.text ?? package.map { "android-app://" + $0 } ?? link.text
         let name = package.map { appName(package: $0) } ?? scheme.map { appName(scheme: $0) }
         if appsInstalled, let name {
-            let app = ThirdPartyApp(name: name, identifier: package ?? (target.scheme + ":"), link: target.text, route: target.route,
-                                    parameters: target.parameters)
-            return Attempt(screen: .app(app), steps: ["intent: \(app.identifier) is installed and opens \(target.text)"])
+            let app = ThirdPartyApp(name: name, identifier: package ?? ((scheme ?? "intent") + ":"), link: opened, route: target?.route ?? "",
+                                    parameters: target?.parameters ?? [])
+            return Attempt(screen: .app(app), steps: ["intent: \(app.identifier) is installed and opens \(opened)"])
         }
-        let missing = name == nil ? "intent: names no app (no package or scheme)" : "intent: " + (package ?? (target.scheme + ":")) + " is not installed"
+        let missing = name == nil ? "intent: names no app (no package, component or scheme)"
+            : "intent: " + (package ?? ((scheme ?? "intent") + ":")) + " is not installed"
         if let fallback = extras["S.browser_fallback_url"], !fallback.isEmpty {
             let page = Link(fallback)
             if page.scheme == "http" || page.scheme == "https" {
                 return Attempt(screen: .browser(self.page(page)), steps: [missing + ": its browser fallback opens in the in-app browser"])
             }
         }
-        if let package {
-            let store = StorePage(store: .googlePlay, appID: package, url: "market://details?id=" + package, parameters: [LinkParameter("id", package)])
-            return Attempt(screen: .store(store), steps: [missing + ": Google Play opens its page"])
-        }
-        return Attempt(steps: [missing + ", and it has no browser fallback"])
+        guard let package else { return Attempt(steps: [missing + ", and it has no browser fallback"]) }
+        let store = StorePage(store: .googlePlay, appID: package, url: "market://details?id=" + package, parameters: [LinkParameter("id", package)])
+        return Attempt(steps: [missing + ", and it has no browser fallback"], lastResort: (.store(store), "Google Play opens the page of \(package)"))
     }
 
-    /// `id1234567890` in an App Store path.
-    static func appStoreID(in path: String) -> String? {
-        guard let range = path.range(of: #"id[0-9]+"#, options: .regularExpression) else { return nil }
-        return String(path[range])
+    /// The app an App Store link names: the last path segment `id` + digits under an `app` segment (any case), or a
+    /// numeric `id` parameter (`viewSoftware?id=…`), as `id1234567890`.
+    static func appStoreID(path: String, parameters: [LinkParameter]) -> String? {
+        let segments = path.lowercased().split(separator: "/")
+        if segments.contains("app"), let last = segments.last, last.count > 2, last.hasPrefix("id"), last.dropFirst(2).allSatisfy(\.isNumber) {
+            return String(last)
+        }
+        if let id = parameters.first(where: { $0.name.lowercased() == "id" })?.value, !id.isEmpty, id.allSatisfy(\.isNumber) {
+            return "id" + id
+        }
+        return nil
     }
 
     /// "Lazada" from `lazada`, "FB" from `fb`.
@@ -335,4 +363,8 @@ struct Link {
         }
         return extras
     }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }

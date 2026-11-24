@@ -100,6 +100,9 @@ final class VASTPlayerModel {
     @ObservationIgnored private var lastStatus: PlaybackStatus?
     @ObservationIgnored private var userPaused = false
     @ObservationIgnored private var hiddenPaused = false
+    /// Another screen covers the publisher app (a click-through opened it): paused until it is gone.
+    @ObservationIgnored private var covered = false
+    @ObservationIgnored private var coveredPaused = false
     @ObservationIgnored private var visibleFraction = 1.0
 
     init(vast: ResolvedVAST, configuration: VASTPlayerConfiguration, host: any AdRenderingHost, engine: any PlaybackEngine,
@@ -248,9 +251,23 @@ final class VASTPlayerModel {
         if !visible, isPlaying {
             hiddenPaused = true
             pausePlayback()
-        } else if visible, hiddenPaused, !userPaused {
+        } else if visible, hiddenPaused, !userPaused, !covered {
             hiddenPaused = false
             resumePlayback()
+        }
+    }
+
+    /// Another app, a store or the in-app browser covers the publisher app (a click-through): any player pauses, as an
+    /// SDK's does when its app leaves the screen, and resumes when the app is back — unless the user paused it.
+    func setCovered(_ isCovered: Bool) {
+        covered = isCovered
+        guard adActive, isReady else { return }
+        if isCovered, isPlaying {
+            coveredPaused = true
+            pausePlayback()
+        } else if !isCovered, coveredPaused {
+            coveredPaused = false
+            if !userPaused, !hiddenPaused { resumePlayback() }
         }
     }
 
@@ -364,6 +381,7 @@ final class VASTPlayerModel {
         isPlaying = false
         userPaused = false
         hiddenPaused = false
+        coveredPaused = false
         tracker = nil
         skipState = .hidden
         lastStatus = nil
@@ -410,7 +428,9 @@ final class VASTPlayerModel {
                 if let events = tracker?.setDuration(mediaDuration) { emit(events, item) }
             }
             phase = .playing
-            if configuration.isInline, visibleFraction < VASTPlayerConfiguration.visibilityThreshold {
+            if covered {
+                coveredPaused = true
+            } else if configuration.isInline, visibleFraction < VASTPlayerConfiguration.visibilityThreshold {
                 hiddenPaused = true
             } else {
                 engine.play()

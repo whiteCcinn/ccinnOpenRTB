@@ -333,6 +333,28 @@ struct VASTPlayerModelTests {
         #expect(host.videoEvents(adIndex: 0).suffix(2) == [.pause, .resume])
     }
 
+    /// A click-through opened another app, a store or the in-app browser over the publisher app: a full-screen video
+    /// pauses as an SDK's does (its quartiles do not run on behind the cover), and resumes when the app is back — unless
+    /// the user had paused it.
+    @Test func aCoveredPlayerPausesAndResumesWhenUncovered() async {
+        let (model, host, engine) = make([RendererFixtures.linearAd(duration: 10)], placement: .interstitial)
+        model.start()
+        await waitForLoad(engine)
+        engine.send(.ready(duration: 10))
+        engine.tick(from: 0, to: 1)
+        model.setCovered(true)
+        #expect(!engine.isPlaying)
+        model.setVisibleFraction(1)
+        #expect(!engine.isPlaying, "covered, whatever the visible fraction")
+        model.setCovered(false)
+        #expect(engine.isPlaying)
+        #expect(host.videoEvents(adIndex: 0).suffix(2) == [.pause, .resume])
+        model.togglePlayback()
+        model.setCovered(true)
+        model.setCovered(false)
+        #expect(!engine.isPlaying, "the user's pause stands")
+    }
+
     @Test func companionViewAndClickFireOncePerCompanion() async {
         let companion = VASTCompanion(id: "c", width: 300, height: 250,
                                       resources: [.staticResource(url: "https://c.example/c.png", creativeType: "image/png")],

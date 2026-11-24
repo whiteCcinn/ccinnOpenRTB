@@ -40,8 +40,10 @@ struct RenderRequest: Equatable {
     var folded: Bool
     /// The ad's area in points inside the device screen.
     var adSize: CGSize
-    /// 0…1 visible fraction from the simulator's viewability control.
+    /// 0…1 visible fraction from the simulator's viewability control (0 while another screen covers the app).
     var visibleFraction: Double
+    /// A click-through opened another app, a store or the in-app browser over the publisher app: players pause.
+    var covered = false
     /// Incremented by the shell to restart playback / reload the creative.
     var generation: Int
     /// The monitor entry of the request that delivered the markup (the nurl / purl win notice, or AdCOM `display.curl`);

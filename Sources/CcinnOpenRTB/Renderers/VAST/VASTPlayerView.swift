@@ -51,9 +51,11 @@ struct VASTPlayerView: View {
         .task(id: request.generation) {
             let active = activeModel()
             active.setVisibleFraction(request.visibleFraction)
+            active.setCovered(request.covered)
             active.start()
         }
         .onChange(of: request.visibleFraction) { _, fraction in model?.setVisibleFraction(fraction) }
+        .onChange(of: request.covered) { _, covered in model?.setCovered(covered) }
         .onDisappear { model?.teardown() }
     }
 

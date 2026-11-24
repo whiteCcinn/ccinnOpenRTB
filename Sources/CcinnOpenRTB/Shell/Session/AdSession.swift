@@ -231,7 +231,7 @@ final class AdSession: AdRenderingHost {
         if let deviceMarkup = prepared.deviceMarkup { candidate.markup = deviceMarkup }
         return RenderRequest(candidate: candidate, native: prepared.native, vast: prepared.vast, device: device, placement: placement,
                              landscape: landscape, spanned: spanned, folded: folded, adSize: adSize, visibleFraction: exposedFraction,
-                             generation: generation, markupRequestID: prepared.markupEntryID,
+                             covered: foreground != nil, generation: generation, markupRequestID: prepared.markupEntryID,
                              publisherAppBundle: renderInput.request?.appBundle, replay: replay)
     }
 
@@ -826,7 +826,7 @@ final class AdSession: AdRenderingHost {
     /// fallback) covers the publisher app; in Real mode with "Open click-throughs in browser" the Mac opens the web page
     /// the device shows. The Network entry and the log say what happened.
     private func recordNavigation(url: String, trigger: String, source: String, parentID: UUID?, fallback: String? = nil) {
-        guard device.supportsClickThrough else {
+        guard device.supportsClickThrough, trigger != MRAIDCommand.playVideoTrigger else {
             monitor.recordNavigation(url: url, trigger: trigger, source: source, parentID: parentID)
             return
         }

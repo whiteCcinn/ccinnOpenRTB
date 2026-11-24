@@ -9,17 +9,18 @@ import SwiftUI
 struct AppJumpView: View {
     let foreground: DeviceForeground
     let layout: ScreenLayout
+    /// The app's area (one screen of a spanned dual-screen device).
+    let size: CGSize
     /// Where Back returns to.
     let publisherApp: String
     let onBack: () -> Void
 
     var body: some View {
-        let size = layout.contentFrame.size
         screen
             .frame(width: size.width, height: size.height, alignment: .top)
             .background(MockPalette.background)
             .clipped()
-            .overlay(alignment: .bottom) { androidBack }
+            .overlay(alignment: .bottom) { systemBack }
     }
 
     @ViewBuilder private var screen: some View {
@@ -27,7 +28,8 @@ struct AppJumpView: View {
         case let .app(app):
             ThirdPartyAppScreen(app: app, usedFallback: foreground.usedFallback, insets: insets)
         case let .store(page):
-            StoreScreen(page: page, platform: foreground.platform, usedFallback: foreground.usedFallback, insets: insets, onBack: onBack)
+            StoreScreen(page: page, platform: foreground.platform, usedFallback: foreground.usedFallback,
+                        showsClose: !(foreground.platform == .apple && foreground.jumpedToAnotherApp), insets: insets, onBack: onBack)
         case let .browser(page):
             InAppBrowserScreen(page: page, platform: foreground.platform, usedFallback: foreground.usedFallback, openedOnMac: foreground.openedOnMac,
                                insets: insets, onBack: onBack)
@@ -41,9 +43,10 @@ struct AppJumpView: View {
         return EdgeInsets(top: CGFloat(area.top), leading: CGFloat(area.leading), bottom: CGFloat(area.bottom), trailing: CGFloat(area.trailing))
     }
 
-    /// Android's system Back after a jump to another app (iOS has the status bar's "◀ App" instead).
-    @ViewBuilder private var androidBack: some View {
-        if foreground.platform == .android, foreground.jumpedToAnotherApp {
+    /// The system's way back after a jump to another app: Android's Back, and iOS's when no status bar shows its "◀ App"
+    /// (an iPhone in landscape).
+    @ViewBuilder private var systemBack: some View {
+        if foreground.jumpedToAnotherApp, !(foreground.platform == .apple && layout.showsStatusBar) {
             Button(action: onBack) {
                 Label("Back to \(publisherApp)", systemImage: "chevron.backward")
                     .font(.system(size: 13, weight: .semibold))
@@ -53,8 +56,25 @@ struct AppJumpView: View {
             }
             .buttonStyle(.plain)
             .padding(.bottom, insets.bottom + 12)
-            .help("Android's Back: return to the publisher app and the ad")
+            .help("Back: return to the publisher app and the ad")
         }
+    }
+}
+
+/// Where iOS puts "◀ App": in the time's place (the left of the island or notch, or the bar's leading edge).
+struct BackBreadcrumbSlot: View {
+    let layout: ScreenLayout
+    let paneWidth: CGFloat
+    let publisherApp: String
+    let onBack: () -> Void
+
+    var body: some View {
+        let ears = layout.chrome == .iPhone
+        BackBreadcrumb(publisherApp: publisherApp, onBack: onBack)
+            .frame(width: ears ? StatusBar.earWidth(for: paneWidth) : nil, height: SystemChrome.statusBarHeight(for: layout),
+                   alignment: ears ? .center : .leading)
+            .padding(.top, ears ? 4 : 0)
+            .padding(.leading, ears ? 0 : 16)
     }
 }
 
@@ -134,8 +154,12 @@ private struct LinkDetails: View {
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    static let parameterLimit = 30
+
     static func parameters(_ parameters: [LinkParameter]) -> [(label: String, value: String)] {
-        parameters.prefix(30).map { (label: $0.name, value: $0.value) }
+        var rows = parameters.prefix(parameterLimit).map { (label: $0.name, value: $0.value) }
+        if parameters.count > parameterLimit { rows.append((label: "…", value: "\(parameters.count - parameterLimit) more parameters")) }
+        return rows
     }
 }
 
@@ -187,7 +211,8 @@ private struct ThirdPartyAppScreen: View {
                 Spacer()
                 Image(systemName: "magnifyingglass").font(.system(size: 17))
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16 + insets.leading)
+            .padding(.trailing, 16 + insets.trailing)
             .frame(height: MockMetrics.appBarHeight)
         }
         .foregroundStyle(.white)
@@ -217,6 +242,8 @@ private struct StoreScreen: View {
     let page: StorePage
     let platform: DevicePlatform
     let usedFallback: Bool
+    /// A sheet in the publisher app has Done (or Back); the App Store app opened by `itms-apps:` has the status bar's ◀.
+    let showsClose: Bool
     let insets: EdgeInsets
     let onBack: () -> Void
 
@@ -247,19 +274,24 @@ private struct StoreScreen: View {
         VStack(spacing: 0) {
             Color.clear.frame(height: insets.top)
             HStack {
-                Button(action: onBack) {
-                    if platform == .apple { Text("Done").font(.system(size: 16, weight: .semibold)) } else { Image(systemName: "arrow.left") }
+                if showsClose {
+                    Button(action: onBack) {
+                        if platform == .apple { Text("Done").font(.system(size: 16, weight: .semibold)) } else { Image(systemName: "arrow.left") }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .help("Close the store and return to the ad")
+                } else {
+                    Color.clear.frame(width: 40, height: 1)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .help("Close the store and return to the ad")
                 Spacer()
                 Label(page.store.rawValue, systemImage: page.store == .appStore ? "applelogo" : "play.fill")
                     .font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Color.clear.frame(width: 40, height: 1)
             }
-            .padding(.horizontal, 16)
+            .padding(.leading, 16 + insets.leading)
+            .padding(.trailing, 16 + insets.trailing)
             .frame(height: 44)
         }
         .background(MockPalette.bar)
@@ -331,7 +363,8 @@ private struct InAppBrowserScreen: View {
                 Spacer(minLength: 0)
                 Image(systemName: platform == .apple ? "textformat.size" : "ellipsis").font(.system(size: 15)).frame(width: 40)
             }
-            .padding(.horizontal, 14)
+            .padding(.leading, 14 + insets.leading)
+            .padding(.trailing, 14 + insets.trailing)
             .frame(height: 44)
         }
         .background(MockPalette.bar)
@@ -387,7 +420,8 @@ private struct SystemAppScreen: View {
             Spacer()
         }
         .padding(.top, insets.top)
-        .padding(.horizontal, 24)
+        .padding(.leading, 24 + insets.leading)
+        .padding(.trailing, 24 + insets.trailing)
         .frame(maxWidth: .infinity)
     }
 }

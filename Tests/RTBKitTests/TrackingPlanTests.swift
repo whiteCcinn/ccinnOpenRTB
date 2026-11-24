@@ -166,6 +166,18 @@ struct TrackingPlanAdcomTests {
         ])
     }
 
+    /// Review: an AdCOM link's `urlfb` comes from the bid response, so it gets the bid's macros as its `url` does.
+    @Test func theAdcomFallbackIsExpandedAsItsLink() throws {
+        var candidate = Self.candidate
+        candidate.markup = .image(ImageBanner(imageURL: "https://cdn.example/creative.jpg",
+                                              link: AdLink(url: "lazada://p?tok=${CUSTOM_CLICKTOKEN}", fallback: "https://adv.example/fb?p=${OPENRTB_PRICE}&t=${CUSTOM_CLICKTOKEN}")))
+        let context = MacroContext.simulatorDefaults(candidate: candidate, request: nil, device: TrackingFixtures.phone)
+        let navigation = try #require(TrackingPlan.requests(for: .click(assetID: nil), candidate: candidate, native: nil, vast: nil, context: context,
+                                                            options: TrackingPlan.Options()).last)
+        #expect(navigation.url == "lazada://p?tok=A7D800F2716DB")
+        #expect(navigation.fallback == "https://adv.example/fb?p=1.5&t=A7D800F2716DB")
+    }
+
     @Test func noNavigationOnDevicesWithoutClickThrough() {
         var context = TrackingFixtures.context
         context.device = TrackingFixtures.tv

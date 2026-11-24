@@ -144,6 +144,28 @@ struct DeepLinkSessionTests {
         #expect(foreground(play, .android).jumpedToAnotherApp && !foreground(web, .android).jumpedToAnotherApp)
     }
 
+    /// Review: `mraid.playVideo` hands a video to the SDK's own player — recorded, never shown as the in-app browser.
+    @Test func mraidPlayVideoIsNotAJump() async throws {
+        let harness = await rendered(click: "https://adv.example/")
+        harness.session.navigate(to: "https://cdn.example/v.mp4", trigger: "mraid.playVideo (native player)", source: "creative")
+        #expect(harness.session.foreground == nil && harness.session.clickThroughNotice == nil)
+        #expect(navigation(harness)?.url == "https://cdn.example/v.mp4")
+        #expect(harness.session.renderRequest?.visibleFraction == 1)
+    }
+
+    /// Lose and a placement change end the play, and the jump with it.
+    @Test func loseAndAPlacementChangeCloseTheJump() async throws {
+        let harness = await rendered(click: "lazada://p")
+        harness.session.fireManually(.click(assetID: nil))
+        harness.session.placement = harness.session.placement == .interstitial ? .inlineBanner : .interstitial
+        #expect(harness.session.foreground == nil)
+        await harness.renderAndWait()
+        harness.session.fireManually(.click(assetID: nil))
+        #expect(harness.session.foreground != nil)
+        harness.session.lose(.lostToHigherBid)
+        #expect(harness.session.foreground == nil)
+    }
+
     @Test func aRendererNavigationJumpsToo() async throws {
         let harness = await rendered(click: "https://adv.example/")
         harness.session.navigate(to: "tel:+60123456789", trigger: "mraid.open", source: "creative")

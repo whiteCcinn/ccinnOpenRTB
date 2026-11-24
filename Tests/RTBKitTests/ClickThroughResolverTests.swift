@@ -103,6 +103,61 @@ struct ClickThroughResolverTests {
         #expect(resolve("https://adv.example", on: .other).screen == nil)
     }
 
+    /// Review: links a device cannot open are not "installed apps" (they reach the resolver through `mraid.open`, a VAST
+    /// ClickThrough or a Native link).
+    @Test func linksThatOpenNothing() {
+        for url in ["javascript:void(0)", "about:blank", "data:text/html,<p>x</p>", "blob:https://a.example/1", "file:///etc/hosts", "vbscript:x"] {
+            let resolution = resolve(url, installed: true)
+            #expect(resolution.screen == nil, "\(url)")
+            #expect(resolution.steps.first?.hasSuffix("links open nothing") == true, "\(resolution.steps)")
+        }
+        #expect(resolve("javascript:void(0)", fallback: "https://a.example/").usedFallback)
+    }
+
+    /// Review: the App Store id is the path segment that is `id` and digits (any case), or a numeric `id` parameter — not
+    /// the first "id" and digits anywhere in a slug.
+    @Test func appStoreIDsAreWholeSegments() {
+        func id(_ url: String) -> String? {
+            if case let .store(page) = resolve(url).screen { page.appID } else { nil }
+        }
+        #expect(id("https://apps.apple.com/us/app/squid9game/id1234567890") == "id1234567890")
+        #expect(id("https://apps.apple.com/us/app/covid19-tracker/id1500000000") == "id1500000000")
+        #expect(id("HTTPS://APPS.APPLE.COM/US/APP/X/ID123") == "id123")
+        #expect(id("https://itunes.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=785385147") == "id785385147")
+        #expect(id("itms-apps://itunes.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=785385147") == "id785385147")
+        #expect(id("https://apps.apple.com/us/developer/acme/id99?see-all=apps") == "", "the App Store opens; the link names no app")
+        #expect(id("https://PLAY.google.com/store/apps/details?id=com.x") == nil, "a Google Play link on iOS is a web page")
+    }
+
+    /// Review: an intent the SDK cannot start falls back to its browser fallback, then the bid's fallback, and only then
+    /// to the package's store page; `scheme=https` is a web page; `component=` names the app.
+    @Test func androidIntentFallbacksInOrder() {
+        let intent = "intent://item/9#Intent;scheme=shopee;package=com.shopee.my;end"
+        let bid = resolve(intent, fallback: "https://shopee.com.my/bid", on: .android, installed: false)
+        #expect(bid.screen == .browser(WebPage(url: "https://shopee.com.my/bid", host: "shopee.com.my", parameters: [])))
+        #expect(bid.usedFallback)
+        if case let .store(page) = resolve(intent, on: .android, installed: false).screen { #expect(page.appID == "com.shopee.my") } else {
+            Issue.record("no fallback at all: the package's Google Play page")
+        }
+        #expect(resolve("intent://www.example.com/p#Intent;scheme=https;end", on: .android, installed: false).screen
+            == .browser(WebPage(url: "https://www.example.com/p", host: "www.example.com", parameters: [])))
+        if case let .app(app) = resolve("intent://x#Intent;component=com.lazada.android/.MainActivity;end", on: .android).screen {
+            #expect(app.name == "Lazada" && app.identifier == "com.lazada.android")
+        } else {
+            Issue.record("component names the app")
+        }
+        if case let .app(app) = resolve("intent:#Intent;package=com.shopee.my;end", on: .android).screen {
+            #expect(app.link == "android-app://com.shopee.my")
+        } else {
+            Issue.record("a package launch")
+        }
+    }
+
+    @Test func systemAppTargetsFromParameters() {
+        #expect(resolve("sms:+6012&body=hi").screen == .system(.messages, target: "+6012"))
+        #expect(resolve("mailto:?to=sales%40adv.example&subject=x").screen == .system(.mail, target: "sales@adv.example"))
+    }
+
     @Test func appNames() {
         #expect(ClickThroughResolver.appName(scheme: "fb") == "FB")
         #expect(ClickThroughResolver.appName(scheme: "snssdk1128") == "Snssdk1128")

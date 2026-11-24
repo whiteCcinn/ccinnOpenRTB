@@ -10,11 +10,13 @@ struct SystemChrome: View {
     let isFirstPane: Bool
     /// Light content (white glyphs) over dark backgrounds such as full-screen video.
     var lightContent = false
+    /// iOS's "◀ App" stands where the time is (`BackBreadcrumbSlot`).
+    var hidesTime = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if showsStatusBar && layout.showsStatusBar {
-                StatusBar(layout: layout, width: pane.width, lightContent: lightContent)
+                StatusBar(layout: layout, width: pane.width, lightContent: lightContent, hidesTime: hidesTime)
                     .frame(width: pane.width, height: statusBarHeight)
             }
             if let indicator = homeIndicatorSize {
@@ -29,7 +31,9 @@ struct SystemChrome: View {
         .allowsHitTesting(false)
     }
 
-    private var statusBarHeight: CGFloat {
+    private var statusBarHeight: CGFloat { Self.statusBarHeight(for: layout) }
+
+    static func statusBarHeight(for layout: ScreenLayout) -> CGFloat {
         let top = CGFloat(layout.safeArea.top)
         return top > 0 ? top : 24
     }
@@ -100,6 +104,7 @@ struct StatusBar: View {
     let layout: ScreenLayout
     let width: CGFloat
     var lightContent = false
+    var hidesTime = false
 
     var body: some View {
         let phone = layout.chrome == .iPhone || layout.chrome == .iPhoneHomeButton
@@ -108,6 +113,7 @@ struct StatusBar: View {
             Text(timeText)
                 .font(.system(size: phone ? 16 : 13, weight: phone ? .semibold : .medium))
                 .monospacedDigit()
+                .opacity(hidesTime ? 0 : 1)
                 .frame(width: ears ? earWidth : nil, alignment: ears ? .center : .leading)
             Spacer(minLength: 0)
             HStack(spacing: 5) {
@@ -125,7 +131,9 @@ struct StatusBar: View {
     }
 
     /// Each side of the island / notch.
-    private var earWidth: CGFloat { max(60, (width - 130) / 2) }
+    private var earWidth: CGFloat { Self.earWidth(for: width) }
+
+    static func earWidth(for width: CGFloat) -> CGFloat { max(60, (width - 130) / 2) }
 
     private var timeText: String {
         layout.chrome == .iPad ? "9:41  Tue Nov 17" : "9:41"
