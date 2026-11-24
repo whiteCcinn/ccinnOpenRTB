@@ -123,6 +123,23 @@ struct HTMLTagFormatterTests {
         #expect(format("<span>a</span><!-- c --><span>b</span>") == "<span>a</span><!-- c --><span>b</span>")
     }
 
+    @Test func anOmittedHeadEndTagDoesNotSpreadInlineContent() {
+        // `</head>` is optional: the body's inline run must not be broken as if it were in the head.
+        let input = #"<html><head><meta charset="utf-8"><body><span>a</span><span>b</span></body></html>"#
+        let expected = """
+        <html>
+          <head>
+            <meta charset="utf-8">
+          <body>
+            <span>a</span><span>b</span>
+          </body>
+        </html>
+        """
+        #expect(format(input) == expected)
+        // Without `<body>` either, content in an open head is still inline.
+        #expect(format("<head><title>t</title><b>a</b><i>b</i>") == "<head>\n  <title>t</title>\n  <b>a</b><i>b</i>")
+    }
+
     @Test func preformattedTextIsKept() {
         let input = "<div><pre>  a\n    <b>b</b>  </pre><textarea>\n x </textarea></div>"
         let expected = "<div>\n  <pre>  a\n    <b>b</b>  </pre>\n  <textarea>\n x </textarea>\n</div>"

@@ -314,7 +314,7 @@ enum TagFormatter {
                     }
                     pending.append(contentsOf: bytes[token.range.lowerBound..<core.lowerBound])
                     place(role: .content, depth: stack.count, previous: previous, atLineStart: atLineStart, preformatted: false,
-                          inHead: stack.isOpen("head"), pending: &pending)
+                          inHead: false, pending: &pending)
                     emit(core)
                     pending = Array(bytes[core.upperBound..<token.range.upperBound])
                     previous = .content
@@ -347,7 +347,8 @@ enum TagFormatter {
                 case .comment, .cdata, .text:
                     role = .hidden
                 }
-                let inHead = stack.isOpen("head") || token.name == "head"
+                // Head elements are not rendered; rendered content in an unclosed head (`</head>` is optional) is body content.
+                let inHead = (stack.isOpen("head") || token.name == "head") && role != .content
                 place(role: role, depth: depth, previous: previous, atLineStart: atLineStart, preformatted: preformatted, inHead: inHead,
                       pending: &pending)
                 emit(token.range)
@@ -457,6 +458,7 @@ enum TagFormatter {
         case "thead", "tbody", "tfoot": (closes, stopsAt) = (["thead", "tbody", "tfoot"], ["table"])
         case "option": (closes, stopsAt) = (["option"], ["select", "datalist", "optgroup"])
         case "optgroup": (closes, stopsAt) = (["optgroup"], ["select"])
+        case "body": (closes, stopsAt) = (["head"], ["html"])
         default:
             guard HTML.closesParagraph.contains(name) else { return nil }
             // A block start closes an open `p` unless another block is in between.
