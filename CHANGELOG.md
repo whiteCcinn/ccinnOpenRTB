@@ -5,6 +5,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Format VAST, Native JSON and banner HTML.** **Format** (⇧⌘F) in the Response, Request and Client editors now pretty-prints VAST / XML and HTML as well as JSON. It used to be JSON only, and disabled for anything else. Only whitespace changes: VAST gets one element per line with text and CDATA kept as typed; HTML gets line breaks only around block elements, `<br>` and the head, never inside an inline run, so the creative renders as before; `script`, `style` and `pre` are kept as typed. A mismatched XML tag is named with its line.
+- **Markup copied out of a JSON string.** Format unescapes text copied from a log or an `adm` value first (`<VAST version=\"3.0\">`, Go's `\u003c…`, wrapped in quotes, or escaped twice), and pasting it into the Response or Request editor reads it unescaped straight away (info `input.unescaped` / `request.unescaped`), so the ad renders without editing. Real markup is never touched: only text whose every quote is escaped, and which starts escaped or has an attribute quoted with `\"` outside scripts, counts. A banner's `document.write('<img src=\"…\">')` is JavaScript, not escaping.
+- **Inspector ▸ Markup.** The selected bid's markup formatted, and as the device receives it once the exchange's macros are substituted, with **Copy**. Previously a bid's `adm` could only be read as one escaped line of the response.
+- **Formatted bodies.** The Network window's body previews (VAST wrapper answers, bid requests and responses) have **Formatted** and **Raw**; the Client tab formats XML and HTML response bodies too.
+- **Validation: `adm` escaped twice.** A bid whose `adm` is still JSON-escaped after the response is decoded (2.x `adm`, 3.0 `display.adm`, `video.adm`, `audio.adm`) gets the warning `openrtb.bid.adm.escaped`. It is rendered as received, as a device would get it.
+
 ## [1.5.0] - 2026-11-23
 
 ### Added

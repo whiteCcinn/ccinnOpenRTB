@@ -83,7 +83,13 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **像 Postman 一样发送竞价请求**：[Client](#client-标签页) 标签页把你输入的请求发往一个端点，展示响应，并按请求与响应所对应的格式和广告位在设备上渲染。可以把请求连同响应一起保存，日后再打开。
 - **运行官方 Prebid.js**：[Prebid](#prebid-标签页) 标签页在发布方页面上托管任意 Prebid.js 版本，呈现方式与设备浏览器一致，并加载你选择的竞价适配器：它们的请求经由窗口的网络关口发往真实端点，返回的出价在设备上渲染。
 - **调试 Cookie 映射**：[Sync](#sync-标签页) 标签页按设备浏览器的方式运行用户同步链路——iPhone 上的 WebKit 拦截第三方 Cookie，Chrome 需要 `SameSite=None; Secure`——并展示每一跳的 Cookie、传递的 id 以及未替换的占位符。
-- **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。
+- **粘贴 Exchange 返回的任何内容**：OpenRTB 2.x 或 3.0 竞价响应、裸 `adm`（HTML、Native JSON 或 VAST XML），或 VAST 标签 URL。输入类型与版本会被自动识别。解析是宽松的：类型错误会成为校验问题，未知字段会被保留。无出价响应会显示 "No bid"，并给出 `nbr` 原因。从 JSON 字符串里复制出来的标记或响应（日志行、`adm` 字段值：`<VAST version=\"3.0\">`、Go 输出的 `\u003cVAST…`）会先反转义再读取，Issues 列表会注明这一点。
+- **格式化任意标记**：Response、Request 和 Client 编辑器中的 **Format**（⇧⌘F）可以格式化 JSON（OpenRTB、Native）、VAST XML 和 Banner HTML；从 JSON 字符串里复制出来的文本会先反转义（转义了两次也可以）。格式化只改动空白：
+  - JSON 保留键的顺序、数字写法和转义。
+  - VAST 每个元素占一行；元素的文本和 CDATA（URL、宏）保持原样，因此每个取值都不变。
+  - HTML 只在浏览器按默认样式会忽略空白的位置换行——块级元素与 `<br>` 前后、`<head>` 中、一行的第一个内容之前——所以 `<a><img><img></a>` 这样的行内片段会留在同一行，创意的渲染效果与之前一致；`script`、`style`、`textarea` 和 `pre` 保持原样，`style` 属性写明 `display: inline…` 的元素按行内元素处理。（如果样式表规则把 `div` 设为 inline-block，新加的换行仍可能显示为一个空格；⌘Z 可以撤销 Format。）
+
+  检查器的 **Markup** 视图会格式化显示所选出价的标记；替换 Exchange 宏之后设备实际收到的版本也可以查看，并可 **Copy**。Network 窗口和 Client 标签页也会格式化显示 JSON、XML 与 HTML 的请求体和响应体。
 - **也模拟 Exchange 的那一部分**：和 Exchange 一样（OpenRTB 2.6 §4.4），模拟器会在设备拿到出价的内嵌 `adm`（HTML、Native JSON 或 VAST XML）之前，替换其中的 `${AUCTION_*}` / `${OPENRTB_*}` 宏；VAST 的 `[MACROS]` 留给播放器，在每个监测请求触发时才填充。DSP 在竞价成功后返回的素材（`nurl` 响应、`display.curl`）按原样使用。
 - **选择出价**：列出所有 seat 下的全部出价及其格式。也可以同时粘贴竞价请求，用来解析 Native 资源类型、曝光位尺寸与广告位，以及请求侧的宏。出价对应的曝光位决定广告单元：`imp.rwdd`（或 `imp.ext.is_rewarded_inventory`、`imp.ext.prebid.is_rewarded_inventory`；AdCOM `placement.reward`）表示激励，`imp.instl` 或 `video.plcmt` 为 3（AdCOM `display.instl`）表示插屏。
 - **像设备一样渲染**
@@ -96,16 +102,16 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **设备**：共 28 款（默认 iPhone 18 Pro）：从 SE 到 18 Pro Max 的 iPhone、Android 手机、包括 iPhone Duo 在内的折叠屏（折叠或展开）、Surface Duo（单屏或跨越铰链）、iPad，以及四个 CTV 平台，支持竖屏和横屏，每款设备都有各自的系统界面与模拟应用。详见[设备](#设备)。
 - **在正确的时机触发监测**：监测请求会在真实 SDK 或播放器触发它的时刻触发，OpenRTB、AdCOM 与 VAST 宏都会被展开，未知的宏会被报告。**Viewability** 滑块可以把广告滚入或滚出视野，并据此执行 MRC 规则：展示类广告 50% 可见持续 1 秒，视频广告 50% 可见持续 2 秒。**Fire** 按钮可以手动触发事件。详见[监测与宏](#监测与宏)。
 - **Network 窗口**：以表格、关系树和瀑布图实时展示每一个请求，提供详情、筛选、HAR 导出和复制为 curl。详见 [Network 窗口](#network-窗口)。
-- **规范校验**：检查器会按识别出的 OpenRTB、Native 和 VAST 版本检查响应：必填字段、类型错误、无效 URL、竞价请求要求安全创意时的非 HTTPS 监测链接、缺少可播放的媒体文件、Wrapper 层数，以及属于其他版本的字段。每个问题都有严重级别、代码、说明和位置（JSON 指针或 VAST 元素路径）。
+- **规范校验**：检查器会按识别出的 OpenRTB、Native 和 VAST 版本检查响应：必填字段、类型错误、无效 URL、竞价请求要求安全创意时的非 HTTPS 监测链接、被 DSP 转义了两次的 `adm`（`openrtb.bid.adm.escaped`；设备无法读取，因此按收到的原样渲染）、缺少可播放的媒体文件、Wrapper 层数，以及属于其他版本的字段。每个问题都有严重级别、代码、说明和位置（JSON 指针或 VAST 元素路径）。
 - **离线可用的示例**：内置示例覆盖所有支持的格式和版本：HTML 与 MRAID、Native 1.0–1.2、VAST 2.0–4.2（包括 Wrapper 链、CTV Ad Pod 和音频广告）、OpenRTB 3.0，以及无出价响应。示例媒体在首次使用时于本机生成，并缓存在 `~/Library/Caches` 下：一段带时间码的 15 秒 1280×720 H.264 MP4、一段 15 秒 AAC 提示音，以及若干 PNG 图片。
 
 ## Client 标签页
 
 每个窗口右侧面板中的请求编辑器，用来向 Exchange、SSP 或 DSP 的端点发送竞价请求，并在设备上查看返回的结果。
 
-- **编写**：方法（**POST**；端点通过 URL 接收查询时用 **GET**）、端点 URL、请求头，以及你输入的请求体。新请求默认带有 `Content-Type: application/json` 与 `x-openrtb-version: 2.6`；可以停用、修改这些请求头或添加自己的请求头。**Format**（⇧⌘F）只格式化请求体，不改变键的顺序。
+- **编写**：方法（**POST**；端点通过 URL 接收查询时用 **GET**）、端点 URL、请求头，以及你输入的请求体。新请求默认带有 `Content-Type: application/json` 与 `x-openrtb-version: 2.6`；可以停用、修改这些请求头或添加自己的请求头。**Format**（⇧⌘F）格式化请求体（JSON、XML 或 HTML），不改变键的顺序；从 JSON 字符串里复制出来的请求体会先反转义。
 - **发送**（⌘↩）：经由该窗口的网络关口发出，带有模拟设备的 User-Agent（除非另选设备，否则为 iPhone 18 Pro）和显式的 `Accept-Language`，除非你自己设置了这些请求头。端点可以是 `http://`，也可以是 `https://`。**Cancel**（⌘.）可以中止。无法发送的请求会说明原因：URL 不是 http(s)、请求头名称不是合法 token、取值中含有换行、同一请求头设置了两次。请求体不是 JSON 时仍按原样发送，并给出警告。
-- **响应**：状态码、耗时、大小、响应头，以及响应体（JSON 会被格式化）。任何状态码都会展示，包括错误响应的响应体。
+- **响应**：状态码、耗时、大小、响应头，以及响应体（JSON、XML（例如 VAST 应答）与 HTML 会被格式化）。任何状态码都会展示，包括错误响应的响应体。
 - **在设备上展示**：带响应体的 2xx 响应会填入 **Response** 编辑器，请求填入 **Request** 编辑器，因此模拟器会根据两者确定出价格式（`mtype`、曝光位的媒体类型、素材本身），并根据请求确定广告位（激励、插屏、信息流……）。模拟模式与离线模式下会立即渲染；真实模式下只填入编辑器，设备等待你点击 **Render**，因为渲染会发出该出价的监测请求。204 或空响应体表示无出价，模拟器保持不变。标签页会显示模拟器的识别结果，例如 "OpenRTB 2.6 · 1 bid · Video · Rewarded · iPhone 18 Pro"。
 - **保存的请求**：**Save**（⌘S）会保存请求及其最近一次响应和发送时使用的设备；**Saved** 在每个窗口中列出它们（最新的在前，可搜索）。打开后可以再次发送，或者在其设备上 **Render** 保存的响应而不发出任何请求。可以在列表中复制或删除。单击打开请求；⌘-单击和 ⇧-单击可以选择多个（之后可用 **Select All** 或 ⌘A 全选），页脚的 **Delete…**、右键菜单或 Delete 键在确认一次后将它们一起删除——只删除当前搜索列出的请求，绝不会删除被搜索隐藏的请求。可以用**分组**整理它们：右键 › **Move to Group**（选中多个时也可用页脚的 **Move to**）把请求放入已有分组或 **New Group…**；每个分组是一个可折叠的区段（折叠状态会被记住），其 ⋯ 菜单中有 **Select All in Group**、**Rename Group…** 和 **Remove Group…**——移除分组不会删除其中的请求。每个请求最多属于一个分组；分组名不区分大小写（“G24”和“g24”是同一个分组）；搜索也会匹配分组名；Save、Save as New、Duplicate、导出和导入都会保留分组。每个请求是 `~/Library/Application Support/CcinnOpenRTB/Requests/` 下的一个 JSON 文件，只有你的账户可以读取；其中包含你的请求头（包括凭据）以及请求中的个人数据。
 - **迁移到另一台 Mac**：**Export All…**（在 **Saved** 中，或 ⋯ 菜单中）会把所有保存的请求及其最近一次响应写入一个 JSON 文件；在另一台 Mac 上用 **Import…** 一次导入全部内容。按 id 合并：只有更新的副本才会替换已有的请求，因此重复导入不会改变任何内容。损坏的条目会被跳过并计数，绝不会导致失败。导出文件包含你的请求头（包括凭据）以及请求中的个人数据，写入后只有你的账户可以读取：请妥善保管。
@@ -165,7 +171,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **列表（List）**，实时更新：序号、相对时间（+ms）、类别、触发原因、主机与路径、模式、状态码与耗时。
 - **关系树**：一个请求的父请求，是交付了“包含其 URL 的文档”的那个请求。每个 VAST 监测、媒体文件和伴随广告（其图片、HTML 或 iframe 伴随广告自身的加载与导航）都挂在交付它的 Wrapper 或 Inline 那一跳之下；由 `nurl` 或 `display.curl` 交付的素材中的监测、点击、导航和创意加载都挂在该请求之下；直接写在竞价响应中的 URL（`nurl`、`burl`、`lurl`、AdCOM 事件、AdCOM 横幅链接）没有父请求。重定向的每一跳挂在其监测请求之下。监测请求永远不会成为导航的父请求：同一次点击产生的请求共享同一个触发原因。
 - **瀑布图**时间线。
-- **详情**：URL 模板与展开后的 URL 并排显示并高亮宏，列出已替换和未知的宏、查询参数、请求头与响应头、重定向链，以及内容请求的响应预览。
+- **详情**：URL 模板与展开后的 URL 并排显示并高亮宏，列出已替换和未知的宏、查询参数、请求头与响应头、重定向链，以及请求体和响应体的预览——JSON、VAST XML 与 HTML 可以选择 **Formatted**（其中的 JSON 字符串会先反转义）或 **Raw**。
 - **筛选**：按类别、模式和文本筛选。**Follow tail** 让最新的记录始终可见，**Clear** 清空当前会话的列表。
 - **内容**类记录带有 CONTENT 标记，因此应用为渲染广告而加载的内容不会被误认为监测请求。VAST 标签或 Wrapper 的 URL 会把书写时的 URI 与实际请求的 URL 并排显示（播放器会展开其中的 VAST 宏）。请求头是实际发出的请求头。
 - **导出 HAR 1.2**：每条记录带有自定义的 `_ccinn` 字段：`sequence`、`category`、`trigger`、`source`、`mode`、`delivery`、`parent`、`template` 和 `macros`。竞价请求的请求体导出为 `postData`。
