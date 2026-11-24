@@ -95,7 +95,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **像设备一样渲染**
   - HTML 与富媒体运行在带 MRAID 3.0 桥接的沙盒 Web 视图中。桥接调用都会被记录；点击和导航只会被记录，不会离开模拟器。
   - 像在设备上一样触摸。在手机、折叠屏和平板上，鼠标就是 HTML 创意和 HTML 伴随广告的一根手指，每个 frame 都是如此：它们能看到 `TouchEvent`、`ontouchstart`、值为 5 的 `navigator.maxTouchPoints`，`matchMedia('(pointer: coarse)')` 与 `(hover: none)` 也会给出手机上的结果，因此会走移动端的逻辑。
-    - 点击就是轻点：按手机上的顺序依次收到 `pointerdown`（`pointerType: "touch"`）、`touchstart`、`pointerup`、`touchend`，然后是 `mousemove`、`mousedown`、`mouseup` 和 click。创意如果取消了这次轻点（在 `touchstart` 或 `touchend` 中调用 `preventDefault()`），就和手机上一样不会收到 click。
+    - 点击就是轻点：按手机上的顺序依次收到 `pointerdown`（`pointerType: "touch"`）、`touchstart`、`pointerup`、`touchend`，然后是 `mousemove`、`mousedown`、`mouseup` 和 click。创意如果取消了这次轻点（在 `touchstart` 或 `touchend` 中调用 `preventDefault()`），就和手机上一样不会收到 click。如果 `touchend` 把手指下方的元素隐藏了，click 会落到此时手指下方的元素上，因此下层链接被意外点击跳转的问题会像在手机上一样暴露出来。
     - 拖动就是滑动：`touchmove` 事件发给手指按下时所在的元素，不会产生 click。它会滚动手指本来会滚动的内容（`overflow` 轮播、长页面；遵守 CSS `touch-action`），除非创意取消了它；松手后会带着惯性滑动，并停在轮播的 scroll-snap 吸附点上。
     - 没有悬停、文本选择和拖放。创意自己派发的事件不受影响。
     - 每个手势都会在日志中记录一行，例如 "Tap at 120, 340"、"Swipe left 180 pt in 220 ms"，并说明创意如何处理了它。在滑动手指抬起时打开的落地页算作一次点击，不论这次滑动持续了多久。

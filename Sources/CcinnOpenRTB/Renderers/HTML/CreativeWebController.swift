@@ -163,6 +163,7 @@ final class CreativeWebController: NSObject {
         logBudget = Self.logCapacity
         parentProvider.parentID = content.networkParentID
         lastGesture = nil
+        pressTracker = GesturePressTracker()
         bridgeNonce = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         messageBudget = Self.messageCapacity
         forgedReported = false

@@ -128,15 +128,17 @@ struct TouchEmulationWebKitTests {
             try await controller.webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
         }
 
-        private var eventNumber = 0
+        /// Across every harness of the run: WebKit drops a mouse event whose number it has seen before (a release numbered
+        /// like an earlier test's was lost about one run in six).
+        private static var eventNumber = 0
 
-        /// A mouse event at `point` in the page's CSS pixels (top-left origin). Each has its own event number, as WebKit's own
-        /// test harness makes them.
+        /// A mouse event at `point` in the page's CSS pixels (top-left origin), with an event number of its own, as WebKit's
+        /// own test harness makes them.
         private func event(_ type: NSEvent.EventType, _ point: CGPoint) -> NSEvent? {
-            eventNumber += 1
+            Self.eventNumber += 1
             return NSEvent.mouseEvent(with: type, location: NSPoint(x: point.x, y: Self.size.height - point.y), modifierFlags: [],
                                       timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                                      eventNumber: eventNumber, clickCount: 1, pressure: 0)
+                                      eventNumber: Self.eventNumber, clickCount: 1, pressure: 0)
         }
 
         func press(_ point: CGPoint) {
@@ -149,10 +151,6 @@ struct TouchEmulationWebKitTests {
 
         func release(_ point: CGPoint) {
             if let event = event(.leftMouseUp, point) { controller.webView.mouseUp(with: event) }
-        }
-
-        func hover(_ point: CGPoint) {
-            if let event = event(.mouseMoved, point) { controller.webView.mouseMoved(with: event) }
         }
 
         /// A press and a release, the press handled first (a finger is never down for no time at all).
@@ -301,7 +299,9 @@ struct TouchEmulationWebKitTests {
         // From #a down into #b: touch events keep the element the finger went down on.
         await harness.swipe(from: CGPoint(x: 250, y: 150), to: CGPoint(x: 70, y: 260))
         let log = await harness.log { $0.contains("touchend:a") }
-        #expect(log.contains("touchstart:a") && log.contains("touchmove:a") && !log.contains("touchmove:b"), "\(log)")
+        #expect(log.contains("touchstart:a") && log.contains("touchmove:a"), "\(log)")
+        // Crossing #b sends it nothing (no pointerover, mouseover, mousemove, touchmove): a finger has no hover.
+        #expect(Self.on("b", log).isEmpty, "\(log)")
         #expect(!log.contains { $0.hasPrefix("click") || $0.hasPrefix("mousedown") || $0.hasPrefix("selectstart") }, "\(log)")
         let moves = try await harness.evaluate("return __moves") as? [String] ?? []
         #expect(moves.last == "a@70,260", "\(moves)")
@@ -410,6 +410,7 @@ struct TouchEmulationWebKitTests {
           var root = document.getElementById('host').attachShadow({ mode: 'open' });
           root.innerHTML = '<div id="inner" style="width:320px;height:480px"></div>';
           root.getElementById('inner').addEventListener('touchstart', function (e) { window.__shadow = e.target.id + ':' + e.touches[0].target.id; });
+          root.getElementById('inner').addEventListener('mousedown', function (e) { window.__innerMouse = e.target.id; });
           document.addEventListener('touchstart', function (e) { window.__outside = e.target.id; });
         </script>
         """
@@ -419,6 +420,8 @@ struct TouchEmulationWebKitTests {
         let reached = await Wait.until { (try? await harness.evaluate("return [String(window.__shadow), String(window.__outside)]")) as? [String]
             == ["inner:inner", "host"] }
         #expect(reached, "outside the root the event is retargeted to its host, as browsers do")
+        let compatibility = await Wait.until { (try? await harness.evaluate("return String(window.__innerMouse)")) as? String == "inner" }
+        #expect(compatibility, "the tap's mouse events reach the element inside the root too")
     }
 
     @Test func thePagesOwnMouseEventsAreLeftAlone() async throws {
@@ -429,44 +432,175 @@ struct TouchEmulationWebKitTests {
         #expect(log == ["mousedown:a"])
     }
 
-    @Test func thereIsNoHover() async throws {
-        let harness = await load(Self.recorder)
-        defer { harness.close() }
-        harness.hover(CGPoint(x: 100, y: 100))
-        harness.hover(CGPoint(x: 120, y: 300))
-        await harness.tap(CGPoint(x: 10, y: 10))
-        let log = await harness.log { $0.contains { $0.hasPrefix("click:") } }
-        #expect(!log.contains { $0.hasSuffix(":b") || $0.contains(":b:") }, "hovering #b sends nothing: \(log)")
-    }
-
-    @Test func pointerCaptureWorksWithTheTouchPointer() async throws {
+    /// The page captures the touch pointer to another element in its `pointerdown`: the moves go there.
+    @Test func pointerCaptureToAnotherElementIsFollowed() async throws {
         let harness = await load(Self.recorder + """
         <script>
-          var a = document.getElementById('a');
-          a.addEventListener('pointerdown', function (e) { try { a.setPointerCapture(e.pointerId); window.__captured = a.hasPointerCapture(e.pointerId); } catch (x) { window.__captured = String(x); } });
-          a.addEventListener('pointermove', function (e) { window.__lastMove = e.pointerType + '@' + Math.round(e.clientX); });
+          var a = document.getElementById('a'), b = document.getElementById('b');
+          a.addEventListener('pointerdown', function (e) { try { b.setPointerCapture(e.pointerId); window.__captured = b.hasPointerCapture(e.pointerId); } catch (x) { window.__captured = String(x); } });
+          window.addEventListener('pointermove', function (e) { window.__lastMove = e.target.id + ':' + e.pointerType + '@' + Math.round(e.clientX); }, true);
         </script>
         """)
         defer { harness.close() }
-        await harness.swipe(from: CGPoint(x: 250, y: 100), to: CGPoint(x: 150, y: 300))
+        await harness.swipe(from: CGPoint(x: 250, y: 100), to: CGPoint(x: 150, y: 120))
         _ = await harness.log { $0.contains("touchend:a") }
         let facts = try await harness.evaluate("return [String(window.__captured), String(window.__lastMove)]") as? [String]
-        #expect(facts == ["true", "touch@150"])
+        #expect(facts == ["true", "b:touch@150"])
     }
 
-    @Test func aTapOnALinkIsAClickThroughAndASwipeOverItIsNot() async throws {
-        let link = #"<style>html,body{margin:0}</style><a id="l" href="https://landing.example/" style="display:block;width:320px;height:480px">Go</a>"#
+    /// WebKit clicks an element a drag began and ended on (not a link: a link drag is a drag-and-drop); a phone never
+    /// clicks after a swipe. The tap is a click-through.
+    @Test func aTapOnALinkIsAClickThroughAndASwipeIsNot() async throws {
+        let link = #"<style>html,body{margin:0}</style><div id="l" style="width:320px;height:480px" onclick="location.href='https://landing.example/'">Go</div>"#
         let harness = await load(link)
         defer { harness.close() }
         harness.controller.noteUserGesture()
         await harness.swipe(from: CGPoint(x: 250, y: 100), to: CGPoint(x: 100, y: 100))
         _ = await Wait.until { harness.host.logs.contains { $0.origin == "Touch" && $0.message.hasPrefix("Swipe left") } }
+        _ = try await harness.evaluate("return 1")
         #expect(!harness.events.events.contains { if case .click = $0 { true } else { false } }, "\(harness.events.events)")
         #expect(harness.host.monitor.liveEntries.filter { $0.category == .navigation }.isEmpty)
         harness.controller.noteUserGesture()
         await harness.tap(CGPoint(x: 100, y: 100))
         let clicked = await Wait.until { harness.events.events.contains(.click(url: "https://landing.example/", trigger: "navigation")) }
         #expect(clicked, "\(harness.events.events)")
+    }
+
+    /// A slow drag (the finger stopped before lifting: no momentum) settles on the nearest snap point: past half a page
+    /// it moves on, short of it it goes back.
+    @Test func aSlowDragSettlesOnTheNearestSnapPoint() async throws {
+        let carousel = """
+        <style>html,body{margin:0}#c{width:300px;height:200px;overflow-x:auto;display:flex;scroll-snap-type:x mandatory}
+        #c div{flex:0 0 300px;height:200px;scroll-snap-align:start}</style>
+        <div id="c"><div></div><div></div><div></div></div>
+        """
+        let harness = await load(carousel)
+        defer { harness.close() }
+        func scrollLeft() async -> Int { (try? await harness.evaluate("return document.getElementById('c').scrollLeft")) as? Int ?? -1 }
+        func drag(by distance: CGFloat) async throws {
+            harness.press(CGPoint(x: 250, y: 100))
+            for step in 1...4 {
+                harness.drag(CGPoint(x: 250 - distance * CGFloat(step) / 4, y: 100))
+                await harness.nextFrame()
+            }
+            // Longer than the 100 ms the finger's speed is measured over: it lifts at rest.
+            try await Task.sleep(for: .milliseconds(250))
+            harness.release(CGPoint(x: 250 - distance, y: 100))
+        }
+        try await drag(by: 170)
+        let forward = await Wait.until { await scrollLeft() == 300 }
+        let afterForward = await scrollLeft()
+        #expect(forward, "\(afterForward)")
+        try await drag(by: 100)
+        let back = await Wait.until { await scrollLeft() == 300 }
+        #expect(back, "100 of 300: it returns to the page it was on")
+    }
+
+    /// A creative that hides its overlay in `touchend`: on a phone the click lands on what is under the finger then —
+    /// here the link beneath (an accidental click-through the simulator should show).
+    @Test func aGhostClickLandsOnWhatIsUnderTheFingerAfterTouchend() async throws {
+        let page = """
+        <style>html,body{margin:0}#l,#o{position:absolute;left:0;top:0;width:320px;height:480px}#o{background:#000}</style>
+        <div id="l"></div><div id="o"></div>
+        <script>
+          window.__log = [];
+          document.getElementById('o').addEventListener('touchend', function () { this.style.display = 'none'; });
+          ['mousedown', 'click'].forEach(function (t) { window.addEventListener(t, function (e) { __log.push(t + ':' + e.target.id + ':' + e.pointerType); }, true); });
+        </script>
+        """
+        let harness = await load(page)
+        defer { harness.close() }
+        await harness.tap(CGPoint(x: 100, y: 100))
+        let log = await harness.log { $0.contains { $0.hasPrefix("click:") } }
+        #expect(log == ["mousedown:l:undefined", "click:l:touch"], "\(log)")
+    }
+
+    /// A finger dragged over an iframe and lifted there: the touch is captured by where it went down, so its frame gets the
+    /// release (a phone's implicit capture), and the next touch starts clean.
+    @Test func aReleaseOverAnIframeEndsTheFinger() async throws {
+        let page = """
+        <style>html,body{margin:0}#a{width:320px;height:200px}iframe{border:0;display:block;width:320px;height:280px}</style>
+        <div id="a"></div><iframe srcdoc="<body style='margin:0;height:280px'></body>"></iframe>
+        <script>
+          window.__log = [];
+          ['touchstart', 'touchend', 'touchcancel'].forEach(function (t) { document.getElementById('a').addEventListener(t, function () { __log.push(t); }); });
+        </script>
+        """
+        let harness = await load(page)
+        defer { harness.close() }
+        await harness.swipe(from: CGPoint(x: 150, y: 100), to: CGPoint(x: 150, y: 350))
+        let log = await harness.log { $0.contains("touchend") || $0.contains("touchcancel") }
+        #expect(log == ["touchstart", "touchend"], "\(log)")
+    }
+
+    /// The click a tap allows is the one WebKit sends for it: a page clearing every timer cannot keep it open for a later
+    /// swipe.
+    @Test func aSwipeAfterATapNeverClicks() async throws {
+        let page = """
+        <style>html,body{margin:0}</style><div id="d" style="width:320px;height:480px"></div>
+        <script>
+          window.__clicks = 0;
+          document.getElementById('d').addEventListener('click', function () { __clicks++; for (var i = 0; i < 10000; i++) { clearTimeout(i); } });
+        </script>
+        """
+        let harness = await load(page)
+        defer { harness.close() }
+        await harness.tap(CGPoint(x: 100, y: 100))
+        let tapped = await Wait.until { (try? await harness.evaluate("return window.__clicks")) as? Int == 1 }
+        #expect(tapped)
+        await harness.swipe(from: CGPoint(x: 250, y: 100), to: CGPoint(x: 100, y: 110))
+        _ = await Wait.until { harness.host.logs.contains { $0.origin == "Touch" && $0.message.hasPrefix("Swipe") } }
+        #expect(try await harness.evaluate("return window.__clicks") as? Int == 1)
+    }
+
+    /// An interstitial whose page is longer than the screen scrolls with the finger; so does a `body` that is its own
+    /// scroll box (the root clips).
+    @Test func aLongPageAndABodyScrollerFollowTheFinger() async throws {
+        let long = await load("<style>html,body{margin:0}</style><div style='height:2000px'></div>", disableScroll: false)
+        await long.swipe(from: CGPoint(x: 150, y: 400), to: CGPoint(x: 150, y: 200))
+        let scrolled = await Wait.until { ((try? await long.evaluate("return Math.round(document.scrollingElement.scrollTop)")) as? Int ?? 0) >= 150 }
+        #expect(scrolled)
+        long.close()
+        let boxed = await load("<style>html{overflow:hidden;height:100%}body{margin:0;overflow:auto;height:100%}</style><div style='height:2000px'></div>",
+                               disableScroll: false)
+        defer { boxed.close() }
+        await boxed.swipe(from: CGPoint(x: 150, y: 400), to: CGPoint(x: 150, y: 200))
+        let body = await Wait.until { ((try? await boxed.evaluate("return Math.round(document.body.scrollTop)")) as? Int ?? 0) >= 150 }
+        #expect(body)
+    }
+
+    /// An inner carousel already at its end hands the drag to the one around it, as a phone chains scrolling.
+    @Test func aScrollerAtItsEndChainsToTheOneAroundIt() async throws {
+        let nested = """
+        <style>html,body{margin:0}.s{overflow-x:auto;white-space:nowrap}</style>
+        <div class="s" id="outer" style="width:320px"><div style="display:inline-block;width:900px;vertical-align:top">
+          <div class="s" id="inner" style="width:300px"><span style="display:inline-block;width:600px;height:100px"></span></div>
+        </div></div>
+        <script>document.getElementById('inner').scrollLeft = 300;</script>
+        """
+        let harness = await load(nested)
+        defer { harness.close() }
+        await harness.swipe(from: CGPoint(x: 250, y: 50), to: CGPoint(x: 150, y: 50))
+        let chained = await Wait.until { ((try? await harness.evaluate("return document.getElementById('outer').scrollLeft")) as? Int ?? 0) >= 80 }
+        #expect(chained)
+        #expect(try await harness.evaluate("return document.getElementById('inner').scrollLeft") as? Int == 300)
+    }
+
+    /// The creative cannot make a tap log as something else by redefining the events' getters: the script read them
+    /// before it ran.
+    @Test func theLogIsReadWithTheOriginalGetters() async throws {
+        let page = """
+        <div style="width:320px;height:480px"></div>
+        <script>
+          Object.defineProperty(MouseEvent.prototype, 'clientX', { get: function () { return 900; } });
+          Object.defineProperty(PointerEvent.prototype, 'pointerType', { get: function () { return 'pen'; } });
+        </script>
+        """
+        let harness = await load(page)
+        defer { harness.close() }
+        await harness.tap(CGPoint(x: 100, y: 100))
+        let logged = await Wait.until { harness.host.logs.contains { $0.origin == "Touch" && $0.message == "Tap at 100, 100" } }
+        #expect(logged, "\(harness.host.logs.map(\.message))")
     }
 
     @Test func theReleaseOfASlowSwipeCountsAsAGesture() async throws {

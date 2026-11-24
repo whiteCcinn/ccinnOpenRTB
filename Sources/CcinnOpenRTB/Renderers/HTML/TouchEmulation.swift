@@ -53,6 +53,23 @@ enum TouchEmulation {
       var stopImmediate = Event.prototype.stopImmediatePropagation;
       var cancel = Event.prototype.preventDefault;
       var elementAt = Document.prototype.elementFromPoint;
+      var shadowElementAt = ShadowRoot.prototype.elementFromPoint;
+      var setCapture = Element.prototype.setPointerCapture;
+      var composedPathOf = Event.prototype.composedPath;
+      function getterOf(prototype, name) {
+        var descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, name);
+        return descriptor && descriptor.get;
+      }
+      var getType = getterOf(Event.prototype, 'type');
+      var getTarget = getterOf(Event.prototype, 'target');
+      var getClientX = getterOf(MouseEvent.prototype, 'clientX'), getClientY = getterOf(MouseEvent.prototype, 'clientY');
+      var getScreenX = getterOf(MouseEvent.prototype, 'screenX'), getScreenY = getterOf(MouseEvent.prototype, 'screenY');
+      var getButton = getterOf(MouseEvent.prototype, 'button'), getButtons = getterOf(MouseEvent.prototype, 'buttons');
+      var getCtrlKey = getterOf(MouseEvent.prototype, 'ctrlKey'), getShiftKey = getterOf(MouseEvent.prototype, 'shiftKey');
+      var getAltKey = getterOf(MouseEvent.prototype, 'altKey'), getMetaKey = getterOf(MouseEvent.prototype, 'metaKey');
+      var getDetail = getterOf(UIEvent.prototype, 'detail');
+      var getPointerId = getterOf(window.PointerEvent && PointerEvent.prototype, 'pointerId');
+      var getPointerType = getterOf(window.PointerEvent && PointerEvent.prototype, 'pointerType');
       var nativeCreateEvent = Document.prototype.createEvent;
       var scrollElementTo = Element.prototype.scrollTo;
       var contains = Node.prototype.contains;
@@ -66,6 +83,7 @@ enum TouchEmulation {
       var MouseEventType = window.MouseEvent;
       var UIEventType = window.UIEvent;
       var WeakMapType = WeakMap;
+      var weakGet = WeakMap.prototype.get, weakSet = WeakMap.prototype.set;
       var later = window.setTimeout.bind(window);
       var clearLater = window.clearTimeout.bind(window);
       var nextFrame = window.requestAnimationFrame.bind(window);
@@ -97,18 +115,18 @@ enum TouchEmulation {
       class TouchList {
         constructor(key, touches) {
           if (key !== LIST_KEY) { throw new TypeError('Illegal constructor'); }
-          internals.set(this, touches);
+          weakSet.call(internals, this, touches);
           for (var i = 0; i < touches.length; i++) { defineProperty(this, i, { value: touches[i], enumerable: true }); }
         }
-        get length() { var touches = internals.get(this); return touches ? touches.length : 0; }
+        get length() { var touches = weakGet.call(internals, this); return touches ? touches.length : 0; }
         item(index) {
-          var touches = internals.get(this) || [];
+          var touches = weakGet.call(internals, this) || [];
           var position = Number(index) >>> 0;
           return position < touches.length ? touches[position] : null;
         }
       }
       defineProperty(TouchList.prototype, Symbol.iterator, {
-        value: function () { return (internals.get(this) || []).slice()[Symbol.iterator](); }, configurable: true, writable: true
+        value: function () { return (weakGet.call(internals, this) || []).slice()[Symbol.iterator](); }, configurable: true, writable: true
       });
       function touchList(items) {
         var touches = [];
@@ -127,12 +145,12 @@ enum TouchEmulation {
         constructor(type, init) {
           if (arguments.length < 1) { throw new TypeError("Failed to construct 'TouchEvent': 1 argument required, but only 0 present."); }
           super(type, init);
-          internals.set(this, touchState(init));
+          weakSet.call(internals, this, touchState(init));
         }
         initTouchEvent(type, bubbles, cancelable, view, detail, screenX, screenY, clientX, clientY, ctrlKey, altKey, shiftKey, metaKey,
                        touches, targetTouches, changedTouches) {
           this.initUIEvent(type, bubbles, cancelable, view, detail);
-          internals.set(this, touchState({ touches: touches, targetTouches: targetTouches, changedTouches: changedTouches,
+          weakSet.call(internals, this, touchState({ touches: touches, targetTouches: targetTouches, changedTouches: changedTouches,
                                            ctrlKey: ctrlKey, altKey: altKey, shiftKey: shiftKey, metaKey: metaKey }));
         }
       }
@@ -140,7 +158,7 @@ enum TouchEmulation {
         defineProperty(TouchEvent.prototype, name, {
           configurable: true, enumerable: true,
           get: function () {
-            var state = internals.get(this);
+            var state = weakGet.call(internals, this);
             if (state) { return state[name]; }
             return name.slice(-3) === 'Key' ? false : touchList(null);
           }
@@ -175,8 +193,8 @@ enum TouchEmulation {
       var TOUCH_TYPES = ['touchstart', 'touchmove', 'touchend', 'touchcancel'];
       var handlers = new WeakMapType();
       function setHandler(target, type, value) {
-        var slots = handlers.get(target);
-        if (!slots) { slots = {}; handlers.set(target, slots); }
+        var slots = weakGet.call(handlers, target);
+        if (!slots) { slots = {}; weakSet.call(handlers, target, slots); }
         if (slots[type]) { removeListener.call(target, type, slots[type].listener); slots[type] = null; }
         if (typeof value !== 'function') { return; }
         var listener = function (event) {
@@ -191,7 +209,7 @@ enum TouchEmulation {
         try {
           defineProperty(owner, 'on' + type, {
             configurable: true, enumerable: true,
-            get: function () { var slots = handlers.get(this); return slots && slots[type] ? slots[type].handler : null; },
+            get: function () { var slots = weakGet.call(handlers, this); return slots && slots[type] ? slots[type].handler : null; },
             set: function (value) { setHandler(this, type, value); }
           });
         } catch (e) {}
@@ -246,8 +264,11 @@ enum TouchEmulation {
       var VELOCITY_WINDOW_MS = 100;
       var nextIdentifier = 0;
       var finger = null;
-      /// A tap just ended and was not cancelled: WebKit's click for it, sent in the same task, may pass.
+      /// A tap just ended and was not cancelled: the mouse click WebKit sends for it in the same task may pass, at the
+      /// element the tap's compatibility events went to (`tapTarget`). Reset by the next press, never by a timer the page
+      /// could clear.
       var tapClickPending = false;
+      var tapTarget = null;
       var lastTapTarget = null;
       var settling = null;
 
@@ -259,8 +280,18 @@ enum TouchEmulation {
       /// The element and its ancestors, innermost first.
       function chain(target) {
         var nodes = [];
-        for (var node = target; node && node.nodeType === 1; node = parentOf(node)) { nodes.push(node); }
+        for (var node = target; node && node.nodeType === 1; node = parentOf(node)) { nodes[nodes.length] = node; }
         return nodes;
+      }
+      /// The element under a point, inside open shadow roots too (`elementFromPoint` stops at their hosts).
+      function hitTest(x, y) {
+        var element = elementAt.call(document, x, y);
+        for (var depth = 0; element && element.shadowRoot && depth < 32; depth++) {
+          var inner = shadowElementAt.call(element.shadowRoot, x, y);
+          if (!inner || inner === element) { break; }
+          element = inner;
+        }
+        return element;
       }
       function modifiers(init, native) {
         init.ctrlKey = !!(native && native.ctrlKey);
@@ -281,11 +312,13 @@ enum TouchEmulation {
       }
       function firePointerEnter(f, native) {
         firePointer('pointerover', f, native, f.target, -1, 0);
-        chain(f.target).reverse().forEach(function (node) { firePointer('pointerenter', f, native, node, -1, 0); });
+        var nodes = chain(f.target);
+        for (var i = nodes.length - 1; i >= 0; i--) { firePointer('pointerenter', f, native, nodes[i], -1, 0); }
       }
       function firePointerExit(f, native, target) {
         firePointer('pointerout', f, native, target, -1, 0);
-        chain(target).forEach(function (node) { firePointer('pointerleave', f, native, node, -1, 0); });
+        var nodes = chain(target);
+        for (var i = 0; i < nodes.length; i++) { firePointer('pointerleave', f, native, nodes[i], -1, 0); }
       }
 
       function fireTouch(type, f, native, cancelable) {
@@ -304,26 +337,30 @@ enum TouchEmulation {
                                relatedTarget: related || null }, native);
         dispatch.call(target, new MouseEventType(type, init));
       }
-      /// A phone's mouse events after a tap, at the element under the finger.
+      /// A phone's mouse events after a tap, at the element under the finger once `touchend` ran (which may have hidden
+      /// what was there: the click lands on what is now under the finger, a phone's "ghost click").
       function compatibilityMouseEvents(f, native) {
-        var target = elementAt.call(document, f.x, f.y) || f.target;
+        var target = hitTest(f.x, f.y) || f.target;
         if (target !== lastTapTarget) {
           var previous = lastTapTarget && lastTapTarget.isConnected ? lastTapTarget : null;
           if (previous) {
             fireMouse('mouseout', previous, f, native, 0, 0, 0, target);
-            chain(previous).forEach(function (node) {
-              if (!contains.call(node, target)) { fireMouse('mouseleave', node, f, native, 0, 0, 0, target); }
-            });
+            var left = chain(previous);
+            for (var i = 0; i < left.length; i++) {
+              if (!contains.call(left[i], target)) { fireMouse('mouseleave', left[i], f, native, 0, 0, 0, target); }
+            }
           }
           fireMouse('mouseover', target, f, native, 0, 0, 0, previous);
-          chain(target).reverse().forEach(function (node) {
-            if (!previous || !contains.call(node, previous)) { fireMouse('mouseenter', node, f, native, 0, 0, 0, previous); }
-          });
+          var entered = chain(target);
+          for (var j = entered.length - 1; j >= 0; j--) {
+            if (!previous || !contains.call(entered[j], previous)) { fireMouse('mouseenter', entered[j], f, native, 0, 0, 0, previous); }
+          }
           lastTapTarget = target;
         }
         fireMouse('mousemove', target, f, native, 0, 0, 0, null);
         fireMouse('mousedown', target, f, native, 0, 1, 1, null);
         fireMouse('mouseup', target, f, native, 0, 0, 1, null);
+        return target;
       }
 
       // MARK: Panning
@@ -332,37 +369,62 @@ enum TouchEmulation {
         if (typeof touchAction !== 'string' || touchAction === '' || touchAction === 'auto' || touchAction === 'manipulation') { return true; }
         var parts = touchAction.split(/\s+/);
         var wanted = axis === 'x' ? ['pan-x', 'pan-left', 'pan-right'] : ['pan-y', 'pan-up', 'pan-down'];
-        return parts.some(function (part) { return wanted.indexOf(part) >= 0; });
+        for (var i = 0; i < parts.length; i++) { if (wanted.indexOf(parts[i]) >= 0) { return true; } }
+        return false;
       }
       function extent(element, axis) {
         return axis === 'x' ? element.scrollWidth - element.clientWidth : element.scrollHeight - element.clientHeight;
       }
+      function overflowOf(element, axis) {
+        var style = computed(element);
+        return axis === 'x' ? style.overflowX : style.overflowY;
+      }
+      /// Whether `body`'s overflow is the viewport's (CSS: when the root's is `visible`), not its own scroll box.
+      function bodyPropagates(axis) {
+        return overflowOf(document.documentElement, axis) === 'visible';
+      }
       function viewportScrolls(axis) {
-        var key = axis === 'x' ? 'overflowX' : 'overflowY';
-        var value = computed(document.documentElement)[key];
-        if (value === 'visible' && document.body) { value = computed(document.body)[key]; }
+        var value = overflowOf(document.documentElement, axis);
+        if (value === 'visible' && document.body) { value = overflowOf(document.body, axis); }
         return value !== 'hidden' && value !== 'clip';
       }
       function panOf(element, axis) {
         var rtl = axis === 'x' && computed(element).direction === 'rtl';
         return { element: element, axis: axis, rtl: rtl, origin: axis === 'x' ? element.scrollLeft : element.scrollTop, snap: null };
       }
-      /// The nearest element the finger scrolls along `axis`, or null (touch-action forbids it, nothing scrolls).
-      function scrollerFor(target, axis) {
+      function position(pan) { return pan.axis === 'x' ? pan.element.scrollLeft : pan.element.scrollTop; }
+      function limits(pan) {
+        var limit = max(0, extent(pan.element, pan.axis));
+        return pan.rtl ? [-limit, 0] : [0, limit];
+      }
+      /// Whether `pan` can still move the content the way the finger pushes it (`toward`: +1 to larger offsets).
+      function canMove(pan, toward) {
+        var range = limits(pan);
+        var now = position(pan);
+        return toward > 0 ? now < range[1] - 0.5 : now > range[0] + 0.5;
+      }
+      /// The nearest element the finger scrolls along `axis` that can still move that way (scroll chaining), or null:
+      /// touch-action forbids it, or nothing scrolls.
+      function scrollerFor(target, axis, toward) {
         var root = document.scrollingElement || document.documentElement;
         for (var node = target; node; node = parentOf(node)) {
-          var style = computed(node);
-          if (!allows(style.touchAction, axis)) { return null; }
-          if (node === root || node === document.body || node === document.documentElement) { continue; }
-          var overflow = axis === 'x' ? style.overflowX : style.overflowY;
-          if ((overflow === 'auto' || overflow === 'scroll') && extent(node, axis) > 1) { return panOf(node, axis); }
+          if (!allows(computed(node).touchAction, axis)) { return null; }
+          if (node === root) { continue; }
+          if (node === document.documentElement) { continue; }
+          if (node === document.body && bodyPropagates(axis)) { continue; }
+          var overflow = overflowOf(node, axis);
+          if ((overflow === 'auto' || overflow === 'scroll') && extent(node, axis) > 1) {
+            var pan = panOf(node, axis);
+            if (canMove(pan, toward)) { return pan; }
+          }
         }
-        return root && viewportScrolls(axis) && extent(root, axis) > 1 ? panOf(root, axis) : null;
+        if (!root || !viewportScrolls(axis) || extent(root, axis) <= 1) { return null; }
+        var page = panOf(root, axis);
+        return canMove(page, toward) ? page : null;
       }
-      function position(pan) { return pan.axis === 'x' ? pan.element.scrollLeft : pan.element.scrollTop; }
       function place(pan, value) {
-        var limit = max(0, extent(pan.element, pan.axis));
-        value = pan.rtl ? min(0, max(-limit, value)) : min(limit, max(0, value));
+        var range = limits(pan);
+        value = min(range[1], max(range[0], value));
         scrollElementTo.call(pan.element, pan.axis === 'x' ? { left: value, behavior: 'instant' } : { top: value, behavior: 'instant' });
       }
       /// Scroll snapping would pull the content back at every move: it is off while the finger pans, as a phone does it.
@@ -378,12 +440,16 @@ enum TouchEmulation {
         if (pan.snap[0]) { setProperty.call(style, 'scroll-snap-type', pan.snap[0], pan.snap[1]); } else { removeProperty.call(style, 'scroll-snap-type'); }
         pan.snap = null;
       }
+      /// The finger moved past the slop: the nearest scroller that can move takes the gesture — pointer events end with
+      /// `pointercancel`, touch events go on, no longer cancelable. Nothing to scroll (an ad's web view with scrolling
+      /// disabled): pointer events go on.
       function startPan(f, native) {
-        var axis = abs(f.x - f.startX) >= abs(f.y - f.startY) ? 'x' : 'y';
-        f.pan = scrollerFor(f.target, axis) || false;
+        var dx = f.x - f.startX, dy = f.y - f.startY;
+        var axis = abs(dx) >= abs(dy) ? 'x' : 'y';
+        var delta = axis === 'x' ? dx : dy;
+        f.pan = scrollerFor(f.target, axis, delta < 0 ? 1 : -1) || false;
         if (!f.pan) { return; }
         suspendSnap(f.pan);
-        // The browser takes the gesture over: pointer events end; touch events go on, no longer cancelable.
         var target = f.capture || f.target;
         firePointer('pointercancel', f, native, target, -1, 0);
         firePointerExit(f, native, target);
@@ -456,26 +522,48 @@ enum TouchEmulation {
 
       // MARK: Gestures
 
-      /// The element under the finger, inside open shadow roots too (at the window the event's target is their host).
-      function innermostTarget(native) {
-        var path = typeof native.composedPath === 'function' ? native.composedPath() : null;
+      /// A native event's fields, read with the getters as they were before the creative ran (it may redefine them).
+      function read(event) {
+        var path = null;
+        try { path = composedPathOf.call(event); } catch (e) {}
         var first = path && path[0];
-        return first && first.nodeType === 1 ? first : native.target;
+        var target = getTarget.call(event);
+        return {
+          type: getType.call(event), target: first && first.nodeType === 1 ? first : target, clientX: field(event, getClientX),
+          clientY: field(event, getClientY), screenX: field(event, getScreenX), screenY: field(event, getScreenY),
+          button: field(event, getButton), buttons: field(event, getButtons), detail: field(event, getDetail),
+          pointerId: field(event, getPointerId), pointerType: field(event, getPointerType), ctrlKey: field(event, getCtrlKey),
+          shiftKey: field(event, getShiftKey), altKey: field(event, getAltKey), metaKey: field(event, getMetaKey)
+        };
+      }
+      function field(event, getter) {
+        if (!getter) { return undefined; }
+        try { return getter.call(event); } catch (e) { return undefined; }
       }
 
       function begin(native) {
         if (finger) { end(native, 'cancel'); }
         stopSettling();
+        tapClickPending = false;
+        tapTarget = null;
         var now = clockNow();
         var f = finger = {
-          id: ++nextIdentifier, pointerId: native.pointerId, target: innermostTarget(native), startX: native.clientX, startY: native.clientY,
+          id: ++nextIdentifier, pointerId: native.pointerId, target: native.target, startX: native.clientX, startY: native.clientY,
           x: native.clientX, y: native.clientY, screenX: native.screenX, screenY: native.screenY, startTime: now,
           samples: [[now, native.clientX, native.clientY]], moved: false, cancelled: false, quiet: false, pan: null, scrolled: false,
-          pointerGone: false, capture: null
+          pointerGone: false, capture: null,
+          // A real mouse reports its held button (WebKit reads the Mac's state; synthetic events say 0): a move without it
+          // means the release went where the page never saw it.
+          buttonsKnown: (native.buttons & 1) === 1
         };
+        // A touch is captured by the element it went down on before `pointerdown` (the page may capture elsewhere in its
+        // handler): its moves and release come back to this frame even over an iframe.
+        try { setCapture.call(f.target, f.pointerId); } catch (e) {}
         firePointerEnter(f, native);
         if (!firePointer('pointerdown', f, native, f.target, 0, 1)) { f.quiet = true; }
         if (!fireTouch('touchstart', f, native, true)) { f.cancelled = true; }
+        // A `<select>` opens its menu on the press and takes the release: it is a tap at once.
+        if (finger === f && f.target && /^(select|option|optgroup)$/i.test(f.target.nodeName || '')) { end(native, 'release'); }
       }
 
       function move(native) {
@@ -486,7 +574,7 @@ enum TouchEmulation {
         f.y = native.clientY;
         f.screenX = native.screenX;
         f.screenY = native.screenY;
-        f.samples.push([now, f.x, f.y]);
+        f.samples[f.samples.length] = [now, f.x, f.y];
         while (f.samples.length > 2 && now - f.samples[0][0] > VELOCITY_WINDOW_MS) { f.samples.shift(); }
         if (!f.moved && hypot(f.x - f.startX, f.y - f.startY) >= SLOP) { f.moved = true; }
         if (!f.pointerGone) { firePointer('pointermove', f, native, f.capture || f.target, -1, 1); }
@@ -512,20 +600,40 @@ enum TouchEmulation {
         if (tap && !allowed) { f.cancelled = true; }
         if (f.pan) { settle(f.pan, released ? velocity(f, f.pan.axis) : 0); }
         if (tap && !f.cancelled) {
-          if (!f.quiet) { compatibilityMouseEvents(f, native); }
-          // WebKit sends the click (and a dblclick) in the same task as the release.
+          tapTarget = f.quiet ? (hitTest(f.x, f.y) || f.target) : compatibilityMouseEvents(f, native);
           tapClickPending = true;
-          later(function () { tapClickPending = false; }, 0);
         }
         post({ channel: 'touch', kind: tap ? 'tap' : (released ? 'swipe' : 'cancel'), x: f.startX, y: f.startY, dx: f.x - f.startX,
                dy: f.y - f.startY, duration: max(0, clockNow() - f.startTime), cancelled: f.cancelled, scrolled: f.scrolled });
       }
 
+      /// The tap's click: WebKit's own (trusted: links, media, user activation) when it goes where the phone's would; when
+      /// `touchend` moved what is under the finger, a click at the new element instead, as a phone sends it.
+      function clicked(event, native) {
+        var fromMouse = native.pointerType === 'mouse' || native.detail > 0;
+        if (!fromMouse) { return patchPointerType(event, native); }
+        if (!tapClickPending) {
+          stopImmediate.call(event);
+          cancel.call(event);
+          return;
+        }
+        // Only the tap's first click is placed: what WebKit sends after it (a label's forwarded click, a dblclick) passes.
+        var placed = native.type === 'click' ? tapTarget : null;
+        if (native.type === 'click') { tapTarget = null; }
+        if (!placed || placed === native.target || !placed.isConnected) { return patchPointerType(event, native); }
+        stopImmediate.call(event);
+        cancel.call(event);
+        var init = modifiers({ bubbles: true, cancelable: true, composed: true, view: window, clientX: native.clientX, clientY: native.clientY,
+                               screenX: native.screenX, screenY: native.screenY, button: 0, buttons: 0, detail: native.detail || 1,
+                               pointerId: native.pointerId, pointerType: 'touch', isPrimary: true }, native);
+        dispatch.call(placed, new PointerEventType('click', init));
+      }
+
       function editable(target) {
         return !!target && (target.isContentEditable || /^(input|textarea|select)$/i.test(target.nodeName || ''));
       }
-      function patchPointerType(event) {
-        if (event.pointerType !== 'mouse') { return; }
+      function patchPointerType(event, native) {
+        if (native.pointerType !== 'mouse') { return; }
         try { defineProperty(event, 'pointerType', { value: 'touch', configurable: true }); } catch (e) {}
       }
 
@@ -533,52 +641,48 @@ enum TouchEmulation {
                      mouseout: true, mouseleave: true, mousemove: true, mousedown: true, mouseup: true, auxclick: true };
       function onNativeEvent(event) {
         if (!event.isTrusted) { return; }
-        var type = event.type;
+        var native = read(event);
+        var type = native.type;
         if (type === 'pointerdown' || type === 'pointermove' || type === 'pointerup' || type === 'pointercancel') {
           stopImmediate.call(event);
-          if (event.pointerType !== 'mouse') { return; }
+          if (native.pointerType !== 'mouse') { return; }
           if (type === 'pointerdown') {
-            if (event.button === 0) { begin(event); }
+            if (native.button === 0) { begin(native); }
             return;
           }
-          if (!finger || event.pointerId !== finger.pointerId) { return; }
-          if (type === 'pointercancel') { return end(event, 'cancel'); }
+          if (!finger || native.pointerId !== finger.pointerId) { return; }
+          if (type === 'pointercancel') { return end(native, 'cancel'); }
           if (type === 'pointerup') {
-            if (event.button !== 0) { return; }
-            move(event);
-            return end(event, 'release');
+            if (native.button !== 0) { return; }
+            move(native);
+            return end(native, 'release');
           }
-          // Not `buttons`: WebKit reads it from the Mac's mouse state, not from the event. The release always comes (AppKit
-          // sends it to the view that got the press); a new press or the window losing focus ends a finger too.
-          return move(event);
+          if (finger.buttonsKnown && !(native.buttons & 1)) { return end(native, 'cancel'); }
+          return move(native);
         }
         if (HIDDEN[type]) { return stopImmediate.call(event); }
-        if (type === 'click' || type === 'dblclick') {
-          // A mouse click only follows a tap that was not cancelled; a keyboard's (Return on a focused link) passes.
-          var fromMouse = event.pointerType === 'mouse' || event.detail > 0;
-          if (fromMouse && !tapClickPending) {
-            stopImmediate.call(event);
-            cancel.call(event);
-            return;
-          }
-          return patchPointerType(event);
-        }
+        if (type === 'click' || type === 'dblclick') { return clicked(event, native); }
         if (type === 'gotpointercapture' || type === 'lostpointercapture') {
-          if (finger && event.pointerId === finger.pointerId) { finger.capture = type === 'gotpointercapture' ? event.target : null; }
-          return patchPointerType(event);
+          if (finger && native.pointerId === finger.pointerId) { finger.capture = type === 'gotpointercapture' ? native.target : null; }
+          return patchPointerType(event, native);
         }
-        if (type === 'dragstart' || (type === 'selectstart' && finger && !editable(event.target))) {
+        // A context menu (control-click) takes the release: the finger ends; the menu itself is left alone.
+        if (type === 'contextmenu') {
+          if (finger) { end(native, 'cancel'); }
+          return;
+        }
+        if (type === 'dragstart' || (type === 'selectstart' && finger && !editable(native.target))) {
           stopImmediate.call(event);
           cancel.call(event);
         }
       }
       function onBlur(event) {
-        if (event.isTrusted && event.target === window && finger) { end(null, 'cancel'); }
+        if (event.isTrusted && getTarget.call(event) === window && finger) { end(null, 'cancel'); }
       }
 
       var NATIVE_TYPES = ['pointerover', 'pointerenter', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerout',
                           'pointerleave', 'gotpointercapture', 'lostpointercapture', 'mouseover', 'mouseenter', 'mousemove', 'mousedown',
-                          'mouseup', 'mouseout', 'mouseleave', 'click', 'dblclick', 'auxclick', 'dragstart', 'selectstart'];
+                          'mouseup', 'mouseout', 'mouseleave', 'click', 'dblclick', 'auxclick', 'contextmenu', 'dragstart', 'selectstart'];
       /// Registers the listeners (again after `document.open()` erased them; the same functions are never added twice).
       function listen() {
         for (var i = 0; i < NATIVE_TYPES.length; i++) { addListener.call(window, NATIVE_TYPES[i], onNativeEvent, true); }
