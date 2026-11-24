@@ -126,6 +126,24 @@ struct DeepLinkSessionTests {
         }
     }
 
+    /// iOS's "◀ App" appears after a jump to another app (a deep link's app, Phone, the App Store app for `itms-apps:`),
+    /// not over the in-app browser or the App Store sheet an SDK shows for an `https` link; Android has its Back.
+    @Test func theBreadcrumbFollowsWhetherAnotherAppOpened() {
+        func foreground(_ screen: ClickThroughScreen, _ platform: DevicePlatform) -> DeviceForeground {
+            DeviceForeground(screen: screen, platform: platform, usedFallback: false, openedOnMac: false)
+        }
+        let app = ClickThroughScreen.app(ThirdPartyApp(name: "A", identifier: "a:", link: "a://", route: "", parameters: []))
+        let web = ClickThroughScreen.browser(WebPage(url: "https://a.example", host: "a.example", parameters: []))
+        let sheet = ClickThroughScreen.store(StorePage(store: .appStore, appID: "id1", url: "https://apps.apple.com/app/id1", parameters: []))
+        let storeApp = ClickThroughScreen.store(StorePage(store: .appStore, appID: "id1", url: "itms-apps://apps.apple.com/app/id1", parameters: []))
+        let play = ClickThroughScreen.store(StorePage(store: .googlePlay, appID: "p", url: "https://play.google.com/store/apps/details?id=p", parameters: []))
+        #expect(foreground(app, .apple).showsBackBreadcrumb && foreground(.system(.phone, target: "1"), .apple).showsBackBreadcrumb)
+        #expect(foreground(storeApp, .apple).showsBackBreadcrumb)
+        #expect(!foreground(web, .apple).showsBackBreadcrumb && !foreground(sheet, .apple).showsBackBreadcrumb)
+        #expect(foreground(app, .android).jumpedToAnotherApp && !foreground(app, .android).showsBackBreadcrumb)
+        #expect(foreground(play, .android).jumpedToAnotherApp && !foreground(web, .android).jumpedToAnotherApp)
+    }
+
     @Test func aRendererNavigationJumpsToo() async throws {
         let harness = await rendered(click: "https://adv.example/")
         harness.session.navigate(to: "tel:+60123456789", trigger: "mraid.open", source: "creative")
