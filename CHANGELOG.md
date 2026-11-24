@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-24
+
 ### Added
 
 - **Format VAST, Native JSON and banner HTML.** **Format** (⇧⌘F) in the Response, Request and Client editors now pretty-prints VAST / XML and HTML as well as JSON. It used to be JSON only, and disabled for anything else. Only whitespace changes: VAST gets one element per line with text and CDATA kept as typed; HTML gets line breaks only around block elements, `<br>` and the head, never inside an inline run or next to an element that is not rendered (`hidden`, `template`, `display: none`), so the creative renders as before; `script` (as a browser reads it, legacy `<!-- … -->` scripts included), `style`, `pre` and `white-space: pre` content are kept as typed. Indentation stops deepening after 32 levels, so the output stays proportional to the input. A mismatched XML tag is named with its line.
@@ -115,7 +117,8 @@ First public release.
 - **Check for Updates…** in the app menu, a quiet daily check that can be turned off, **Skip This Version**, and **Download & Open**, which verifies the disk image against the release's `SHA256SUMS.txt`. Project links in the Help menu and the About window.
 - Launch arguments for checks: `--sample`, `--device`, `--placement`, `--mode offline|simulated|real`, `--landscape`, `--folded`, `--spanned`, `--visibility`, `--zoom`, `--no-render`, `--snapshot <file.png>` (the current video frame and any sheet drawn in; `--snapshot-delay`, `--quit-after-snapshot`), `--export-har <file.har>`, `--open-network`, `--demo-network`, `--snapshot-network <file.png>` (with `--network-layout`, `--network-select`) and `--no-update-check`.
 
-[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/whiteCcinn/ccinnopenrtb/compare/v1.3.0...v1.4.0
