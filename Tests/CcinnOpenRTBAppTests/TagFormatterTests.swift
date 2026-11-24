@@ -136,8 +136,9 @@ struct HTMLTagFormatterTests {
         </html>
         """
         #expect(format(input) == expected)
-        // Without `<body>` either, content in an open head is still inline.
-        #expect(format("<head><title>t</title><b>a</b><i>b</i>") == "<head>\n  <title>t</title>\n  <b>a</b><i>b</i>")
+        // Without `<body>` either, rendered content closes the head and is inline body content.
+        #expect(format("<head><title>t</title><b>a</b><i>b</i>") == "<head>\n  <title>t</title>\n<b>a</b><i>b</i>")
+        #expect(format("<head><b>a</b><script></script><b>b</b>") == "<head>\n<b>a</b><script></script><b>b</b>")
     }
 
     @Test func preformattedTextIsKept() {
@@ -251,5 +252,64 @@ struct TagFormatterStressTests {
             _ = MarkupFormatter.format(text)
             _ = JSONEscapedText.unescaped(text)
         }
+    }
+}
+
+@Suite("Tag formatter – HTML review cases")
+struct HTMLTagFormatterReviewTests {
+    private func format(_ text: String) -> String? {
+        try? TagFormatter.prettyPrinted(text, dialect: .html).get()
+    }
+
+    @Test func aLegacyScriptWritingAScriptIsOneElement() {
+        let script = "<script type=\"text/javascript\"><!--\ndocument.write('<script src=\"https://a.example/x.js\"></script>');\n//--></script>"
+        #expect(format(script) == script)
+        #expect(format("<div>" + script + "</div>") == "<div>\n  " + script + "\n</div>")
+    }
+
+    @Test func elementsThatAreNotRenderedStayInline() {
+        for unchanged in [
+            "<span>a</span><div hidden>x</div><span>b</span>",
+            "<span>a</span><dialog>x</dialog><span>b</span>",
+            "<span>a</span><div style=\"color:red; DISPLAY: none\">x</div><span>b</span>",
+            "<span>a</span><td>b</td><span>c</span>",
+            "<span>a</span><template><div>x</div></template><span>b</span>".replacingOccurrences(of: "<div>x</div>", with: "<p>x</p>"),
+        ] {
+            let formatted = format(unchanged) ?? ""
+            // Nothing between the rendered runs: whitespace may only appear inside the non-rendered element.
+            #expect(formatted.hasPrefix("<span>a</span><"), "\(unchanged)")
+            #expect(formatted.hasSuffix("><span>b</span>") || formatted.hasSuffix("><span>c</span>"), "\(unchanged)")
+        }
+        // An open dialog is a block.
+        #expect(format("<span>a</span><dialog open>x</dialog>") == "<span>a</span>\n<dialog open>\n  x\n</dialog>")
+        // A class named "hidden" is not the attribute.
+        #expect(format("<span>a</span><div class=\"hidden\">x</div>") == "<span>a</span>\n<div class=\"hidden\">\n  x\n</div>")
+    }
+
+    @Test func bogusCommentsAreNotDeclarations() {
+        #expect(format("<p><span>a</span><![if !IE]><span>b</span><![endif]></p>") == "<p>\n  <span>a</span><![if !IE]><span>b</span><![endif]>\n</p>")
+        #expect(format("<p>a<?php echo 1 ?>b</p>") == "<p>\n  a<?php echo 1 ?>b\n</p>")
+        // Outside SVG, `<![CDATA[` is a bogus comment that ends at the first `>`.
+        #expect(format("<div><![CDATA[x>y]]>z</div>")?.contains("y]]>z") == true)
+        #expect(format("<!doctype html><p>a</p>") == "<!doctype html>\n<p>\n  a\n</p>")
+    }
+
+    @Test func aPreformattingStyleKeepsTheContent() {
+        let input = "<div style=\"white-space: pre-wrap\"><b>a</b><div>b</div>  </div>"
+        #expect(format(input) == input)
+    }
+
+    @Test func attributeValuesAsBrowsersReadThem() {
+        #expect(format("<a href=/c?u=' title=x>link</a>") == "<a href=/c?u=' title=x>link</a>")
+        // `/>` does not close a script in HTML: its text runs to `</script>`.
+        #expect(format("<script src=x/>var a = '<b>';</script><span>a</span>") == "<script src=x/>var a = '<b>';</script>\n<span>a</span>")
+    }
+
+    @Test func indentationIsCapped() throws {
+        let html = try #require(format(String(repeating: "<div>", count: 4_000)))
+        #expect(html.utf8.count < 4_000 * (6 + 2 * TagFormatter.maxIndentDepth))
+        let xml = try #require(try? TagFormatter.prettyPrinted(String(repeating: "<a>", count: 4_000) + String(repeating: "</a>", count: 4_000),
+                                                               dialect: .xml).get())
+        #expect(xml.utf8.count < 8_000 * (6 + 2 * TagFormatter.maxIndentDepth))
     }
 }

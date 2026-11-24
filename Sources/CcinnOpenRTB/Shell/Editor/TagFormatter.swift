@@ -1,4 +1,5 @@
 import Foundation
+import RTBKit
 
 /// Pretty-prints XML (VAST) and HTML by changing only the whitespace between tags (pure, linear, byte-level). Tags and
 /// their attributes, character data, CDATA, comments and raw text (`script`, `style` …) are copied as typed.
@@ -26,6 +27,9 @@ enum TagFormatter {
         /// XML: still open at the end (the line of its start tag).
         case unclosed(String, line: Int)
     }
+
+    /// Deeper elements are indented as this level, so the output stays linear in the input however deep it nests.
+    static let maxIndentDepth = 32
 
     static func prettyPrinted(_ text: String, dialect: Dialect, indentWidth: Int = 2) -> Result<String, Failure> {
         let bytes = Array(text.utf8)
@@ -84,7 +88,7 @@ enum TagFormatter {
                 if hasPrefix("<!--", at: index) {
                     guard let close = find("-->", from: index + 4) else { return .failure(.unterminated(line: line(at: index))) }
                     token = Token(kind: .comment, range: index..<(close + 3))
-                } else if hasPrefix("<![CDATA[", at: index) {
+                } else if dialect == .xml, hasPrefix("<![CDATA[", at: index) {
                     guard let close = find("]]>", from: index + 9) else { return .failure(.unterminated(line: line(at: index))) }
                     token = Token(kind: .cdata, range: index..<(close + 3))
                 } else if next == .bang || next == .question {
@@ -117,24 +121,29 @@ enum TagFormatter {
             var index = start + 1
             let count = bytes.count
             while index < count, bytes[index] != .greaterThan {
-                if bytes[index] == .equals {
-                    var value = index + 1
-                    while value < count, isSpace(bytes[value]) { value += 1 }
-                    if value < count, bytes[value] == .quote || bytes[value] == .apostrophe {
-                        guard let close = bytes[(value + 1)...].firstIndex(of: bytes[value]) else {
-                            return .failure(.unterminated(line: line(at: start)))
-                        }
-                        index = close + 1
-                        continue
-                    }
+                guard bytes[index] == .equals else {
+                    index += 1
+                    continue
                 }
-                index += 1
+                var value = index + 1
+                while value < count, isSpace(bytes[value]) { value += 1 }
+                if value < count, bytes[value] == .quote || bytes[value] == .apostrophe {
+                    guard let close = bytes[(value + 1)...].firstIndex(of: bytes[value]) else {
+                        return .failure(.unterminated(line: line(at: start)))
+                    }
+                    index = close + 1
+                } else {
+                    // Unquoted: up to whitespace or `>`; a quote inside it is just a character.
+                    while value < count, !isSpace(bytes[value]), bytes[value] != .greaterThan { value += 1 }
+                    index = value
+                }
             }
             guard index < count else { return .failure(.unterminated(line: line(at: start))) }
             let name = name(at: start + 1)
             var token = Token(kind: .startTag, range: start..<(index + 1), name: name, selfClosing: bytes[index - 1] == .slash)
-            if dialect == .html, !token.selfClosing, HTML.rawText.contains(name) {
-                guard let close = find("</" + name, from: index + 1, caseInsensitive: true),
+            // In HTML `/>` does not close a raw-text element: its text runs to the end tag, read as a browser reads it.
+            if dialect == .html, HTML.rawText.contains(name) {
+                guard let close = HTMLRawText.endTagStart(of: name, in: bytes[...], from: index + 1),
                       let end = find(">", from: close + 2) else { return .failure(.unterminated(line: line(at: start))) }
                 token.kind = .rawElement
                 token.range = start..<(end + 1)
@@ -206,7 +215,7 @@ enum TagFormatter {
         private mutating func newline(depth: Int) {
             guard !output.isEmpty else { return }
             output.append(.newline)
-            output.append(contentsOf: repeatElement(UInt8.space, count: depth * indentWidth))
+            output.append(contentsOf: repeatElement(UInt8.space, count: min(depth, TagFormatter.maxIndentDepth) * indentWidth))
         }
 
         private mutating func emit(_ range: Range<Int>) {
@@ -281,16 +290,6 @@ enum TagFormatter {
 
         // MARK: HTML
 
-        /// What a token is to the line it is on.
-        private enum Role {
-            /// Starts or ends a block, or breaks the line (`br`): whitespace next to it is not rendered.
-            case blockBoundary
-            /// Rendered on the line: text, an inline element, an image.
-            case content
-            /// Not rendered (a comment, `script`, `meta` …): whitespace next to it is rendered when the line has content.
-            case hidden
-        }
-
         mutating func printHTML(_ tokens: [Token]) {
             var stack = OpenElements()
             var pending: [UInt8] = []
@@ -312,6 +311,8 @@ enum TagFormatter {
                         pending.append(contentsOf: bytes[token.range])
                         continue
                     }
+                    // Text in an unclosed head (`</head>` is optional) starts the body.
+                    if let head = stack.lastIndex(of: "head") { stack.close(from: head) }
                     pending.append(contentsOf: bytes[token.range.lowerBound..<core.lowerBound])
                     place(role: .content, depth: stack.count, previous: previous, atLineStart: atLineStart, preformatted: false,
                           inHead: false, pending: &pending)
@@ -324,30 +325,27 @@ enum TagFormatter {
 
                 let preformatted = stack.isPreformatted
                 let role: Role
-                var depth = stack.count
                 switch token.kind {
                 case .startTag, .rawElement:
-                    if let implied = TagFormatter.impliedEnd(by: token.name, in: stack.elements) { stack.close(from: implied) }
-                    depth = stack.count
-                    let isBlock = HTML.block.contains(token.name) && !HTML.isStyledInline(bytes[token.range])
-                    role = isBlock || token.name == "br" ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
-                    if token.kind == .startTag, !token.selfClosing, !HTML.void.contains(token.name) {
-                        stack.open(OpenElement(name: token.name, isBlock: isBlock))
-                    }
+                    role = open(token, in: &stack, atLineStart: &atLineStart)
                 case .endTag:
                     if let open = stack.lastIndex(of: token.name) {
-                        role = stack.elements[open].isBlock ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
-                        stack.close(from: open)
+                        let element = stack.elements[open]
+                        role = element.lineStartBefore != nil ? .hidden
+                            : element.isBlock ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
+                        if let restored = stack.close(from: open) { atLineStart = restored }
                     } else {
                         role = .content // a stray end tag: kept where it is
                     }
-                    depth = stack.count
                 case .declaration:
-                    role = .blockBoundary
+                    // `<!DOCTYPE>`; anything else (`<![if]>`, `<?php ?>`) is a bogus comment in HTML.
+                    role = HTML.isDoctype(bytes[token.range]) ? .blockBoundary : .hidden
                 case .comment, .cdata, .text:
                     role = .hidden
                 }
-                // Head elements are not rendered; rendered content in an unclosed head (`</head>` is optional) is body content.
+                // A start tag that opened an element is indented at its parent's depth.
+                let depth = stack.elements.last?.tokenStart == token.range.lowerBound ? stack.count - 1 : stack.count
+                // Head elements are not rendered: in the head, whitespace between them is not either.
                 let inHead = (stack.isOpen("head") || token.name == "head") && role != .content
                 place(role: role, depth: depth, previous: previous, atLineStart: atLineStart, preformatted: preformatted, inHead: inHead,
                       pending: &pending)
@@ -359,6 +357,31 @@ enum TagFormatter {
                 }
                 previous = role
             }
+        }
+
+        /// A start tag: the end tags it implies, what it is to the line, and the element it opens.
+        private func open(_ token: Token, in stack: inout OpenElements, atLineStart: inout Bool) -> Role {
+            let name = token.name
+            // Rendered content in an unclosed head starts the body.
+            if !HTML.headContent.contains(name), let head = stack.lastIndex(of: "head") { stack.close(from: head) }
+            if let implied = TagFormatter.impliedEnd(by: name, in: stack.elements), let restored = stack.close(from: implied) {
+                atLineStart = restored
+            }
+            // A table part outside a table is ignored by the parser.
+            if HTML.tablePart.contains(name), !stack.isOpen("table") { return .hidden }
+            let attributes = HTML.attributes(bytes[token.range])
+            let style = HTML.style(attributes["style"] ?? nil)
+            let hidesContent = attributes["hidden"] != nil || name == "template" || (name == "dialog" && attributes["open"] == nil)
+                || style.display == "none" || (name == "input" && (attributes["type"] ?? nil)?.lowercased() == "hidden")
+            var isBlock = HTML.block.contains(name) && !hidesContent
+            if let display = style.display, display.hasPrefix("inline") || display == "contents" { isBlock = false }
+            let role: Role = hidesContent || HTML.hidden.contains(name) ? .hidden : isBlock ? .blockBoundary : .content
+            if token.kind == .startTag, !token.selfClosing, !HTML.void.contains(name) {
+                let preformatting = name == "pre" || name == "listing" || style.whiteSpace.map { $0.hasPrefix("pre") || $0 == "break-spaces" } == true
+                stack.open(OpenElement(name: name, isBlock: isBlock, isPreformatted: preformatting,
+                                       lineStartBefore: hidesContent ? atLineStart : nil, tokenStart: token.range.lowerBound))
+            }
+            return role
         }
 
         /// A line break before the token where whitespace is not rendered; otherwise the whitespace that was there.
@@ -398,18 +421,91 @@ enum TagFormatter {
             "ol", "p", "pre", "search", "section", "summary", "table", "ul",
         ]
 
-        /// A `style` attribute with `display: inline…`. Deliberately loose (any tag mentioning both): a false match only
-        /// keeps a line together.
-        static func isStyledInline(_ tag: ArraySlice<UInt8>) -> Bool {
-            let lowered = String(decoding: tag, as: UTF8.self).lowercased()
-            return lowered.contains("display") && lowered.contains("inline")
+        /// What may be in a head; anything else starts the body.
+        static let headContent: Set<String> = ["base", "head", "html", "link", "meta", "noscript", "script", "style", "template", "title"]
+        /// Ignored by the parser outside a table.
+        static let tablePart: Set<String> = ["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"]
+
+        static func isDoctype(_ token: ArraySlice<UInt8>) -> Bool {
+            String(decoding: token.prefix(9), as: UTF8.self).lowercased() == "<!doctype"
+        }
+
+        /// A start tag's attributes as a browser reads them: lower-cased names, the first of a name kept, values as typed
+        /// (`nil` for a bare attribute such as `hidden`).
+        static func attributes(_ tag: ArraySlice<UInt8>) -> [String: String?] {
+            var result: [String: String?] = [:]
+            let end = tag.endIndex
+            var index = tag.startIndex + 1
+            while index < end, !isSpace(tag[index]), tag[index] != .slash, tag[index] != .greaterThan { index += 1 }
+            while index < end {
+                while index < end, isSpace(tag[index]) || tag[index] == .slash { index += 1 }
+                guard index < end, tag[index] != .greaterThan else { break }
+                let nameStart = index
+                index += 1 // a name has at least one character, even `=`
+                while index < end, !isSpace(tag[index]), tag[index] != .equals, tag[index] != .greaterThan, tag[index] != .slash { index += 1 }
+                let name = String(decoding: tag[nameStart..<index], as: UTF8.self).lowercased()
+                var cursor = index
+                while cursor < end, isSpace(tag[cursor]) { cursor += 1 }
+                var value: String?
+                if cursor < end, tag[cursor] == .equals {
+                    cursor += 1
+                    while cursor < end, isSpace(tag[cursor]) { cursor += 1 }
+                    if cursor < end, tag[cursor] == .quote || tag[cursor] == .apostrophe {
+                        let close = tag[(cursor + 1)...].firstIndex(of: tag[cursor]) ?? end
+                        value = String(decoding: tag[(cursor + 1)..<close], as: UTF8.self)
+                        cursor = min(close + 1, end)
+                    } else {
+                        let valueStart = cursor
+                        while cursor < end, !isSpace(tag[cursor]), tag[cursor] != .greaterThan { cursor += 1 }
+                        value = String(decoding: tag[valueStart..<cursor], as: UTF8.self)
+                    }
+                    index = cursor
+                }
+                if result[name] == nil { result[name] = .some(value) }
+            }
+            return result
+        }
+
+        /// The `display` and `white-space` of a `style` attribute (the last declaration of each), lower-cased.
+        static func style(_ value: String?) -> (display: String?, whiteSpace: String?) {
+            guard let value else { return (nil, nil) }
+            var display: String?
+            var whiteSpace: String?
+            for declaration in value.split(separator: ";") {
+                guard let colon = declaration.firstIndex(of: ":") else { continue }
+                let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let setting = declaration[declaration.index(after: colon)...].lowercased()
+                    .replacingOccurrences(of: "!important", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if property == "display" { display = setting }
+                if property == "white-space" { whiteSpace = setting }
+            }
+            return (display, whiteSpace)
         }
     }
 
-    /// An element open in HTML, and whether it is block-level (as styled).
+    /// What an HTML token is to the line it is on.
+    fileprivate enum Role {
+        /// Starts or ends a block, or breaks the line (`br`): whitespace next to it is not rendered.
+        case blockBoundary
+        /// Rendered on the line: text, an inline element, an image.
+        case content
+        /// Not rendered (a comment, `script`, `meta`, a `hidden` element …): whitespace next to it is rendered when the
+        /// line has content.
+        case hidden
+    }
+
+    /// An element open in HTML.
     fileprivate struct OpenElement {
         var name: String
+        /// Block-level as styled (`display: inline…` in its `style` makes it inline).
         var isBlock: Bool
+        /// Keeps its content as typed: `pre`, `listing`, a `white-space: pre…` style.
+        var isPreformatted = false
+        /// The root of a subtree that is not rendered (`hidden`, a closed `dialog`, `template`, `display: none`): whether
+        /// the line was at its start before it, restored after it.
+        var lineStartBefore: Bool?
+        /// Where its start tag is, to indent the tag at its parent's depth.
+        var tokenStart = -1
     }
 
     /// The HTML printer's open elements, with a count per name so that "is a `pre` open?" and "is this end tag's element
@@ -417,9 +513,10 @@ enum TagFormatter {
     fileprivate struct OpenElements {
         private(set) var elements: [OpenElement] = []
         private var counts: [String: Int] = [:]
+        private var preformatting = 0
 
         var count: Int { elements.count }
-        var isPreformatted: Bool { isOpen("pre") || isOpen("listing") }
+        var isPreformatted: Bool { preformatting > 0 }
 
         func isOpen(_ name: String) -> Bool {
             counts[name, default: 0] > 0
@@ -433,12 +530,21 @@ enum TagFormatter {
         mutating func open(_ element: OpenElement) {
             elements.append(element)
             counts[element.name, default: 0] += 1
+            if element.isPreformatted { preformatting += 1 }
         }
 
-        /// Closes the element at `index` and every element inside it.
-        mutating func close(from index: Int) {
-            for element in elements[index...] { counts[element.name, default: 1] -= 1 }
+        /// Closes the element at `index` and every element inside it. Returns the line-start state from before the
+        /// outermost non-rendered subtree it closes, if any.
+        @discardableResult
+        mutating func close(from index: Int) -> Bool? {
+            var restored: Bool?
+            for element in elements[index...] {
+                counts[element.name, default: 1] -= 1
+                if element.isPreformatted { preformatting -= 1 }
+                if restored == nil { restored = element.lineStartBefore }
+            }
             elements.removeSubrange(index...)
+            return restored
         }
     }
 
@@ -458,7 +564,6 @@ enum TagFormatter {
         case "thead", "tbody", "tfoot": (closes, stopsAt) = (["thead", "tbody", "tfoot"], ["table"])
         case "option": (closes, stopsAt) = (["option"], ["select", "datalist", "optgroup"])
         case "optgroup": (closes, stopsAt) = (["optgroup"], ["select"])
-        case "body": (closes, stopsAt) = (["head"], ["html"])
         default:
             guard HTML.closesParagraph.contains(name) else { return nil }
             // A block start closes an open `p` unless another block is in between.

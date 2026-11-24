@@ -113,17 +113,8 @@ public enum JSONEscapedText {
     /// Something only an escaped text has: an escaped `<` or `"` first, `{\"` / `[\"`, or an attribute quoted with `\"` (or
     /// with `\\\"`, escaped twice).
     private static func hasEscapingSignal(_ text: ArraySlice<UInt8>) -> Bool {
-        var index = text.startIndex
         let end = text.endIndex
-        while index < end {
-            if isSpace(text[index]) {
-                index += 1
-            } else if text[index] == .backslash, index + 1 < end, [UInt8(ascii: "n"), UInt8(ascii: "r"), UInt8(ascii: "t")].contains(text[index + 1]) {
-                index += 2
-            } else {
-                break
-            }
-        }
+        var index = afterWhitespace(text, from: text.startIndex)
         guard index < end else { return false }
         switch text[index] {
         case .backslash:
@@ -132,7 +123,10 @@ public enum JSONEscapedText {
             while after < end, text[after] == .backslash { after += 1 }
             return after < end && text[after] == UInt8(ascii: "u") && hexUnit(text, at: after + 1) == 0x3C
         case UInt8(ascii: "{"), UInt8(ascii: "["):
-            while index < end, text[index] == UInt8(ascii: "{") || text[index] == UInt8(ascii: "[") || isSpace(text[index]) { index += 1 }
+            // `{\"id\"…`, also pretty-printed: `{\n  \"id\"…`.
+            while index < end, text[index] == UInt8(ascii: "{") || text[index] == UInt8(ascii: "[") {
+                index = afterWhitespace(text, from: index + 1)
+            }
             return isEscapedQuote(text, at: index)
         case UInt8(ascii: "<"):
             return hasAttributeQuotedWithEscapes(text, from: index)
@@ -141,7 +135,8 @@ public enum JSONEscapedText {
         }
     }
 
-    /// A tag outside scripts, styles, comments and CDATA with `=\"` (spaces allowed after `=`).
+    /// A tag outside scripts, styles, comments and CDATA with a value quoted with `\"` (spaces allowed after `=`). Values in
+    /// single quotes or unquoted are skipped: `onclick='x=\"…\"'` is JavaScript.
     private static func hasAttributeQuotedWithEscapes(_ text: ArraySlice<UInt8>, from start: Int) -> Bool {
         var index = start
         let end = text.endIndex
@@ -165,26 +160,53 @@ public enum JSONEscapedText {
                 index += 1
                 continue
             }
-            let tagEnd = text[(index + 1)...].firstIndex(of: UInt8(ascii: ">")) ?? end
             var cursor = index + 1
-            while cursor < tagEnd {
-                if text[cursor] == UInt8(ascii: "=") {
-                    var value = cursor + 1
-                    while value < tagEnd, isSpace(text[value]) { value += 1 }
-                    if isEscapedQuote(text, at: value) { return true }
+            while cursor < end, text[cursor] != UInt8(ascii: ">") {
+                guard text[cursor] == UInt8(ascii: "=") else {
+                    cursor += 1
+                    continue
                 }
-                cursor += 1
+                var value = cursor + 1
+                while value < end, isSpace(text[value]) { value += 1 }
+                if isEscapedQuote(text, at: value) { return true }
+                if value < end, text[value] == UInt8(ascii: "'") {
+                    guard let close = text[(value + 1)...].firstIndex(of: UInt8(ascii: "'")) else { return false }
+                    cursor = close + 1
+                } else {
+                    while value < end, !isSpace(text[value]), text[value] != UInt8(ascii: ">") { value += 1 }
+                    cursor = value
+                }
             }
+            guard cursor < end else { return false }
             var nameEnd = index + 1
-            while nameEnd < tagEnd, isLetter(text[nameEnd]) { nameEnd += 1 }
+            while nameEnd < cursor, isLetter(text[nameEnd]) { nameEnd += 1 }
             if let name = ["script", "style"].first(where: { equalsIgnoringCase(text[(index + 1)..<nameEnd], $0) }) {
-                guard let close = find(text, "</" + name, from: tagEnd, caseInsensitive: true) else { return false }
+                // Where a browser ends it; escaped by PHP's `json_encode`, the end tag is `<\/script>`.
+                guard let close = HTMLRawText.endTagStart(of: name, in: text, from: cursor + 1)
+                    ?? find(text, "<\\/" + name, from: cursor + 1, caseInsensitive: true) else { return false }
                 index = close + 2
                 continue
             }
-            index = tagEnd + 1
+            index = cursor + 1
         }
         return false
+    }
+
+    /// After whitespace and escaped whitespace (`\n`, `\t`, also escaped twice: `\\n`).
+    private static func afterWhitespace(_ text: ArraySlice<UInt8>, from start: Int) -> Int {
+        var index = start
+        let end = text.endIndex
+        while index < end {
+            if isSpace(text[index]) {
+                index += 1
+                continue
+            }
+            var run = index
+            while run < end, text[run] == .backslash { run += 1 }
+            guard run > index, run < end, [UInt8(ascii: "n"), UInt8(ascii: "r"), UInt8(ascii: "t")].contains(text[run]) else { break }
+            index = run + 1
+        }
+        return index
     }
 
     /// `\"`, or `\\\"` escaped twice: an odd run of backslashes, then a quote.

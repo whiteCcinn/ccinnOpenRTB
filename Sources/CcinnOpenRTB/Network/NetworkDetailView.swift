@@ -371,6 +371,8 @@ private struct TextBodyPreview: View {
             let source = text
             let language = language
             let result = await Task.detached(priority: .userInitiated) { MarkupFormatter.format(source, as: language) }.value
+            // Superseded by another body (or Raw): its own task shows it.
+            guard !Task.isCancelled else { return }
             switch result {
             case let .success(output): shown = Shown(source: source, text: output.text, summary: output.summary)
             case let .failure(failure): shown = Shown(source: source, text: source, summary: failure.message)

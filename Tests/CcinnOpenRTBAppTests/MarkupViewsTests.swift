@@ -27,7 +27,7 @@ struct MarkupViewsTests {
             AdCandidate(id: "1.1", bidID: "b", price: 1, format: .banner, markup: .none, winURL: "https://x.example/win"),
         ]
         for candidate in candidates {
-            let harness = WindowHarness(InspectorMarkupView(candidate: candidate, deviceMarkup: nil), size: CGSize(width: 520, height: 400))
+            let harness = WindowHarness(InspectorMarkupView(candidate: candidate, rendered: nil, deviceMarkup: nil), size: CGSize(width: 520, height: 400))
             harness.hosting.layoutSubtreeIfNeeded()
             #expect(harness.hosting.fittingSize.width > 0)
             harness.close()
@@ -44,7 +44,7 @@ struct MarkupViewsTests {
         let parsed = InputParser.parse(response)
         let bid = try #require(parsed.candidates.first)
         let device = AdMarkup.vast(.xml(try #require(JSONEscapedText.unescaped(escapedWrapper)).text.replacingOccurrences(of: "${AUCTION_PRICE}", with: "2.70")))
-        try await snapshot(InspectorMarkupView(candidate: bid, deviceMarkup: device), size: CGSize(width: 760, height: 420),
+        try await snapshot(InspectorMarkupView(candidate: bid, rendered: bid.markup, deviceMarkup: device), size: CGSize(width: 760, height: 420),
                            to: directory.appendingPathComponent("inspector-markup.png"))
 
         // The Response editor after Format on the pasted, escaped wrapper.

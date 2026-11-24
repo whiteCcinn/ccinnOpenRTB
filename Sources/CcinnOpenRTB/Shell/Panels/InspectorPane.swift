@@ -31,7 +31,7 @@ struct InspectorPane: View {
             case .outline:
                 outline(candidate: candidate, rendered: rendered)
             case .markup:
-                InspectorMarkupView(candidate: rendered?.candidate ?? candidate, deviceMarkup: rendered?.deviceMarkup)
+                InspectorMarkupView(candidate: candidate, rendered: rendered?.candidate.markup, deviceMarkup: rendered?.deviceMarkup)
             }
         }
     }

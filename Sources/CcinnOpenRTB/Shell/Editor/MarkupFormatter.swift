@@ -87,8 +87,11 @@ enum MarkupFormatter {
     /// for markup that does not say. Succeeds when the text was unescaped, pretty-printed or both.
     static func format(_ text: String, as hint: Language? = nil, unescape: Bool = true) -> Result<Formatted, Failure> {
         let unescaped = unescape ? JSONEscapedText.unescaped(text) : nil
-        let source = (unescaped?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+        var source = (unescaped?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+        if source.hasPrefix("\u{FEFF}") { source = String(source.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines) }
         let levels = unescaped?.levels ?? 0
+        // A quoted blank (`" "`) is not worth replacing the text with nothing.
+        guard !source.isEmpty else { return .failure(.empty) }
         let pretty = prettyPrinted(source, hint: hint)
         switch pretty {
         case let .success((output, language)):
@@ -101,7 +104,9 @@ enum MarkupFormatter {
 
     /// Whether Format can do anything: the text starts like JSON, markup or a JSON string (cheap; enables the button).
     static func mightFormat(_ text: String) -> Bool {
-        guard let first = text.unicodeScalars.first(where: { !CharacterSet.whitespacesAndNewlines.contains($0) }) else { return false }
+        guard let first = text.unicodeScalars.first(where: { !CharacterSet.whitespacesAndNewlines.contains($0) && $0 != "\u{FEFF}" }) else {
+            return false
+        }
         return ["{", "[", "<", "\"", "\\"].contains(first)
     }
 

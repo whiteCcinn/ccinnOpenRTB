@@ -14,19 +14,23 @@ enum InspectorMarkup {
     }
 
     /// "In the bid", then "On the device" when the substituted macros changed it; a tag URL or an image banner as one
-    /// source; none when the markup is not in the bid (`unavailableReason`).
-    static func sources(candidate: AdCandidate, deviceMarkup: AdMarkup?) -> [Source] {
+    /// source; markup delivered by the win notice or `display.curl` once it was fetched; none otherwise
+    /// (`unavailableReason`). `candidate` is the bid as parsed now; `rendered` and `deviceMarkup` come from the last
+    /// render, whose markup is shown only while the bid still has the markup it was rendered from.
+    static func sources(candidate: AdCandidate, rendered: AdMarkup?, deviceMarkup: AdMarkup?) -> [Source] {
         switch candidate.markup {
         case let .vast(.url(url)):
             return [Source(title: "VAST tag URL", text: url, language: nil)]
         case let .image(banner):
             return [Source(title: "Image banner", text: [banner.imageURL, banner.link?.url].compactMap { $0 }.joined(separator: "\n"), language: nil)]
         case .none:
-            return []
+            guard let fetched = rendered.flatMap(text(of:)) else { return [] }
+            let title = candidate.markupURL != nil ? "Fetched from display.curl" : "Delivered by the win notice"
+            return [Source(title: title, text: fetched.text, language: fetched.language)]
         case .html, .native, .vast(.xml):
             guard let bid = text(of: candidate.markup) else { return [] }
             var sources = [Source(title: "In the bid", text: bid.text, language: bid.language)]
-            if let deviceMarkup, let device = text(of: deviceMarkup), device.text != bid.text {
+            if rendered == candidate.markup, let deviceMarkup, let device = text(of: deviceMarkup), device.text != bid.text {
                 sources.append(Source(title: "On the device", text: device.text, language: device.language))
             }
             return sources
@@ -53,6 +57,7 @@ enum InspectorMarkup {
 /// The selected bid's markup, formatted off the main actor (or as received), read-only, with Copy.
 struct InspectorMarkupView: View {
     let candidate: AdCandidate
+    let rendered: AdMarkup?
     let deviceMarkup: AdMarkup?
     @State private var sourceTitle = "In the bid"
     @AppStorage("inspector.markup.formatted") private var formatted = true
@@ -70,7 +75,7 @@ struct InspectorMarkupView: View {
     }
 
     var body: some View {
-        let sources = InspectorMarkup.sources(candidate: candidate, deviceMarkup: deviceMarkup)
+        let sources = InspectorMarkup.sources(candidate: candidate, rendered: rendered, deviceMarkup: deviceMarkup)
         if let first = sources.first {
             let source = sources.first { $0.title == sourceTitle } ?? first
             content(sources: sources, source: source)
@@ -82,7 +87,7 @@ struct InspectorMarkupView: View {
     }
 
     private func content(sources: [InspectorMarkup.Source], source: InspectorMarkup.Source) -> some View {
-        let current = shown.flatMap { $0.key.source == source ? $0 : nil }
+        let current = shown.flatMap { $0.key == Key(source: source, formatted: formatted) ? $0 : nil }
         return VStack(spacing: 0) {
             header(sources: sources, source: source, current: current)
                 .controlSize(.small)
@@ -133,6 +138,8 @@ struct InspectorMarkupView: View {
             return
         }
         let result = await Task.detached(priority: .userInitiated) { MarkupFormatter.format(source.text, as: language) }.value
+        // Superseded (another source, Formatted turned off): its own task shows it.
+        guard !Task.isCancelled else { return }
         switch result {
         case let .success(formatted):
             shown = Shown(key: key, text: formatted.text, summary: formatted.summary + " · " + size)

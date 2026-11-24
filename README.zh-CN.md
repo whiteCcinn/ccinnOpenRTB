@@ -87,7 +87,7 @@ CcinnOpenRTB 让你在自己的 Mac 上就能得到答案。粘贴一份 OpenRTB
 - **格式化任意标记**：Response、Request 和 Client 编辑器中的 **Format**（⇧⌘F）可以格式化 JSON（OpenRTB、Native）、VAST XML 和 Banner HTML；从 JSON 字符串里复制出来的文本会先反转义（转义了两次也可以）。格式化只改动空白：
   - JSON 保留键的顺序、数字写法和转义。
   - VAST 每个元素占一行；元素的文本和 CDATA（URL、宏）保持原样，因此每个取值都不变。
-  - HTML 只在浏览器按默认样式会忽略空白的位置换行——块级元素与 `<br>` 前后、`<head>` 中、一行的第一个内容之前——所以 `<a><img><img></a>` 这样的行内片段会留在同一行，创意的渲染效果与之前一致；`script`、`style`、`textarea` 和 `pre` 保持原样，`style` 属性写明 `display: inline…` 的元素按行内元素处理。（如果样式表规则把 `div` 设为 inline-block，新加的换行仍可能显示为一个空格；⌘Z 可以撤销 Format。）
+  - HTML 只在浏览器按默认样式会忽略空白的位置换行——块级元素与 `<br>` 前后、`<head>` 中、一行的第一个内容之前——所以 `<a><img><img></a>` 这样的行内片段会留在同一行，创意的渲染效果与之前一致。`script`（包括旧式的 `<!-- document.write('<script…></script>') -->`）、`style`、`textarea` 和 `pre` 保持原样；元素自身的 `style` 会被考虑（`display: inline…` 或 `none`、`white-space: pre…`），不渲染的元素（`hidden`、`template`、未打开的 `dialog`）不会引入换行。缩进最多加深到 32 层。（如果样式表规则把 `div` 设为 inline-block，新加的换行仍可能显示为一个空格；⌘Z 可以撤销 Format。）
 
   检查器的 **Markup** 视图会格式化显示所选出价的标记；替换 Exchange 宏之后设备实际收到的版本也可以查看，并可 **Copy**。Network 窗口和 Client 标签页也会格式化显示 JSON、XML 与 HTML 的请求体和响应体。
 - **也模拟 Exchange 的那一部分**：和 Exchange 一样（OpenRTB 2.6 §4.4），模拟器会在设备拿到出价的内嵌 `adm`（HTML、Native JSON 或 VAST XML）之前，替换其中的 `${AUCTION_*}` / `${OPENRTB_*}` 宏；VAST 的 `[MACROS]` 留给播放器，在每个监测请求触发时才填充。DSP 在竞价成功后返回的素材（`nurl` 响应、`display.curl`）按原样使用。

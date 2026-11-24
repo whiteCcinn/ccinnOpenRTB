@@ -84,3 +84,32 @@ struct JSONEscapedTextTests {
         #expect(Date().timeIntervalSince(start) < 1)
     }
 }
+
+@Suite("JSON-escaped text – review cases")
+struct JSONEscapedTextReviewTests {
+    @Test func legacyScriptCommentsAndSingleQuotedValuesAreReal() {
+        // A legacy `<!--` script writing another script: its `</script>` does not end the outer one.
+        let legacy = "<script type='text/javascript'><!--\ndocument.write('<script src=https://a.example/x.js></script>');\n"
+            + #"document.write('<img src=\"https://t.example/p.gif\">\n');"# + "\n//--></script>"
+        #expect(JSONEscapedText.unescaped(legacy) == nil)
+        // `\"` inside a single-quoted attribute value is JavaScript.
+        let handler = #"<a href='#' onclick='this.innerHTML=`<img src=\"x.png\">`'>Click</a><script>var s='a\nb';</script>"#
+        #expect(JSONEscapedText.unescaped(handler) == nil)
+    }
+
+    @Test func prettyPrintedJSONFromALog() {
+        #expect(JSONEscapedText.unescaped(#"{\n  \"id\": \"req-1\",\n  \"imp\": []\n}"#)?.text == "{\n  \"id\": \"req-1\",\n  \"imp\": []\n}")
+        #expect(JSONEscapedText.unescaped(#"{\r\n\t\"id\": 1}"#)?.text == "{\r\n\t\"id\": 1}")
+    }
+
+    @Test func phpEscapesSlashes() {
+        #expect(JSONEscapedText.unescaped(#"<style>.a{color:red}<\/style><a href=\"https:\/\/x.example\/c\">x<\/a>"#)?.text
+            == #"<style>.a{color:red}</style><a href="https://x.example/c">x</a>"#)
+    }
+
+    @Test func escapedTwiceAfterAnEscapedLineBreak() {
+        let result = JSONEscapedText.unescaped(#"\\n<VAST version=\\\"3.0\\\"/>"#)
+        #expect(result?.levels == 2)
+        #expect(result?.text == "\n<VAST version=\"3.0\"/>")
+    }
+}

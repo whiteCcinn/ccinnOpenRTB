@@ -70,6 +70,12 @@ struct MarkupFormatterTests {
             == "Not well-formed HTML: a tag, comment or script is not closed (line 4)")
     }
 
+    @Test func aByteOrderMarkAndAQuotedBlank() throws {
+        #expect(MarkupFormatter.mightFormat("\u{FEFF}<VAST/>"))
+        #expect(try MarkupFormatter.format("\u{FEFF}<VAST version=\"3.0\"><Ad/></VAST>").get().language == .vast)
+        #expect(MarkupFormatter.format("\" \"") == .failure(.empty))
+    }
+
     @Test func whetherFormatApplies() {
         for text in ["{}", " [1]", "\n<VAST/>", #""<p>""#, #"<div>"#] {
             #expect(MarkupFormatter.mightFormat(text), "\(text)")
@@ -109,29 +115,43 @@ struct MarkupViewerTests {
     @Test func aBidsMarkupInTheBidAndOnTheDevice() {
         let vast = "<VAST version=\"4.0\"><Ad/></VAST>"
         let candidate = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .video, markup: .vast(.xml(vast)))
-        let bid = InspectorMarkup.sources(candidate: candidate, deviceMarkup: nil)
+        let bid = InspectorMarkup.sources(candidate: candidate, rendered: nil, deviceMarkup: nil)
         #expect(bid == [InspectorMarkup.Source(title: "In the bid", text: vast, language: .vast)])
-        let device = InspectorMarkup.sources(candidate: candidate, deviceMarkup: .vast(.xml("<VAST version=\"4.0\"><Ad id=\"2\"/></VAST>")))
+        let onDevice = AdMarkup.vast(.xml("<VAST version=\"4.0\"><Ad id=\"2\"/></VAST>"))
+        let device = InspectorMarkup.sources(candidate: candidate, rendered: candidate.markup, deviceMarkup: onDevice)
         #expect(device.map(\.title) == ["In the bid", "On the device"])
+        // The bid was edited since it was rendered: the device's copy is stale and not shown.
+        let edited = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .video,
+                                 markup: .vast(.xml("<VAST version=\"4.0\"/>")))
+        #expect(InspectorMarkup.sources(candidate: edited, rendered: candidate.markup, deviceMarkup: onDevice).map(\.text) == ["<VAST version=\"4.0\"/>"])
 
         let html = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .banner, markup: .html("<div/>"))
-        #expect(InspectorMarkup.sources(candidate: html, deviceMarkup: nil).first?.language == .html)
+        #expect(InspectorMarkup.sources(candidate: html, rendered: nil, deviceMarkup: nil).first?.language == .html)
         let native = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .native, markup: .native("{}"))
-        #expect(InspectorMarkup.sources(candidate: native, deviceMarkup: nil).first?.language == .json)
+        #expect(InspectorMarkup.sources(candidate: native, rendered: nil, deviceMarkup: nil).first?.language == .json)
         // Same markup on the device: one source.
-        #expect(InspectorMarkup.sources(candidate: html, deviceMarkup: .html("<div/>")).count == 1)
+        #expect(InspectorMarkup.sources(candidate: html, rendered: html.markup, deviceMarkup: .html("<div/>")).count == 1)
+    }
+
+    @Test func markupDeliveredAfterTheWin() {
+        let byWin = AdCandidate(id: "1.1", bidID: "b", price: 1, format: .banner, markup: .none, winURL: "https://x.example/win")
+        let sources = InspectorMarkup.sources(candidate: byWin, rendered: .html("<p>won</p>"), deviceMarkup: nil)
+        #expect(sources == [InspectorMarkup.Source(title: "Delivered by the win notice", text: "<p>won</p>", language: .html)])
+        var byReference = byWin
+        byReference.markupURL = "https://x.example/ad"
+        #expect(InspectorMarkup.sources(candidate: byReference, rendered: .html("<p/>"), deviceMarkup: nil).first?.title == "Fetched from display.curl")
     }
 
     @Test func markupThatIsNotText() {
         let url = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .video,
                               markup: .vast(.url("https://ads.example/vast")))
-        #expect(InspectorMarkup.sources(candidate: url, deviceMarkup: nil) == [InspectorMarkup.Source(title: "VAST tag URL", text: "https://ads.example/vast", language: nil)])
+        #expect(InspectorMarkup.sources(candidate: url, rendered: nil, deviceMarkup: nil) == [InspectorMarkup.Source(title: "VAST tag URL", text: "https://ads.example/vast", language: nil)])
         let image = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .banner,
                                 markup: .image(ImageBanner(imageURL: "https://x.example/a.png", link: nil)))
-        #expect(InspectorMarkup.sources(candidate: image, deviceMarkup: nil).first?.text == "https://x.example/a.png")
+        #expect(InspectorMarkup.sources(candidate: image, rendered: nil, deviceMarkup: nil).first?.text == "https://x.example/a.png")
         let none = AdCandidate(id: "1.1", bidID: "b", impID: "1", price: 1, currency: "USD", format: .banner, markup: .none,
                                winURL: "https://x.example/win")
-        #expect(InspectorMarkup.sources(candidate: none, deviceMarkup: nil).isEmpty)
+        #expect(InspectorMarkup.sources(candidate: none, rendered: nil, deviceMarkup: nil).isEmpty)
         #expect(InspectorMarkup.unavailableReason(none) == "Delivered by the win notice (nurl): Real mode fetches it.")
     }
 }
