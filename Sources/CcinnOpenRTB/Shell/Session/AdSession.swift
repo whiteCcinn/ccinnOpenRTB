@@ -202,7 +202,8 @@ final class AdSession: AdRenderingHost {
         clickThroughNotice = nil
     }
 
-    /// A new render, another device or another placement: the device is back in the publisher app.
+    /// A new generation (Render, Reset, Lose — and the render or reset another device or placement starts): the device is
+    /// back in the publisher app. A jump only exists while an ad is ready, so this is the one place that ends it.
     private func closeJump() {
         foreground = nil
         clickThroughNotice = nil
@@ -365,7 +366,6 @@ final class AdSession: AdRenderingHost {
     // MARK: Device and placement
 
     private func deviceChanged() {
-        closeJump()
         isAdjustingContext = true
         if device.family != .foldable { folded = false }
         if device.family != .dualScreen { spanned = false }
@@ -385,7 +385,6 @@ final class AdSession: AdRenderingHost {
 
     private func placementChanged(from oldValue: Placement) {
         guard placement != oldValue else { return }
-        closeJump()
         if !Placement.available(on: device).contains(placement) {
             let candidate = selectedCandidate
             placement = placement.compatible(with: device, format: candidate?.format, size: candidate?.size,
