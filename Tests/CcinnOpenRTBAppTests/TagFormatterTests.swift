@@ -207,3 +207,32 @@ struct HTMLTagFormatterTests {
         #expect(html.count > text.count && xml.count > text.count)
     }
 }
+
+@Suite("Tag formatter – pathological input")
+struct TagFormatterStressTests {
+    @Test func deepNestingStaysLinear() throws {
+        // 200,000 open elements, then stray and implied end tags: must not scan the stack per tag.
+        let deep = String(repeating: "<div>", count: 100_000) + String(repeating: "<span>", count: 100_000)
+            + String(repeating: "<li>x</em>", count: 20_000) + "<pre> a </pre>"
+        let start = Date()
+        let html = try #require(try? TagFormatter.prettyPrinted(deep, dialect: .html, indentWidth: 0).get())
+        #expect(Date().timeIntervalSince(start) < 3)
+        #expect(html.filter { !$0.isWhitespace } == deep.filter { !$0.isWhitespace })
+        let xml = String(repeating: "<a>", count: 100_000) + String(repeating: "</a>", count: 100_000)
+        #expect((try? TagFormatter.prettyPrinted(xml, dialect: .xml, indentWidth: 0).get()) != nil)
+    }
+
+    @Test func randomBytesNeverCrash() {
+        var generator = SystemRandomNumberGenerator()
+        let alphabet = Array("<>/!?-[]=\"' abcdivscriptprestyleCDATA\\nu003c{}:,\n\t&;".utf8)
+        for _ in 0..<3_000 {
+            let length = Int.random(in: 0..<120, using: &generator)
+            let bytes = (0..<length).map { _ in alphabet.randomElement(using: &generator) ?? 0x20 }
+            let text = String(decoding: bytes, as: UTF8.self)
+            _ = TagFormatter.prettyPrinted(text, dialect: .html)
+            _ = TagFormatter.prettyPrinted(text, dialect: .xml)
+            _ = MarkupFormatter.format(text)
+            _ = JSONEscapedText.unescaped(text)
+        }
+    }
+}

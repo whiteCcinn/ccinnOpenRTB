@@ -292,18 +292,14 @@ enum TagFormatter {
         }
 
         mutating func printHTML(_ tokens: [Token]) {
-            var stack: [OpenElement] = []
+            var stack = OpenElements()
             var pending: [UInt8] = []
             var previous: Role?
             var atLineStart = true
 
-            func isPreformatted() -> Bool {
-                stack.contains { $0.name == "pre" || $0.name == "listing" }
-            }
-
             for token in tokens {
                 if token.kind == .text {
-                    if isPreformatted() {
+                    if stack.isPreformatted {
                         output.append(contentsOf: pending)
                         pending = []
                         emit(token.range)
@@ -318,7 +314,7 @@ enum TagFormatter {
                     }
                     pending.append(contentsOf: bytes[token.range.lowerBound..<core.lowerBound])
                     place(role: .content, depth: stack.count, previous: previous, atLineStart: atLineStart, preformatted: false,
-                          inHead: stack.contains { $0.name == "head" }, pending: &pending)
+                          inHead: stack.isOpen("head"), pending: &pending)
                     emit(core)
                     pending = Array(bytes[core.upperBound..<token.range.upperBound])
                     previous = .content
@@ -326,22 +322,22 @@ enum TagFormatter {
                     continue
                 }
 
-                let preformatted = isPreformatted()
+                let preformatted = stack.isPreformatted
                 let role: Role
                 var depth = stack.count
                 switch token.kind {
                 case .startTag, .rawElement:
-                    TagFormatter.closeImplied(by: token.name, in: &stack)
+                    if let implied = TagFormatter.impliedEnd(by: token.name, in: stack.elements) { stack.close(from: implied) }
                     depth = stack.count
                     let isBlock = HTML.block.contains(token.name) && !HTML.isStyledInline(bytes[token.range])
                     role = isBlock || token.name == "br" ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
                     if token.kind == .startTag, !token.selfClosing, !HTML.void.contains(token.name) {
-                        stack.append(OpenElement(name: token.name, isBlock: isBlock))
+                        stack.open(OpenElement(name: token.name, isBlock: isBlock))
                     }
                 case .endTag:
-                    if let open = stack.lastIndex(where: { $0.name == token.name }) {
-                        role = stack[open].isBlock ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
-                        stack.removeSubrange(open...)
+                    if let open = stack.lastIndex(of: token.name) {
+                        role = stack.elements[open].isBlock ? .blockBoundary : HTML.hidden.contains(token.name) ? .hidden : .content
+                        stack.close(from: open)
                     } else {
                         role = .content // a stray end tag: kept where it is
                     }
@@ -351,7 +347,7 @@ enum TagFormatter {
                 case .comment, .cdata, .text:
                     role = .hidden
                 }
-                let inHead = stack.contains { $0.name == "head" } || token.name == "head"
+                let inHead = stack.isOpen("head") || token.name == "head"
                 place(role: role, depth: depth, previous: previous, atLineStart: atLineStart, preformatted: preformatted, inHead: inHead,
                       pending: &pending)
                 emit(token.range)
@@ -415,8 +411,42 @@ enum TagFormatter {
         var isBlock: Bool
     }
 
-    /// The end tags a start tag implies: the open `li` before another `li`, a `p` before a block, cells and rows.
-    fileprivate static func closeImplied(by name: String, in stack: inout [OpenElement]) {
+    /// The HTML printer's open elements, with a count per name so that "is a `pre` open?" and "is this end tag's element
+    /// open?" never scan the stack: deeply nested markup stays linear.
+    fileprivate struct OpenElements {
+        private(set) var elements: [OpenElement] = []
+        private var counts: [String: Int] = [:]
+
+        var count: Int { elements.count }
+        var isPreformatted: Bool { isOpen("pre") || isOpen("listing") }
+
+        func isOpen(_ name: String) -> Bool {
+            counts[name, default: 0] > 0
+        }
+
+        /// The innermost open element named `name`; the scan stops there, and everything it passes is then closed.
+        func lastIndex(of name: String) -> Int? {
+            isOpen(name) ? elements.lastIndex { $0.name == name } : nil
+        }
+
+        mutating func open(_ element: OpenElement) {
+            elements.append(element)
+            counts[element.name, default: 0] += 1
+        }
+
+        /// Closes the element at `index` and every element inside it.
+        mutating func close(from index: Int) {
+            for element in elements[index...] { counts[element.name, default: 1] -= 1 }
+            elements.removeSubrange(index...)
+        }
+    }
+
+    /// Where the end tags a start tag implies begin: the open `li` before another `li`, a `p` before a block, cells and
+    /// rows. `nil`: none. Only the innermost `impliedEndReach` elements are looked at, so a deep stack of inline elements
+    /// costs a bounded scan per tag (it only affects indentation).
+    fileprivate static let impliedEndReach = 64
+
+    fileprivate static func impliedEnd(by name: String, in stack: [OpenElement]) -> Int? {
         let closes: Set<String>
         let stopsAt: Set<String>
         switch name {
@@ -428,25 +458,20 @@ enum TagFormatter {
         case "option": (closes, stopsAt) = (["option"], ["select", "datalist", "optgroup"])
         case "optgroup": (closes, stopsAt) = (["optgroup"], ["select"])
         default:
-            guard HTML.closesParagraph.contains(name) else { return }
+            guard HTML.closesParagraph.contains(name) else { return nil }
             // A block start closes an open `p` unless another block is in between.
-            for index in stack.indices.reversed() {
-                if stack[index].name == "p" {
-                    stack.removeSubrange(index...)
-                    return
-                }
-                if stack[index].isBlock { return }
+            for index in stack.indices.reversed().prefix(impliedEndReach) {
+                if stack[index].name == "p" { return index }
+                if stack[index].isBlock { return nil }
             }
-            return
+            return nil
         }
-        for index in stack.indices.reversed() {
+        for index in stack.indices.reversed().prefix(impliedEndReach) {
             let open = stack[index].name
-            if closes.contains(open) {
-                stack.removeSubrange(index...)
-                return
-            }
-            if stopsAt.contains(open) { return }
+            if closes.contains(open) { return index }
+            if stopsAt.contains(open) { return nil }
         }
+        return nil
     }
 
     fileprivate static func isBlank(_ bytes: ArraySlice<UInt8>) -> Bool {
